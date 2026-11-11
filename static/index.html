@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C 语言学习助手</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d232b; --muted: #66707c; --line: #e3e6ea;
+  --accent: #2f6fde; --accent-soft: #e8f0fd; --ok: #1f8a4c; --ok-soft: #e6f4ec;
+  --bad: #c2412d; --bad-soft: #fbece9; --warn: #a76a00; --warn-soft: #fbf3e2;
+  --code-bg: #f3f4f6; --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #14171b; --panel: #1c2026; --ink: #e6e9ee; --muted: #9aa3ae; --line: #2c323a;
+    --accent: #6c9cf0; --accent-soft: #1f2d45; --ok: #4cc584; --ok-soft: #173326; --bad: #ef7d69; --bad-soft: #3a211d;
+    --warn: #e0a83d; --warn-soft: #382c14; --code-bg: #232831; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 17px; margin: 0; }
+.badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.bad { background: var(--bad-soft); color: var(--bad); }
+.login { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.login label { white-space: nowrap; }
+.login input { flex: 1 1 160px; min-width: 0; }
+button { white-space: nowrap; }
+@media (max-width: 900px) {
+  header { padding: 12px 16px; }
+  .login { width: 100%; }
+  #chat { height: 55vh; }
+}
+input[type=text], textarea, select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+textarea { width: 100%; resize: vertical; }
+textarea.code { font-family: var(--mono); font-size: 13px; line-height: 1.5; min-height: 140px; tab-size: 4; }
+button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 14px; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.muted { color: var(--muted); font-size: 13px; }
+#chat { height: calc(100vh - 330px); min-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+.msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+.msg.student { align-self: flex-end; background: var(--accent-soft); }
+.msg.tutor { align-self: flex-start; background: var(--code-bg); }
+.msg pre, .reveal pre { font-family: var(--mono); font-size: 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow-x: auto; white-space: pre; margin: 6px 0; }
+.tags { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.composer { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.steps { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0 10px; }
+.chip { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.chip.now { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip.done { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.chip.fail { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.codeview { font-family: var(--mono); font-size: 13px; background: var(--code-bg); border-radius: 8px; padding: 6px 0; overflow-x: auto; margin: 8px 0; }
+.ln { display: flex; padding: 0 10px; white-space: pre; }
+.ln .num { width: 2.2em; color: var(--muted); user-select: none; flex: none; text-align: right; margin-right: 12px; }
+.codeview.pickable .ln { cursor: pointer; }
+.codeview.pickable .ln:hover { background: var(--accent-soft); }
+.ln.picked { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.feedback { padding: 8px 10px; border-radius: 8px; margin: 8px 0; font-size: 14px; }
+.feedback.ok { background: var(--ok-soft); color: var(--ok); }
+.feedback.bad { background: var(--bad-soft); color: var(--bad); }
+.reveal { background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 14px; }
+.bar { display: grid; grid-template-columns: 9.5em 1fr 3em; gap: 8px; align-items: center; margin: 4px 0; font-size: 13px; }
+.bar .track { height: 10px; background: var(--code-bg); border-radius: 999px; overflow: hidden; }
+.bar .fill { height: 100%; background: var(--accent); border-radius: 999px; }
+.big { font-size: 22px; font-weight: 700; }
+details pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; background: var(--code-bg); padding: 8px; border-radius: 8px; max-height: 320px; overflow: auto; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>C 语言学习助手 <span id="mode" class="badge">…</span></h1>
+    <div class="muted">研究原型：讨论式辅导 + 代码审查诊断</div></div>
+  <div class="login">
+    <label for="sid" class="muted">学生编号</label>
+    <input id="sid" type="text" placeholder="例如 s01（请用老师分配的匿名编号）" size="22">
+    <button id="enter" class="primary">进入</button>
+    <a href="/teacher" class="muted" style="margin-left:8px">教师页</a>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>和助教讨论</h2>
+      <div id="chat"><div class="muted">输入学生编号后开始。可以直接问问题，也可以附上你的代码。</div></div>
+      <div class="composer">
+        <textarea id="msg" rows="3" placeholder="说说你遇到的问题、你的想法（Ctrl+Enter 发送）" disabled></textarea>
+        <div id="codewrap" class="hidden"><textarea id="code" class="code" placeholder="把你的代码粘贴在这里"></textarea></div>
+        <div class="row">
+          <button id="send" class="primary" disabled>发送</button>
+          <button id="togglecode" disabled>附上代码</button>
+          <button id="resolved" disabled>我懂了</button>
+          <span id="status" class="muted"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="card" id="episodeCard">
+      <h2>当前问题</h2>
+      <div id="episode" class="muted">还没有开始讨论。</div>
+    </div>
+
+    <div class="card" id="diagCard">
+      <h2>学情诊断 <span class="muted">（代码审查，最多 <span id="maxItems">4</span> 题）</span></h2>
+      <div id="diagStart" class="row">
+        <select id="diagKp" disabled></select>
+        <button id="startDiag" class="primary" disabled>开始诊断</button>
+      </div>
+      <div id="diagBody" class="hidden">
+        <div class="muted" id="diagProgress"></div>
+        <div class="steps" id="stepChips"></div>
+        <div><b id="itemTitle"></b> <span class="muted" id="itemTask"></span></div>
+        <div id="codeView" class="codeview"></div>
+        <div id="stepPrompt" style="margin:6px 0"></div>
+        <div id="stepInput"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="submitStep" class="primary">提交</button>
+          <button id="skipStep">不会，跳过</button>
+        </div>
+        <div id="stepFeedback"></div>
+      </div>
+      <div id="itemReveal"></div>
+      <div id="diagResult"></div>
+    </div>
+
+    <div class="card">
+      <h2>我的掌握情况</h2>
+      <div id="masteryList" class="muted">暂无记录。</div>
+    </div>
+
+    <details class="card" id="debugCard">
+      <summary class="muted">研究调试信息（发言分析、先验与后验）</summary>
+      <pre id="debug">（暂无）</pre>
+    </details>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const state = { sid: null, meta: null, episode: null, diag: null, picked: null, steps: [] };
+const STOP = { max_items: "已达到题数上限", precise_enough: "估计已足够精确", confident_mastered: "已能确定达到独立掌握",
+  confident_not_mastered: "已能确定尚未达到独立掌握", no_informative_item: "剩余题目区分度不足", no_items_left: "题目已用完" };
+const ICAP = { passive: "被动", active: "主动", constructive: "建构", interactive: "互动" };
+
+async function api(path, data) {
+  const opt = data === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) };
+  const res = await fetch(path, opt);
+  let json = {};
+  try { json = await res.json(); } catch (e) { json = { error: "服务器返回了无法解析的内容" }; }
+  if (!res.ok && !json.error) json.error = "请求失败：" + res.status;
+  return json;
+}
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+
+function renderRich(container, text) {
+  // 只识别 ``` 代码块，其余按纯文本显示（不解析 HTML，防止注入）
+  const parts = String(text).split("```");
+  parts.forEach((p, i) => {
+    if (i % 2 === 1) { const pre = el("pre"); pre.textContent = p.replace(/^c\n|^C\n|^\w*\n/, ""); container.appendChild(pre); }
+    else if (p) container.appendChild(document.createTextNode(p));
+  });
+}
+
+function addMsg(role, text, tags) {
+  const chat = $("chat");
+  if (chat.firstElementChild && chat.firstElementChild.classList.contains("muted")) chat.innerHTML = "";
+  const m = el("div", "msg " + role);
+  renderRich(m, text);
+  if (tags) m.appendChild(el("div", "tags", tags));
+  chat.appendChild(m);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function setDebug(obj) { if (state.meta && state.meta.show_debug) $("debug").textContent = JSON.stringify(obj, null, 2); }
+
+async function init() {
+  state.meta = await api("/api/meta");
+  $("mode").textContent = state.meta.mock ? "模拟模式（未接 DeepSeek）" : "DeepSeek · " + state.meta.model;
+  $("mode").className = "badge" + (state.meta.mock ? " warn" : "");
+  if (!state.meta.show_debug) $("debugCard").classList.add("hidden");
+  const sel = $("diagKp");
+  state.meta.kps_with_items.forEach((k) => { const o = el("option", "", k.name); o.value = k.id; sel.appendChild(o); });
+  state.steps = state.meta.steps;
+  try { const saved = localStorage.getItem("ctutor_sid"); if (saved) $("sid").value = saved; } catch (e) {}
+}
+
+function enter() {
+  const sid = $("sid").value.trim();
+  if (!/^[A-Za-z0-9_\-]{2,32}$/.test(sid)) { alertBox("学生编号只能包含字母、数字、下划线或短横线（2~32 位）。"); return; }
+  state.sid = sid;
+  try { localStorage.setItem("ctutor_sid", sid); } catch (e) {}
+  ["msg", "send", "togglecode", "resolved", "diagKp", "startDiag"].forEach((id) => $(id).disabled = false);
+  $("status").textContent = "已进入：" + sid;
+  loadMastery();
+}
+
+function alertBox(text) { $("status").textContent = text; }
+
+async function send() {
+  const message = $("msg").value.trim(), code = $("code").value;
+  if (!message && !code.trim()) return;
+  addMsg("student", message || "（见代码）");
+  if (code.trim()) addMsg("student", "```c\n" + code + "\n```");
+  $("msg").value = ""; $("code").value = ""; $("codewrap").classList.add("hidden");
+  $("send").disabled = true; $("status").textContent = "助教正在思考…";
+  const r = await api("/api/chat", { student_id: state.sid, message, code });
+  $("send").disabled = false; $("status").textContent = "";
+  if (r.error) { alertBox(r.error); return; }
+  state.episode = r.episode;
+  const a = r.analysis || {};
+  const tags = [r.episode.kp_name, r.episode.is_new ? "新问题" : "追问", a.icap ? "投入：" + (ICAP[a.icap] || a.icap) : "",
+    r.episode.reask_of ? "与以前的提问相似" : ""].filter(Boolean).join(" · ");
+  addMsg("tutor", r.reply, state.meta.show_debug ? tags : "");
+  renderEpisode();
+  if (r.offer_diagnosis) offerDiagnosis();
+  setDebug({ analysis: r.analysis, engagement: r.engagement, episode: r.episode, reply_source: r.reply_source });
+}
+
+function renderEpisode() {
+  const box = $("episode"); box.innerHTML = "";
+  const e = state.episode; if (!e) return;
+  box.className = "";
+  box.appendChild(el("div", "", "知识点：" + e.kp_name));
+  box.appendChild(el("div", "muted", "问题：" + e.question_summary));
+  if (e.reask_of) box.appendChild(el("div", "badge warn", "以前问过类似问题：" + (e.reask_summary || "")));
+  const sel = $("diagKp");
+  if ([...sel.options].some((o) => o.value === e.kp_id)) sel.value = e.kp_id;
+}
+
+function offerDiagnosis() {
+  $("diagCard").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("startDiag").textContent = "开始诊断（检查是否真的掌握）";
+}
+
+async function resolved() {
+  const r = await api("/api/resolve", { student_id: state.sid });
+  if (r.error) { alertBox(r.error); return; }
+  addMsg("tutor", "好的！可以点右边的“开始诊断”，做两三道小题检查一下自己是不是真的掌握了“" + r.kp_name + "”。");
+  offerDiagnosis();
+}
+
+async function startDiag() {
+  $("diagResult").innerHTML = ""; $("itemReveal").innerHTML = "";
+  const r = await api("/api/diagnosis/start", { student_id: state.sid, kp_id: $("diagKp").value, episode_id: state.episode ? state.episode.id : null });
+  if (r.error) { alertBox(r.error); return; }
+  state.diag = { id: r.session_id, chips: {} };
+  $("diagStart").classList.add("hidden"); $("diagBody").classList.remove("hidden");
+  showStep(r);
+  setDebug({ diagnosis_start: r.debug });
+}
+
+function renderChips(nSteps, current, results) {
+  const box = $("stepChips"); box.innerHTML = "";
+  for (let j = 1; j <= 5; j++) {
+    const name = state.steps[j - 1] ? state.steps[j - 1].name : "第" + j + "步";
+    const c = el("span", "chip", j + " " + name);
+    if (j > nSteps) c.style.opacity = .35;
+    if (results[j] === true) c.classList.add("done"); else if (results[j] === false) c.classList.add("fail");
+    else if (j === current) c.classList.add("now");
+    box.appendChild(c);
+  }
+}
+
+function renderCode(lines, pickable) {
+  const box = $("codeView"); box.innerHTML = ""; box.className = "codeview" + (pickable ? " pickable" : "");
+  state.picked = null;
+  lines.forEach((line, i) => {
+    const row = el("div", "ln"); row.dataset.line = i + 1;
+    row.appendChild(el("span", "num", String(i + 1))); row.appendChild(el("span", "src", line || " "));
+    if (pickable) row.addEventListener("click", () => {
+      box.querySelectorAll(".picked").forEach((x) => x.classList.remove("picked"));
+      row.classList.add("picked"); state.picked = i + 1;
+      $("stepPrompt").textContent = "错误在哪一行？已选择第 " + (i + 1) + " 行。";
+    });
+    box.appendChild(row);
+  });
+}
+
+function showStep(r) {
+  const item = r.item, step = r.step;
+  if (!state.diag.chips[item.id]) state.diag.chips = { [item.id]: {} };
+  state.diag.item = item; state.diag.step = step.step;
+  $("diagProgress").textContent = "第 " + (r.progress.items_done + 1) + " 题（最多 " + r.progress.max_items + " 题）";
+  $("maxItems").textContent = r.progress.max_items;
+  renderChips(item.n_steps, step.step, state.diag.chips[item.id]);
+  $("itemTitle").textContent = item.title; $("itemTask").textContent = "题目要求：" + item.task;
+  renderCode(item.code_lines, step.input === "line");
+  $("stepPrompt").textContent = step.prompt;
+  const box = $("stepInput"); box.innerHTML = "";
+  if (step.input === "choice") {
+    step.choices.forEach((c) => {
+      const lab = el("label", ""); lab.style.marginRight = "16px";
+      const inp = el("input"); inp.type = "radio"; inp.name = "choice"; inp.value = c;
+      lab.appendChild(inp); lab.appendChild(document.createTextNode(" " + c)); box.appendChild(lab);
+    });
+  } else if (step.input === "text") {
+    const t = el("textarea"); t.id = "ansText"; t.rows = 4; t.placeholder = "原因是……；在……的时候会触发"; box.appendChild(t);
+  } else if (step.input === "code_text") {
+    const c = el("textarea", "code"); c.id = "ansCode"; c.value = step.prefill_code || ""; box.appendChild(c);
+    const t = el("textarea"); t.id = "ansText"; t.rows = 2; t.placeholder = "为什么这样改就对了？"; t.style.marginTop = "6px"; box.appendChild(t);
+  } else if (step.input === "code") {
+    $("codeView").classList.add("hidden");
+    const c = el("textarea", "code"); c.id = "ansCode"; c.value = step.prefill_code || ""; c.style.minHeight = "220px"; box.appendChild(c);
+  }
+  if (step.input !== "code") $("codeView").classList.remove("hidden");
+  $("submitStep").disabled = false; $("skipStep").disabled = false;
+}
+
+function collectAnswer() {
+  const s = state.diag.step;
+  if (s === 1) { const c = document.querySelector("input[name=choice]:checked"); return c ? c.value : null; }
+  if (s === 2) return state.picked;
+  if (s === 3) return $("ansText").value;
+  if (s === 4) return { code: $("ansCode").value, reason: $("ansText").value };
+  if (s === 5) return $("ansCode").value;
+}
+
+async function submitStep(skip) {
+  const ans = skip ? "__skip__" : collectAnswer();
+  if (!skip && (ans === null || ans === "" )) { alertBox("请先作答。"); return; }
+  $("submitStep").disabled = true; $("skipStep").disabled = true; alertBox("判分中…");
+  const r = await api("/api/diagnosis/answer", { student_id: state.sid, session_id: state.diag.id, step: state.diag.step, answer: ans });
+  alertBox("");
+  if (r.error) { alertBox(r.error); $("submitStep").disabled = false; $("skipStep").disabled = false; return; }
+  const sr = r.step_result;
+  state.diag.chips[state.diag.item.id][sr.step] = sr.passed;
+  const fb = $("stepFeedback"); fb.innerHTML = "";
+  fb.appendChild(el("div", "feedback " + (sr.passed ? "ok" : "bad"), "第 " + sr.step + " 步：" + (sr.passed ? "通过。" : "未通过。") + " " + (sr.feedback || "")));
+  if (r.item_feedback) showReveal(r.item_feedback);
+  if (r.status === "finished") { finishDiag(r.result); }
+  else { if (r.item_feedback) state.diag.chips = {}; showStep(r); }
+  setDebug({ step_result: sr, debug: r.debug, item_feedback: r.item_feedback });
+}
+
+function showReveal(f) {
+  const box = $("itemReveal"); box.innerHTML = "";
+  const v = f.reveal, d = el("div", "reveal");
+  d.appendChild(el("div", "", "上一题（" + f.item_id + "）你通过了 " + f.steps_passed + "/" + f.n_steps + " 步。参考答案："));
+  if (!v.has_bug) d.appendChild(el("div", "", "这段代码没有错。" + v.explanation));
+  else {
+    d.appendChild(el("div", "", "错误在第 " + v.bug_lines.join("、") + " 行（" + v.bug_type + "）。"));
+    d.appendChild(el("div", "", "原因：" + v.cause));
+    d.appendChild(el("div", "", "触发条件：" + v.trigger));
+    const pre = el("pre"); pre.textContent = v.fix; d.appendChild(el("div", "", "修复：")); d.appendChild(pre);
+    d.appendChild(el("div", "", "为什么有效：" + v.fix_rationale));
+  }
+  box.appendChild(d);
+}
+
+function finishDiag(res) {
+  $("diagBody").classList.add("hidden"); $("diagStart").classList.remove("hidden");
+  $("startDiag").textContent = "开始诊断";
+  const box = $("diagResult"); box.innerHTML = "";
+  const head = el("div", ""); head.appendChild(el("span", "big", res.level));
+  head.appendChild(el("span", "muted", "  " + res.kp_name + " · 独立掌握概率 " + Math.round(res.p_mastered * 100) + "% · 用了 " + res.n_items + " 题 · " + (STOP[res.stop_reason] || res.stop_reason)));
+  box.appendChild(head);
+  res.profile.steps.forEach((s) => {
+    const b = el("div", "bar"); b.appendChild(el("span", "", s.name));
+    const tr = el("div", "track"), fi = el("div", "fill"); fi.style.width = Math.round(s.p * 100) + "%"; tr.appendChild(fi);
+    b.appendChild(tr); b.appendChild(el("span", "muted", Math.round(s.p * 100) + "%")); box.appendChild(b);
+  });
+  box.appendChild(el("div", "muted", "最需要加强的一步：" + res.profile.weakest_step));
+  loadMastery();
+}
+
+async function loadMastery() {
+  const r = await api("/api/mastery/" + encodeURIComponent(state.sid));
+  const box = $("masteryList"); box.innerHTML = "";
+  if (!r.mastery || !r.mastery.length) { box.textContent = "暂无记录。"; box.className = "muted"; return; }
+  box.className = "";
+  r.mastery.forEach((m) => {
+    const row = el("div", "row");
+    row.appendChild(el("span", "", m.kp_name));
+    const cls = m.p_mastered >= 0.9 ? "ok" : (m.p_mastered >= 0.5 ? "" : (m.p_mastered >= 0.1 ? "warn" : "bad"));
+    row.appendChild(el("span", "badge " + cls, m.level + " " + Math.round(m.p_mastered * 100) + "%"));
+    row.appendChild(el("span", "muted", "最弱：" + (m.profile.weakest_step || "")));
+    box.appendChild(row);
+  });
+}
+
+$("enter").addEventListener("click", enter);
+$("sid").addEventListener("keydown", (e) => { if (e.key === "Enter") enter(); });
+$("send").addEventListener("click", send);
+$("msg").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(); });
+$("togglecode").addEventListener("click", () => $("codewrap").classList.toggle("hidden"));
+$("resolved").addEventListener("click", resolved);
+$("startDiag").addEventListener("click", startDiag);
+$("submitStep").addEventListener("click", () => submitStep(false));
+$("skipStep").addEventListener("click", () => submitStep(true));
+init();
+</script>
+</body>
+</html>
