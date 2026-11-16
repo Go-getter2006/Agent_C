@@ -71,6 +71,9 @@ class Daemon:
         try:
             sync_submissions.poll_new_submissions(ctx)
             self.poll_failures[ctx.server_id] = 0
+            with db.session_scope() as s:
+                store.set_time(s, ctx.server_id, "last_ok_poll_at", ctx.now())
+                store.set_state(s, ctx.server_id, "poll_failures", 0)
         except SessionError:
             raise
         except XdojError as exc:
@@ -78,6 +81,7 @@ class Daemon:
             log.warning("查新提交失败（连续第 %d 次）：%s", self.poll_failures[ctx.server_id], exc)
             with db.session_scope() as s:
                 store.set_time(s, ctx.server_id, "last_poll_at", ctx.now())
+                store.set_state(s, ctx.server_id, "poll_failures", self.poll_failures[ctx.server_id])
 
     def _handle_triggers(self) -> bool:
         with db.session_scope() as s:
