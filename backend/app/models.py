@@ -438,7 +438,10 @@ class ChatRound(Base):
     end_reason: Mapped[str] = mapped_column(String(16), default="")
     max_help_level: Mapped[str] = mapped_column(String(4), default="NA")
     last_help_level: Mapped[str] = mapped_column(String(4), default="NA")
-    asked_back: Mapped[int] = mapped_column(Integer, default=0)  # 本回合反问过几次还没答上
+    asked_back: Mapped[int] = mapped_column(Integer, default=0)  # 本回合反问过几次
+    failed_replies: Mapped[int] = mapped_column(Integer, default=0)  # 反问后没答上的次数
+    located: Mapped[bool] = mapped_column(Boolean, default=False)  # 已经把出问题的行和哪类情况指给他了
+    help_count: Mapped[int] = mapped_column(Integer, default=0)  # 本回合给过几次帮助
     recall_stage: Mapped[str] = mapped_column(String(16), default="")  # 再次卡住时：asked / blanked
     quiz_triggered: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -525,6 +528,8 @@ class StuckPoint(Base):
     # recalled 自己回忆出来 / blank_filled 挖空补上 / example_given 给了示例代码 / exercise 小练习 / pending
     resolution: Mapped[str] = mapped_column(String(16), default="pending")
     given_code: Mapped[str] = mapped_column(Text, default="")
+    key_line: Mapped[int] = mapped_column(Integer, default=1)  # 给过的代码里最关键的一行，再次卡住时挖空
+    round_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     passed_after: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     stubborn: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[Dt] = _ts()

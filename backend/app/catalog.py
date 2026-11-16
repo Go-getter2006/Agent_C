@@ -99,10 +99,14 @@ def problem_info(s: Session, server_id: int, problem_id: int) -> ProblemInfo | N
     return ProblemInfo(server_id, problem_id, p.title, label.brief if label else "")
 
 
-def user_submissions(s: Session, user_id: str, server_id: int, problem_id: int) -> list[m.Submission]:
-    return list(s.scalars(select(m.Submission).where(
+def user_submissions(s: Session, user_id: str, server_id: int, problem_id: int,
+                     until: dt.datetime | None = None) -> list[m.Submission]:
+    q = select(m.Submission).where(
         m.Submission.server_id == server_id, m.Submission.user_id == user_id,
-        m.Submission.problem_id == problem_id).order_by(m.Submission.submission_id)).all())
+        m.Submission.problem_id == problem_id)
+    if until is not None:
+        q = q.where(m.Submission.submit_time <= until)
+    return list(s.scalars(q.order_by(m.Submission.submission_id)).all())
 
 
 def testcase_order(s: Session, server_id: int, problem_id: int) -> list[int]:

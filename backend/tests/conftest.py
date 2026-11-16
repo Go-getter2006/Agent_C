@@ -136,3 +136,34 @@ def fake():
 @pytest.fixture()
 def ctx(database, fake, clock):
     return make_context(fake, clock)
+
+
+# ------------------------------------------------------------ 演示数据
+_SEEDED: dict = {}
+
+
+@pytest.fixture()
+def demo(tmp_path_factory, tmp_path):
+    """入好演示数据的库。SQLite 下只入一次，之后每个测试拿一份拷贝；PostgreSQL 下每次重新入库。"""
+    import shutil
+
+    from app.demo.seed import seed
+
+    url = os.environ.get("TEST_DATABASE_URL")
+    if url:
+        engine = db.init_engine(url)
+        db.Base.metadata.drop_all(engine)
+        info = seed(verify_quiz=False)
+    else:
+        if "path" not in _SEEDED:
+            template = tmp_path_factory.mktemp("seed") / "demo.sqlite3"
+            db.init_engine(f"sqlite:///{template}")
+            _SEEDED["info"] = seed(verify_quiz=False)
+            db.engine().dispose()
+            _SEEDED["path"] = template
+        copy = tmp_path / "demo.sqlite3"
+        shutil.copy(_SEEDED["path"], copy)
+        engine = db.init_engine(f"sqlite:///{copy}")
+        info = _SEEDED["info"]
+    yield info
+    engine.dispose()

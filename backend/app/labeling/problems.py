@@ -179,5 +179,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
         brief, primary, secondary, tcs = llm.call_json("label_problem", _SYSTEM, user, validate,
                                                        retries=1, max_tokens=1200)
     except llm.LLMUnavailable:
+        llm.flush_records(s)
         return current
+    llm.flush_records(s)
     return save_problem_label(s, server_id, problem_id, brief, primary, secondary, tcs, "llm")

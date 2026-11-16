@@ -162,6 +162,7 @@ def label_submission(s: Session, server_id: int, submission_id: int, use_llm: bo
         except llm.LLMUnavailable:
             # 重标一次仍不合法：记 OT99
             drafts = [LabelDraft("OT99", confidence=0.0, evidence="自动标注失败", source="llm")]
+    llm.flush_records(s)
     if not drafts:
         return []
 

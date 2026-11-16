@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from typing import Callable, TypeVar
 
@@ -53,15 +54,27 @@ def _http_backend(messages, json_mode: bool, max_tokens: int, temperature: float
             int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)))
 
 
+_pending: list[dict] = []
+_pending_lock = threading.Lock()
+
+
 def _record(prompt_id: str, ok: bool, attempts: int, started: float, tin: int, tout: int, error: str = "") -> None:
+    """先记在内存里，由调用方在自己的事务里写库（flush_records），避免另开连接和正在进行的事务互相等待。"""
     cost = (tin * config.LLM_PRICE_IN + tout * config.LLM_PRICE_OUT) / 1_000_000
-    try:
-        with db.session_scope() as s:
-            s.add(m.LlmCall(prompt_id=prompt_id, prompt_version=config.PROMPT_VERSION, model=config.DEEPSEEK_MODEL,
-                            ok=ok, attempts=attempts, duration_ms=int((time.monotonic() - started) * 1000),
-                            tokens_in=tin, tokens_out=tout, cost_yuan=round(cost, 6), error=error[:250]))
-    except Exception:  # 记账失败不影响主流程
-        log.exception("记录大模型调用失败")
+    with _pending_lock:
+        _pending.append(dict(
+            ts=db.now(), prompt_id=prompt_id, prompt_version=config.PROMPT_VERSION, model=config.DEEPSEEK_MODEL,
+            ok=ok, attempts=attempts, duration_ms=int((time.monotonic() - started) * 1000),
+            tokens_in=tin, tokens_out=tout, cost_yuan=round(cost, 6), error=error[:250]))
+
+
+def flush_records(s) -> int:
+    """把还没落库的调用记录写进当前事务。"""
+    with _pending_lock:
+        rows, _pending[:] = list(_pending), []
+    for row in rows:
+        s.add(m.LlmCall(**row))
+    return len(rows)
 
 
 def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict], T],

@@ -19,6 +19,7 @@ from .sandbox import run_program
 from .sandbox.precheck import check_editable_code, compile_error_zh
 
 DONE = "done"
+_rng = random.Random()  # 选题用的随机数；演示数据入库时会固定种子
 
 
 # ------------------------------------------------------------ 题库
@@ -164,7 +165,7 @@ def can_start(s: Session, user_id: str, skill_code: str, at: dt.datetime | None 
 def choose_item(s: Session, user_id: str, skill_code: str, rng: random.Random | None = None,
                 exclude_scenes: set[str] | None = None) -> m.QuizItem | None:
     """选一道这个技能的小题。按最近 10 道控制“正确代码”占 40%~50%，具体哪道随机。"""
-    rng = rng or random.Random()
+    rng = rng or _rng
     items = s.scalars(select(m.QuizItem).where(
         m.QuizItem.skill_code == skill_code, m.QuizItem.verified.is_(True))).all()
     if not items:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app import db, mastery
+from app import config, db, mastery
 from app import models as m
 from app.taxonomy import LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_WEAK
 
@@ -85,7 +85,7 @@ def test_levels_and_adjustments(database):
             mastery.record_pass(s, UID, lab, f"p:{i}", now, 0, "NA")
         st = mastery.skill_states(s, UID, decay=False)
         assert st["C04.01.01"].level == LEVEL_MASTERED
-        assert st["C04.02.01"].s == 8 * 0.5  # 次技能按比例折算
+        assert st["C04.02.01"].s == 8 * config.MASTERY["secondary_skill_factor"]  # 次技能按配置的比例折算
         mastery.record_pass(s, UID, lab, "p:h3", now + dt.timedelta(seconds=1), 3, "H3")
         assert mastery.skill_states(s, UID, decay=False)["C04.01.01"].level == LEVEL_BASIC, "最近一次不是独立成功"
 
