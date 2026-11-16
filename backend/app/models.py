@@ -543,7 +543,9 @@ class QuizItem(Base):
     shown_code: Mapped[str] = mapped_column(Text)  # 显示给学生的代码，不超过 10 行
     template: Mapped[str] = mapped_column(Text)  # 完整程序，显示部分用占位符
     has_bug: Mapped[bool] = mapped_column(Boolean)
-    bug_line: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bug_line: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 公布答案时指出的那一行
+    bug_lines: Mapped[list] = mapped_column(JSON, default=list)  # 改到其中任何一行都算“定位对”
+    judged_code: Mapped[str] = mapped_column(Text, default="")  # 题干问的是改动后的代码时，这里存改动后的样子
     standard_fix: Mapped[str] = mapped_column(Text, default="")  # 改对后的显示代码
     checks: Mapped[list] = mapped_column(JSON, default=list)  # [{"input": "...", "expected": "..."}]
     choices: Mapped[list] = mapped_column(JSON, default=list)  # 手机上的改法选项
