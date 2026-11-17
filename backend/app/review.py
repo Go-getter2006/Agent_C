@@ -49,6 +49,16 @@ def retention(item: m.ReviewItem, at: dt.datetime | None = None) -> float:
     return 2 ** (-days / max(item.half_life, 0.1))
 
 
+def memory(item: m.ReviewItem, at: dt.datetime | None = None) -> dict:
+    """给学生看的“记得多牢”：只有文字和三段条，不给数字。"""
+    p = retention(item, at)
+    if p >= cfg()["target_retention"]:
+        return {"text": "还记得比较牢", "segments": 3}
+    if p >= 0.5:
+        return {"text": "开始有点模糊", "segments": 2}
+    return {"text": "可能快忘了", "segments": 1}
+
+
 def _schedule(item: m.ReviewItem) -> None:
     base = item.last_success_at or item.updated_at or item.created_at
     gap = item.half_life * math.log2(1 / cfg()["target_retention"])
@@ -220,7 +230,7 @@ def item_view(s: Session, user_id: str, item: m.ReviewItem, at: dt.datetime) -> 
     return {
         "id": item.id, "title": kp, "detail": skill_name(item.skill_code),
         "why": ORIGIN_TEXT.get(item.origin, ""), "origin": _origin_ref(s, user_id, item),
-        "retention": round(retention(item, at), 2), "due": item.due_at.isoformat(), "dueNow": item.due_at <= at,
+        "memory": memory(item, at), "due": item.due_at.isoformat(), "dueNow": item.due_at <= at,
         "reps": item.reps, "streak": item.streak, "toGraduate": max(0, cfg()["graduate_streak"] - item.streak),
         "state": item.state, "pending": item.attempt_id is not None,
     }

@@ -1,0 +1,112 @@
+// 学生列表：可以搜、可以按任何一列排序，点名字看明细。
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { ArrowDown, ArrowUp, ArrowUpDown, Copy, Search } from "lucide-react";
+import { get } from "../../api";
+import { Avatar, Card, Loading, Problem } from "../../components/ui";
+import { useLoad } from "../../lib/hooks";
+import { shortTime } from "../../lib/time";
+import type { ClassInfo } from "./common";
+
+interface StudentRow {
+  userId: string; name: string; tried: number; passed: number; submissions: number; firstTryRate: number | null;
+  weak: number; mastered: number; stuck: number; stubborn: number; rounds: number; lastActive: string | null;
+  orderPct: number | null; copies: number; activeDays: number;
+}
+type SortKey = keyof StudentRow;
+
+const COLUMNS: { key: SortKey; label: string; num: boolean; title?: string }[] = [
+  { key: "name", label: "学生", num: false },
+  { key: "passed", label: "已通过", num: true },
+  { key: "submissions", label: "提交", num: true },
+  { key: "firstTryRate", label: "一次通过率", num: true },
+  { key: "weak", label: "待加强", num: true, title: "待加强的知识点个数" },
+  { key: "stuck", label: "卡点", num: true },
+  { key: "rounds", label: "求助回合", num: true },
+  { key: "orderPct", label: "提交早晚", num: true, title: "每道题第一次提交在班里的先后，换成百分位后取平均：越小越早。Qu 等（2019）发现它和成绩明显相关" },
+  { key: "activeDays", label: "活跃天数", num: true },
+  { key: "lastActive", label: "最近提交", num: false },
+];
+
+export default function Students({ cls }: { cls: ClassInfo }) {
+  const data = useLoad(() => get<{ total: number; students: StudentRow[] }>(`/api/teacher/classes/${cls.key}/students`), [cls.key]);
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "userId", dir: 1 });
+  const [q, setQ] = useState("");
+  const rows = useMemo(() => {
+    const needle = q.trim();
+    const list = (data.data?.students ?? []).filter((s) => !needle || s.name.includes(needle) || s.userId.includes(needle));
+    list.sort((a, b) => {
+      const x = a[sort.key], y = b[sort.key];
+      if (x === y) return a.userId < b.userId ? -1 : 1;
+      if (x === null) return 1;
+      if (y === null) return -1;
+      return (x < y ? -1 : 1) * sort.dir;
+    });
+    return list;
+  }, [data.data, sort, q]);
+  if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
+  if (!data.data) return <div className="card card-body"><Loading what="正在取学生名单" lines={6} /></div>;
+  const total = data.data.total;
+
+  return (
+    <Card bodyClass="" className="table-card">
+      <div className="table-tools">
+        <label className="search">
+          <Search size={16} aria-hidden="true" />
+          <span className="sr-only">按姓名或学号找</span>
+          <input className="field" value={q} onChange={(e) => setQ(e.target.value)} placeholder="按姓名或学号找" />
+        </label>
+        <span className="note">{rows.length} 人 · 这个班布置过 {total} 道题 · 点表头排序</span>
+      </div>
+      <div className="table-scroll">
+        <table className="table">
+          <thead>
+            <tr>
+              {COLUMNS.map((c) => {
+                const on = sort.key === c.key;
+                return (
+                  <th key={c.key} scope="col" className={c.num ? "num" : undefined} title={c.title}
+                    aria-sort={on ? (sort.dir === 1 ? "ascending" : "descending") : undefined}>
+                    <button type="button" onClick={() => setSort({ key: c.key, dir: on ? (sort.dir === 1 ? -1 : 1) : c.num ? -1 : 1 })}>
+                      {c.label}
+                      {on ? (sort.dir === 1 ? <ArrowUp aria-hidden="true" /> : <ArrowDown aria-hidden="true" />) : <ArrowUpDown aria-hidden="true" className="sort-idle" />}
+                    </button>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.userId}>
+                <td>
+                  <Link to={`/teacher/students/${r.userId}`} className="who">
+                    <Avatar name={r.name || "?"} />
+                    <span>
+                      <span className="cell-title">{r.name || "（没有姓名）"}</span>
+                      <span className="cell-sub">{r.userId}</span>
+                    </span>
+                  </Link>
+                </td>
+                <td className="num">
+                  <span className="mini-progress">
+                    <span className="num">{r.passed}/{total}</span>
+                    <span className="bar bar-pass" aria-hidden="true"><span style={{ width: `${total ? (100 * r.passed) / total : 0}%` }} /></span>
+                  </span>
+                </td>
+                <td className="num">{r.submissions}</td>
+                <td className="num">{r.firstTryRate === null ? "—" : `${r.firstTryRate}%`}</td>
+                <td className="num">{r.weak ? <span className="pill pill-fail">{r.weak}</span> : <span className="muted">0</span>}</td>
+                <td className="num">{r.stuck}{r.stubborn > 0 && <span className="pill pill-warn" style={{ marginLeft: 6 }}>顽固 {r.stubborn}</span>}</td>
+                <td className="num">{r.rounds}</td>
+                <td className="num">{r.orderPct === null ? "—" : r.orderPct}{r.copies > 0 && <span className="pill pill-warn" style={{ marginLeft: 6 }} title="通过的代码和更早的同学雷同"><Copy aria-hidden="true" />{r.copies}</span>}</td>
+                <td className="num">{r.activeDays}</td>
+                <td className="nowrap muted">{r.lastActive ? shortTime(r.lastActive) : "还没提交"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}

@@ -70,3 +70,13 @@ export function deadline(iso: string | null, ended: boolean): string {
   if (diff === 1) return `明天 ${clock(iso)} 截止`;
   return `${monthDay(d)}截止`;
 }
+
+/** 将来的某一天：“今天”“明天”“后天”“11 月 28 日”。 */
+export function futureDay(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const diff = dayDiff(d, now);
+  if (diff <= 0) return "今天";
+  if (diff === 1) return "明天";
+  if (diff === 2) return "后天";
+  return monthDay(d, d.getFullYear() !== now.getFullYear());
+}

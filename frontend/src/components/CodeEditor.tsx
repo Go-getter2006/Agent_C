@@ -16,11 +16,11 @@ const highlight = HighlightStyle.define([
 
 const theme = EditorView.theme({
   "&": { backgroundColor: "var(--surface)", color: "var(--ink)", fontSize: "var(--code-fs)" },
-  "&.cm-focused": { outline: "2px solid var(--ink)", outlineOffset: "-2px" },
+  "&.cm-focused": { outline: "none" },
   ".cm-scroller": { fontFamily: "var(--font-code)", lineHeight: "var(--code-lh)" },
   ".cm-content": { padding: "0", caretColor: "var(--ink)" },
   ".cm-line": { padding: "0 12px 0 0" },
-  ".cm-gutters": { backgroundColor: "var(--surface)", color: "var(--ink-2)", border: "0" },
+  ".cm-gutters": { backgroundColor: "var(--surface)", color: "#636a77", border: "0" },
   ".cm-lineNumbers .cm-gutterElement": { minWidth: "var(--lineno-w)", padding: "0 12px 0 0", textAlign: "right" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "#dadee1 !important" },
   ".cm-cursor": { borderLeftColor: "var(--ink)", borderLeftWidth: "2px" },
@@ -31,9 +31,10 @@ interface Props {
   onChange: (value: string) => void;
   label: string;
   disabled?: boolean;
+  start?: number; // 第一行显示的行号：摘录的代码和原来的行号对得上
 }
 
-export default function CodeEditor({ value, onChange, label, disabled = false }: Props) {
+export default function CodeEditor({ value, onChange, label, disabled = false, start = 1 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>();
   const onChangeRef = useRef(onChange);
@@ -44,7 +45,7 @@ export default function CodeEditor({ value, onChange, label, disabled = false }:
     const state = EditorState.create({
       doc: value,
       extensions: [
-        lineNumbers(),
+        lineNumbers({ formatNumber: (n) => String(n + start - 1) }),
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
         indentUnit.of("    "),
@@ -63,7 +64,7 @@ export default function CodeEditor({ value, onChange, label, disabled = false }:
     return () => view.current?.destroy();
     // 只在挂载时建一次；之后内容由编辑器自己管
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disabled]);
+  }, [disabled, start]);
 
   useEffect(() => {
     const v = view.current;

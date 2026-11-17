@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
 /** 当前属于哪一档布局。和 layout.css 里的断点保持一致。 */
 export type Layout = "phone" | "two" | "three" | "four";
@@ -70,7 +70,8 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0): L
     return () => window.clearInterval(timer);
   }, [pollMs, run]);
 
-  return { data, error, loading, reload: () => run(true), setData };
+  const reload = useCallback(() => run(true), [run]);
+  return { data, error, loading, reload, setData };
 }
 
 /** 按 Esc 关闭。 */
@@ -83,4 +84,19 @@ export function useEscape(onClose: () => void, active = true) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, active]);
+}
+
+/** 元素的宽度，随容器变化。图表用它算比例尺。 */
+export function useWidth<T extends HTMLElement>(): [RefObject<T>, number] {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const ro = new ResizeObserver((entries) => setWidth(Math.floor(entries[0].contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
 }

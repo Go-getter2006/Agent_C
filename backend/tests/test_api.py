@@ -149,7 +149,9 @@ def test_review_flow_over_api(client, demo):
     page = client.get("/api/review").json()
     assert [d["title"] for d in page["due"]] == ["整型与取值范围"] and page["due"][0]["dueNow"]
     due = page["due"][0]
-    assert due["why"] == "卡住过" and due["origin"]["title"] == "阶乘求和" and 0 <= due["retention"] < 0.5
+    assert due["why"] == "卡住过" and due["origin"]["title"] == "阶乘求和" and due["memory"]["segments"] == 1
+    assert "%" not in json.dumps(page, ensure_ascii=False)  # 学生端不给概率
+    assert "%" not in json.dumps(client.get("/api/progress").json()["next"], ensure_ascii=False)
     assert "C02" not in str(page) and "skill" not in str(page).lower()
     up = [u["title"] for u in page["upcoming"]]
     assert "最值、求和、统计" in up

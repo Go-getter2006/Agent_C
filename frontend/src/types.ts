@@ -1,4 +1,4 @@
-// 接口返回的数据形状。学生端拿到的就是这些：测试点只有“过没过”。
+// 接口返回的数据形状。学生端拿到的就是这些：测试点只有“过没过”，没有概率。
 
 export interface SubmissionView {
   key: string;
@@ -57,7 +57,7 @@ export interface QuizResult {
   explanation?: string;
   finalCode?: string[];
   bugLine?: number | null;
-  fix?: { lines: string[]; mark: number[] };
+  fix?: { lines: string[]; mark: number[]; start?: number };
   lastRun?: string;
 }
 
@@ -66,6 +66,8 @@ export interface QuizView {
   stem: string;
   caption: string;
   code: string[];
+  startLine?: number;
+  mark?: number[];
   state: "confidence" | "judge" | "edit" | "done";
   confidence: string | null;
   judged: "bug" | "ok" | null;
@@ -106,11 +108,32 @@ export interface ProblemRef {
   brief: string;
 }
 
+export interface KnowledgeItem {
+  name: string;
+  level: string;
+  segments: number;
+  basis: string;
+  covered: boolean;
+  practice: ProblemRef | null;
+}
+
+export type NextItem =
+  | { kind: "problem"; problem: ProblemRef; reason: string }
+  | { kind: "review"; reviewId: number; title: string; reason: string };
+
 export interface ProgressData {
-  knowledge: {
-    topic: string;
-    items: { name: string; level: string; segments: number; basis: string; practice: ProblemRef | null }[];
-  }[];
+  summary: {
+    passed: number;
+    total: number;
+    firstTryRate: number | null;
+    avgSubmissions: number | null;
+    thisWeek: number;
+    lastWeek: number;
+    reviewDue: number;
+    reviewActive: number;
+    levels: Record<string, number>;
+  };
+  knowledge: { topic: string; items: KnowledgeItem[] }[];
   errors: { name: string; count: number; last: ProblemRef; lastTime: string; status: string }[];
   activity: {
     homeworks: Homework[];
@@ -119,12 +142,41 @@ export interface ProgressData {
     firstTryPassed: number;
     firstTryRate: number | null;
     avgSubmissions: number | null;
-    weeks: { label: string; submissions: number; passed: number }[];
+    weeks: { label: string; start: string; submissions: number; passed: number }[];
   };
-  next: (
-    | { kind: "problem"; problem: ProblemRef; reason: string }
-    | { kind: "quiz"; revisitId: number; title: string; reason: string }
-  )[];
+  next: NextItem[];
+}
+
+export interface ReviewItemView {
+  id: number;
+  title: string; // 知识点
+  detail: string; // 具体要点
+  why: string;
+  origin: ProblemRef | null;
+  memory: { text: string; segments: number };
+  due: string;
+  dueNow: boolean;
+  reps: number;
+  streak: number;
+  toGraduate: number;
+  state: "active" | "graduated";
+  pending: boolean;
+}
+
+export interface ReviewCurrent {
+  itemId: number;
+  lead: string;
+  quiz: QuizView;
+}
+
+export interface ReviewPage {
+  due: ReviewItemView[];
+  upcoming: ReviewItemView[];
+  graduated: ReviewItemView[];
+  doneToday: number;
+  dailyLimit: number;
+  active: number;
+  current?: ReviewCurrent;
 }
 
 export interface Me {
@@ -135,7 +187,7 @@ export interface Me {
 
 export interface StatusInfo {
   xdoj: { ok: boolean; dataTime: string | null; demo: boolean };
-  dueRevisits: number;
+  dueReviews: number;
   llm: boolean;
 }
 

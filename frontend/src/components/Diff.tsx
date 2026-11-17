@@ -1,8 +1,9 @@
 // 差异视图：两次提交并排（手机上下排）。改动的行用浅黄底，删除的行用浅红底。
+import { X } from "lucide-react";
 import { api } from "../api";
 import { useEscape, useLoad } from "../lib/hooks";
 import type { DiffRow } from "../types";
-import { CodeBlock, Icon, Loading, Problem, resultLine } from "./ui";
+import { CodeBlock, Loading, Problem, resultLine } from "./ui";
 
 interface Props {
   problemKey: string;
@@ -23,7 +24,7 @@ export default function DiffOverlay({ problemKey, a, b, onClose }: Props) {
           {d && <span className="chat-head-brief">{d.problem.title}，{d.changed === 0 ? "代码没有变化" : `改动了 ${d.changed} 行`}</span>}
         </div>
         <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭差异视图" autoFocus>
-          <Icon.close />
+          <X size={20} />
         </button>
       </div>
       <div className="diff-body">

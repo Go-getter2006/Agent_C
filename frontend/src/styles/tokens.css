@@ -1,65 +1,136 @@
-/* 设计令牌（《设计规范（A 工作台）》第 2 节）。组件里不写死颜色、字号、间距，都从这里取。 */
-:root {
-  /* 颜色 */
-  --ground: #eceeef;      /* 页面底色、题目列表栏、代码块标题条 */
-  --surface: #ffffff;     /* 对话区、输入框、按钮底 */
-  --panel: #f6f7f8;       /* 右侧“这道题的情况”栏 */
-  --ink: #1d2125;         /* 正文、主按钮底、导航条底 */
-  --ink-2: #55616e;       /* 次要文字 */
-  --line: #cdd2d6;        /* 栏与栏之间的分隔、代码块边框 */
-  --line-soft: #dadee1;   /* 列表行之间、对话区内部分隔 */
-  --field: #7c8791;       /* 输入框边框 */
-  --rail-text: #d6dadd;   /* 导航条上未选中的文字 */
-  --accent: #ffd43b;      /* 当前选中 */
-  --mark: #fff3bf;        /* 代码里被指出的那一行 */
-  --pass: #1e7a4c;        /* 通过（实心格） */
-  --fail: #c4321f;        /* 未通过（空心格的边框） */
-  --meter-off: #c3c9ce;   /* 档位条里未点亮的段 */
-  --removed: #fbe3e0;     /* 差异视图里删除的行 */
-  --scrim: rgba(29, 33, 37, 0.4);
+/* 设计令牌。组件里不写死颜色、字号、间距，都从这里取。只有浅色主题。 */
 
-  /* 字体：中文用系统字体，不从外部加载；等宽字体只用于代码 */
-  --font-ui: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "Microsoft YaHei",
-    "Noto Sans SC", sans-serif;
-  --font-code: "JetBrains Mono", "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-SemiBold.otf") format("opentype");
+  font-weight: 600 700;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+
+  /* 底色和表面 */
+  --bg: #f3f4f6;            /* 页面底色 */
+  --surface: #ffffff;       /* 卡片、对话区 */
+  --surface-2: #f8f9fa;     /* 卡片里的次级区域、表头、代码块标题条 */
+  --surface-3: #eff1f3;     /* 悬停、学生的消息气泡 */
+  --sidebar: #0f1114;       /* 深色侧边栏 */
+  --sidebar-2: #1b1e23;
+  --sidebar-text: #a3a8b0;
+  --sidebar-label: #8b919a;
+
+  /* 文字 */
+  --ink: #111318;           /* 正文 */
+  --ink-2: #4b5260;         /* 次要文字：在白底上 7.9:1 */
+  --ink-3: #636a77;         /* 更弱的说明：在白底上 5.4:1，在 --bg 上 4.9:1 */
+  --on-dark: #ffffff;
+
+  /* 线 */
+  --line: #e4e6ea;
+  --line-strong: #d3d6dc;
+  --field: #c9cdd4;
+
+  /* 品牌和强调：黄色只用在标志、代码里被指出的那一行 */
+  --brand: #ffd43b;
+  --mark: #fff3bf;
+  --focus: #2a78d6;
+
+  /* 语义色：通过、未通过、提醒；一定和文字或形状一起出现 */
+  --pass: #15803d;
+  --pass-bg: #e7f6ec;
+  --fail: #c4321f;
+  --fail-bg: #fdecea;
+  --warn: #a15c00;
+  --warn-bg: #fff4dc;
+  --info: #1d5fbf;
+  --info-bg: #e8f1fd;
+  --removed: #fbe3e0;
+
+  /* 掌握档位：两极（蓝 ↔ 红）加中性灰。颜色从不单独出现，旁边一定有档位文字 */
+  --lv-mastered: #256abf;
+  --lv-basic: #86b6ef;
+  --lv-weak: #e34948;
+  --lv-none: #d9dbe0;
+  --lv-mastered-bg: #eaf2fd;
+  --lv-basic-bg: #f4f8fe;
+  --lv-weak-bg: #fdeeee;
+  --lv-none-bg: #f6f7f8;
+
+  /* 图表：类别色按固定顺序（已用校验脚本核对过相邻两色在色弱下也分得开） */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --grid: #eceef1;
+
+  /* 字体 */
+  --font-ui: "Inter", -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "WenQuanYi Zen Hei", sans-serif;
+  --font-code: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
 
   /* 字号 */
+  --fs-11: 11px;
   --fs-12: 12px;
-  --fs-12h: 12.5px;
   --fs-13: 13px;
   --fs-14: 14px;
   --fs-15: 15px;
-  --fs-17: 17px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+  --fs-32: 32px;
 
-  /* 间距刻度 */
+  /* 间距（4 的倍数） */
+  --sp-2: 2px;
   --sp-4: 4px;
   --sp-6: 6px;
   --sp-8: 8px;
   --sp-10: 10px;
   --sp-12: 12px;
-  --sp-14: 14px;
   --sp-16: 16px;
-  --sp-18: 18px;
   --sp-20: 20px;
   --sp-24: 24px;
+  --sp-32: 32px;
 
-  --radius: 4px;
+  /* 圆角 */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  /* 阴影：很轻，只用来把卡片从底色上托起来一点 */
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-pop: 0 10px 30px -8px rgba(16, 24, 40, 0.18), 0 2px 6px rgba(16, 24, 40, 0.06);
+  --scrim: rgba(15, 17, 20, 0.42);
 
   /* 随屏幕变化的尺寸 */
-  --rail-w: 72px;
+  --sidebar-w: 236px;
+  --rail-w: 76px;
   --list-w: 300px;
-  --side-w: 300px;
-  --control-h: 36px;      /* 手机上是 44 */
+  --side-w: 312px;
+  --control-h: 36px;
   --input-h: 40px;
   --code-fs: 13px;
-  --code-lh: 24px;
+  --code-lh: 22px;
   --lineno-w: 40px;
-  --gutter: 24px;
+  --gutter: 28px;
 }
 
 @media (max-width: 1279px) {
   :root {
-    --list-w: 260px;
+    --list-w: 272px;
   }
 }
 
@@ -68,8 +139,8 @@
     --control-h: 44px;
     --input-h: 44px;
     --code-fs: 12.5px;
-    --code-lh: 22px;
-    --lineno-w: 30px;
+    --code-lh: 21px;
+    --lineno-w: 32px;
     --gutter: 16px;
   }
 }

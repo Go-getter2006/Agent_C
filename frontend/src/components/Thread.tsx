@@ -1,6 +1,7 @@
 // 一条对话线程：消息、正在输入、求助按钮、输入栏。
 // 学生只看到自然的回复、代码块和“正在输入”；没有步骤条、标签、分数。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { ArrowUp, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, type LucideIcon } from "lucide-react";
 import { api } from "../api";
 import type { Layout } from "../lib/hooks";
 import { dayLabel, sameDay } from "../lib/time";
@@ -9,6 +10,11 @@ import Quiz from "./Quiz";
 import { CodeBlock, Inline, Loading, Problem } from "./ui";
 
 const ACTION_LABELS: Record<HelpAction, string> = { think: "我想自己想想", hint: "再给点提示", tell: "直接讲给我" };
+const ACTION_ICONS: Record<HelpAction, LucideIcon> = { think: Brain, hint: Lightbulb, tell: MessageCircle };
+
+function AgentMark() {
+  return <span className="brand-mark" aria-hidden="true"><Braces size={15} strokeWidth={2.4} /></span>;
+}
 export const ASK_WHY = "这次提交为什么错了？";
 
 interface Payload {
@@ -20,6 +26,7 @@ interface Payload {
 interface Props {
   threadKey: string;
   layout: Layout;
+  emptyTitle: string;
   emptyText: string;
   askKey?: string | null;      // 从“问问为什么错”进来：自动问这次提交
   onAsked?: () => void;
@@ -30,7 +37,7 @@ function looksLikeCode(text: string): boolean {
   return text.includes("\n") && /[;{}]|#include/.test(text);
 }
 
-export default function Thread({ threadKey, layout, emptyText, askKey, onAsked, onActivity }: Props) {
+export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKey, onAsked, onActivity }: Props) {
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
@@ -136,11 +143,17 @@ export default function Thread({ threadKey, layout, emptyText, askKey, onAsked, 
   return (
     <>
       <div className="chat-scroll" ref={scroller}>
-        {messages === null && !loadError && <Loading what="正在取对话" />}
-        {loadError && <Problem message={loadError} onRetry={() => load(false)} />}
+        {messages === null && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
+        {loadError && <div className="chat-list"><Problem message={loadError} onRetry={() => load(false)} /></div>}
         {messages !== null && (
           <div className="chat-list" aria-live="polite">
-            {list.length === 0 && !shown && <p className="chat-empty">{emptyText}</p>}
+            {list.length === 0 && !shown && (
+              <div className="chat-empty">
+                <AgentMark />
+                <strong>{emptyTitle}</strong>
+                <span>{emptyText}</span>
+              </div>
+            )}
             {list.map((m, i) => (
               <MessageItem key={m.id} message={m} layout={layout} disabled={busy}
                 daySep={i === 0 ? (sameDay(m.time, new Date().toISOString()) ? null : dayLabel(m.time)) : sameDay(m.time, list[i - 1].time) ? null : dayLabel(m.time)}
@@ -149,27 +162,32 @@ export default function Thread({ threadKey, layout, emptyText, askKey, onAsked, 
             ))}
             {shown && (
               <div className="msg msg-student">
-                <span className="msg-who">我</span>
                 <div className="msg-body">
-                  {pendingText.split("\n").filter((p) => p.trim()).slice(0, 12).map((p, i) => <p key={i}>{p}</p>)}
+                  <div className={looksLikeCode(pendingText) ? "bubble bubble-code" : "bubble"}>
+                    {looksLikeCode(pendingText) ? pendingText : pendingText.split("\n").filter((p) => p.trim()).slice(0, 12).map((p, i) => <p key={i}>{p}</p>)}
+                  </div>
                 </div>
               </div>
             )}
             {pending && (
               <div className="msg msg-agent">
-                <span className="msg-who">智能体</span>
+                <AgentMark />
                 <div className="msg-body">
-                  <p className="typing" role="status">正在输入<i /><i /><i /></p>
+                  <span className="msg-meta"><strong>智能体</strong></span>
+                  <span className="typing" role="status" aria-label="正在输入"><i /><i /><i /></span>
                 </div>
               </div>
             )}
             {failed && !pending && (
               <div className="msg msg-agent">
-                <span className="msg-who">智能体</span>
+                <AgentMark />
                 <div className="msg-body">
+                  <span className="msg-meta"><strong>智能体</strong></span>
                   <p role="alert">{failed.message.includes("没发出去") ? failed.message : `这条没发出去：${failed.message}`}</p>
-                  <div className="msg-actions">
-                    <button type="button" className="btn" onClick={() => void send(failed.payload)}>重新发送</button>
+                  <div className="chips">
+                    <button type="button" className="chip" onClick={() => void send(failed.payload)}>
+                      <RotateCcw aria-hidden="true" />重新发送
+                    </button>
                   </div>
                 </div>
               </div>
@@ -178,11 +196,16 @@ export default function Thread({ threadKey, layout, emptyText, askKey, onAsked, 
         )}
       </div>
       <form className="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-        <label className="sr-only" htmlFor="composer-input">输入消息</label>
-        <textarea id="composer-input" ref={input} rows={1} value={text} placeholder="说说你的想法，或贴一段代码"
-          className={looksLikeCode(text) ? "has-code" : undefined} onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown} spellCheck={false} />
-        <button type="submit" className="btn btn-primary" disabled={busy || !text.trim()}>发送</button>
+        <div className="composer-box">
+          <label className="sr-only" htmlFor="composer-input">输入消息</label>
+          <textarea id="composer-input" ref={input} rows={1} value={text} placeholder="说说你的想法，或贴一段代码"
+            className={looksLikeCode(text) ? "has-code" : undefined} onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown} spellCheck={false} />
+          <button type="submit" className="send" disabled={busy || !text.trim()} aria-label="发送">
+            <ArrowUp size={20} strokeWidth={2.2} />
+          </button>
+        </div>
+        <p className="composer-hint">回车发送，Shift + 回车换行。智能体不会直接给出整题答案。</p>
       </form>
     </>
   );
@@ -200,28 +223,49 @@ interface ItemProps {
 
 function MessageItem({ message, layout, disabled, daySep, onAction, onQuiz, onCopy }: ItemProps) {
   const mine = message.role === "student";
+  if (mine) {
+    const text = message.blocks.filter((b) => b.t === "p").map((b) => (b as { text: string }).text).join("\n");
+    const code = looksLikeCode(text);
+    return (
+      <>
+        {daySep && <div className="day-sep" role="separator">{daySep}</div>}
+        <div className="msg msg-student">
+          <div className="msg-body">
+            <div className={code ? "bubble bubble-code" : "bubble"}>
+              {code ? text : message.blocks.map((b, i) =>
+                b.t === "p" ? <p key={i}><Inline text={b.text} /></p> : <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} copyable={false} />,
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
   return (
     <>
       {daySep && <div className="day-sep" role="separator">{daySep}</div>}
-      <div className={mine ? "msg msg-student" : "msg msg-agent"}>
-        <span className="msg-who">{mine ? "我" : "智能体"}</span>
+      <div className="msg msg-agent">
+        <AgentMark />
         <div className="msg-body">
+          <span className="msg-meta"><strong>智能体</strong></span>
           {message.blocks.map((b, i) =>
             b.t === "p" ? (
               <p key={i}><Inline text={b.text} /></p>
             ) : (
-              <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark}
-                copyable={!mine} onCopy={onCopy} />
+              <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} onCopy={onCopy} />
             ),
           )}
           {message.quiz && <Quiz quiz={message.quiz} layout={layout} onChange={onQuiz} />}
           {message.actions.length > 0 && (
-            <div className="msg-actions">
-              {message.actions.map((a) => (
-                <button key={a} type="button" className="btn" disabled={disabled} onClick={() => onAction(a)}>
-                  {ACTION_LABELS[a]}
-                </button>
-              ))}
+            <div className="chips" role="group" aria-label="接下来想怎么做">
+              {message.actions.map((a) => {
+                const Icon = ACTION_ICONS[a];
+                return (
+                  <button key={a} type="button" className="chip" disabled={disabled} onClick={() => onAction(a)}>
+                    <Icon aria-hidden="true" />{ACTION_LABELS[a]}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

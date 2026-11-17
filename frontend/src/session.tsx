@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, setUnauthorizedHandler } from "./api";
 import { useLoad } from "./lib/hooks";
-import type { Homework, Me } from "./types";
+import type { Homework, Me, StatusInfo } from "./types";
 
 interface SessionValue {
   me: Me | null;
@@ -63,3 +63,19 @@ export function useHomeworks() {
   }, []);
   return { homeworks, current, pick, loading: list.loading, error: list.error, reload: list.reload };
 }
+
+// ---------- 学生端：XDOJ 状态、该复习的数量（侧边栏的小红点用） ----------
+interface StatusValue {
+  status: StatusInfo | null;
+  reload: () => void;
+}
+
+const StatusContext = createContext<StatusValue>({ status: null, reload: () => undefined });
+
+export function StatusProvider({ children }: { children: ReactNode }) {
+  const status = useLoad(() => api.status(), [], 60000);
+  const value = useMemo(() => ({ status: status.data, reload: status.reload }), [status.data, status.reload]);
+  return <StatusContext.Provider value={value}>{children}</StatusContext.Provider>;
+}
+
+export const useStatus = () => useContext(StatusContext);

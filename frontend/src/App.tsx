@@ -2,11 +2,12 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Login from "./pages/Login";
 import Progress from "./pages/Progress";
+import Review from "./pages/Review";
 import Submissions from "./pages/Submissions";
 import Workbench from "./pages/Workbench";
-import { SessionProvider, useSession } from "./session";
+import { SessionProvider, StatusProvider, useSession } from "./session";
 
-const Teacher = lazy(() => import("./pages/Teacher"));
+const Teacher = lazy(() => import("./pages/teacher"));
 
 function Routed() {
   const { me, checked } = useSession();
@@ -23,13 +24,16 @@ function Routed() {
     );
   }
   return (
-    <Routes>
-      <Route path="/chat" element={<Workbench />} />
-      <Route path="/chat/:key" element={<Workbench />} />
-      <Route path="/submissions" element={<Submissions />} />
-      <Route path="/progress" element={<Progress />} />
-      <Route path="*" element={<Navigate to="/chat" replace />} />
-    </Routes>
+    <StatusProvider>
+      <Routes>
+        <Route path="/chat" element={<Workbench />} />
+        <Route path="/chat/:key" element={<Workbench />} />
+        <Route path="/submissions" element={<Submissions />} />
+        <Route path="/review" element={<Review />} />
+        <Route path="/progress" element={<Progress />} />
+        <Route path="*" element={<Navigate to="/chat" replace />} />
+      </Routes>
+    </StatusProvider>
   );
 }
 

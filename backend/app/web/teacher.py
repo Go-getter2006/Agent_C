@@ -289,10 +289,25 @@ def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
         m.StuckPoint.user_id.in_(data.ids), m.StuckPoint.stubborn.is_(True))).all()} if data.ids else set()
     copied = Counter(f.user_id for f in s.scalars(select(m.CodeFingerprint).where(
         m.CodeFingerprint.user_id.in_(data.ids), m.CodeFingerprint.suspicious.is_(True))).all()) if data.ids else Counter()
+    stuck_week = Counter(sp.user_id for sp in s.scalars(select(m.StuckPoint).where(
+        m.StuckPoint.user_id.in_(data.ids), m.StuckPoint.created_at >= week)).all()) if data.ids else Counter()
+
+    def first_try(uid: str) -> tuple[int, int]:
+        tried = [v for v in data.subs[uid].values() if v]
+        return sum(1 for v in tried if v[0].judgement == "AC"), len(tried)
+
+    totals = [first_try(uid) for uid in data.ids]
+    n_all = sum(n for _ok, n in totals)
+    class_rate = 100 * sum(ok for ok, _n in totals) / n_all if n_all else None
     for st in data.students:
         reasons = []
         per = data.subs[st.user_id]
         tried = [k for k, v in per.items() if v]
+        ok, n = first_try(st.user_id)
+        if class_rate is not None and n >= 5 and 100 * ok / n <= class_rate - 30:
+            reasons.append(f"一次通过率 {round(100 * ok / n)}%，全班是 {round(class_rate)}%")
+        if stuck_week.get(st.user_id, 0) >= 2:
+            reasons.append(f"最近 7 天卡住 {stuck_week[st.user_id]} 次")
         if st.user_id in stubborn:
             reasons.append("同一个知识点卡住三次以上")
         weak = [kp for kp in data.kps[st.user_id].values() if kp.level == "待加强"]
@@ -554,7 +569,11 @@ def sources_list(user: m.User = Depends(teacher), s: Session = Depends(get_sessi
     rows = [_source_view(s, src) for src in s.scalars(q).all()]
     candidates = s.scalars(select(m.LabelCandidate).order_by(m.LabelCandidate.id.desc()).limit(30)).all() \
         if user.role == "admin" else []
-    return {"sources": rows, "interval": config.XDOJ_MIN_INTERVAL,
+    from ..servers import KNOWN
+
+    known = [{"code": k.code, "name": k.name, "course": k.course, "baseUrl": k.base_url, "basis": k.basis}
+             for k in KNOWN.values()]
+    return {"sources": rows, "interval": config.XDOJ_MIN_INTERVAL, "known": known,
             "candidates": [{"kind": c.kind, "name": c.name, "description": c.description, "nearest": c.nearest,
                             "time": c.created_at.isoformat()} for c in candidates],
             "libraries": {"errors": len(ERRORS), "skills": len(SKILLS), "knowledge": len(KNOWLEDGE_POINTS),

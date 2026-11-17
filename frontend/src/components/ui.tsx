@@ -1,32 +1,8 @@
-// 基础组件：图标、测试点格子、掌握档位、代码块、抽屉。
+// 基础组件：测试点格子、结果标签、掌握档位、代码块、抽屉、指标卡、加载和出错。
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, CircleCheck, CircleX, Copy, FileCode2, Hourglass, RotateCcw, TrendingDown, TrendingUp, X, type LucideIcon } from "lucide-react";
 import { useEscape } from "../lib/hooks";
 import type { SubmissionView } from "../types";
-
-// ---------- 图标：1.8 线宽的描边图标 ----------
-function Svg({ children, size = 20, stroke = 1.8 }: { children: ReactNode; size?: number; stroke?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke}
-      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {children}
-    </svg>
-  );
-}
-
-export const Icon = {
-  chat: () => <Svg><path d="M4 5h16v11H9l-5 4z" /></Svg>,
-  list: () => <Svg><path d="M5 7h14M5 12h14M5 17h9" /></Svg>,
-  bars: () => <Svg><path d="M5 19V10M12 19V5M19 19v-6" /></Svg>,
-  people: () => <Svg><path d="M4 19c0-3 2.5-5 5-5s5 2 5 5M9 10a3 3 0 100-6 3 3 0 000 6zM15 14c2.500 0 5 1.500 5 5M16 10a3 3 0 100-6" /></Svg>,
-  pin: () => <Svg><path d="M12 21s7-6.200 7-11a7 7 0 10-14 0c0 4.800 7 11 7 11z" /><path d="M12 12.500a2.500 2.500 0 100-5 2.500 2.500 0 000 5z" /></Svg>,
-  graph: () => <Svg><path d="M6 7a2 2 0 100-4 2 2 0 000 4zM18 11a2 2 0 100-4 2 2 0 000 4zM8 21a2 2 0 100-4 2 2 0 000 4zM7.500 6.200l8.700 2.200M16.700 10.600L9.200 17.600" /></Svg>,
-  plug: () => <Svg><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 01-12 0zM12 17v4" /></Svg>,
-  chevron: () => <Svg size={16} stroke={2}><path d="M6 9l6 6 6-6" /></Svg>,
-  close: () => <Svg><path d="M6 6l12 12M18 6L6 18" /></Svg>,
-  copy: () => <Svg size={16}><path d="M9 9h10v11H9zM5 15V4h10" /></Svg>,
-  check: () => <Svg size={16} stroke={2}><path d="M5 12.500l4.500 4.500L19 7.500" /></Svg>,
-  back: () => <Svg><path d="M15 6l-6 6 6 6" /></Svg>,
-};
 
 // ---------- 测试点格子 ----------
 export function gridLabel(grid: boolean[]): string {
@@ -34,10 +10,10 @@ export function gridLabel(grid: boolean[]): string {
   return ok === grid.length ? `${grid.length} 组全过` : `${grid.length} 组过 ${ok} 组`;
 }
 
-/** 每个测试点一个方格。格子上不带任何测试数据，悬停也没有。 */
-export function Cells({ grid }: { grid: boolean[] }) {
+/** 每个测试点一个方格：实心绿 = 过，空心红框 = 没过。格子上不带任何测试数据，悬停也没有。 */
+export function Cells({ grid, large = false }: { grid: boolean[]; large?: boolean }) {
   return (
-    <span className="cells" role="img" aria-label={gridLabel(grid)}>
+    <span className={large ? "cells cells-lg" : "cells"} role="img" aria-label={gridLabel(grid)}>
       {grid.map((ok, i) => (
         <span key={i} className={ok ? "cell cell-pass" : "cell cell-fail"} />
       ))}
@@ -52,18 +28,43 @@ export function resultLine(sub: SubmissionView, withCount = false): string {
   return text;
 }
 
+/** 结果标签：通过是绿色，评测中是灰色，其余都是红色。图标和文字一起出现，不只靠颜色。 */
+export function ResultPill({ sub, short = false }: { sub: SubmissionView; short?: boolean }) {
+  if (sub.result === "AC") {
+    return <span className="pill pill-pass"><CircleCheck aria-hidden="true" />{short ? "通过" : sub.resultText}</span>;
+  }
+  if (sub.result === "PENDING") {
+    return <span className="pill"><Hourglass aria-hidden="true" />{sub.resultText}</span>;
+  }
+  return <span className="pill pill-fail"><CircleX aria-hidden="true" />{sub.resultText}</span>;
+}
+
 // ---------- 掌握档位：三段横条，永远带文字 ----------
-export function Meter({ level, segments }: { level: string; segments: number }) {
-  const label = segments === 0 ? "还没练到" : `三档里的第 ${["一", "二", "三"][segments - 1]}档`;
+const LEVEL_CLASS: Record<string, string> = { 已掌握: "lv-mastered", 基本掌握: "lv-basic", 待加强: "lv-weak", 还没练到: "lv-none" };
+export const levelClass = (level: string) => LEVEL_CLASS[level] ?? "lv-none";
+export const LEVELS = ["已掌握", "基本掌握", "待加强", "还没练到"];
+
+export function Meter({ level, segments, label }: { level: string; segments: number; label?: string }) {
+  const aria = segments === 0 ? "还没练到" : `三档里的第 ${["一", "二", "三"][segments - 1]}档`;
   return (
-    <span className="meter">
-      <span className="meter-bars" role="img" aria-label={label}>
+    <span className={`meter ${levelClass(level)}`}>
+      <span className="meter-bars" role="img" aria-label={aria}>
         {[1, 2, 3].map((i) => (
           <span key={i} className={i <= segments ? "on" : undefined} />
         ))}
       </span>
-      {level}
+      {label ?? level}
     </span>
+  );
+}
+
+export function LevelLegend({ levels = LEVELS }: { levels?: string[] }) {
+  return (
+    <div className="legend" aria-hidden="true">
+      {levels.map((l) => (
+        <span key={l}><i className={`swatch sw-${levelClass(l).slice(3)}`} />{l}</span>
+      ))}
+    </div>
   );
 }
 
@@ -110,10 +111,10 @@ export function CodeBlock({ caption, start = 1, lines, mark = [], removed = [], 
   return (
     <div className="code">
       <div className="code-cap">
-        <span>{caption}</span>
+        <span><FileCode2 aria-hidden="true" />{caption}</span>
         {copyable && (
-          <button type="button" className="code-copy" onClick={copy} aria-label={copied ? "已复制" : "复制代码"}>
-            {copied ? <Icon.check /> : <Icon.copy />}
+          <button type="button" className="code-copy" onClick={copy} aria-label={copied ? "已复制" : "复制代码"} title={copied ? "已复制" : "复制代码"}>
+            {copied ? <Check size={15} /> : <Copy size={15} />}
           </button>
         )}
       </div>
@@ -144,8 +145,8 @@ export function CodeBlock({ caption, start = 1, lines, mark = [], removed = [], 
   );
 }
 
-// ---------- 抽屉：出现时才有一层遮罩，本身不加阴影 ----------
-export function Drawer({ side, title, onClose, children }: { side: "left" | "right"; title: string; onClose: () => void; children: ReactNode }) {
+// ---------- 抽屉 ----------
+export function Drawer({ side, title, onClose, children, dark = false }: { side: "left" | "right"; title: string; onClose: () => void; children: ReactNode; dark?: boolean }) {
   useEscape(onClose);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -154,11 +155,11 @@ export function Drawer({ side, title, onClose, children }: { side: "left" | "rig
   return (
     <>
       <div className="scrim" onClick={onClose} />
-      <div ref={ref} className={`drawer drawer-${side}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={ref} className={`drawer drawer-${side}${dark ? " drawer-dark" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
         <div className="drawer-head">
           <span>{title}</span>
           <button type="button" className="icon-btn" onClick={onClose} aria-label={`关闭${title}`}>
-            <Icon.close />
+            <X size={20} />
           </button>
         </div>
         <div className="drawer-body">{children}</div>
@@ -167,22 +168,122 @@ export function Drawer({ side, title, onClose, children }: { side: "left" | "rig
   );
 }
 
-export function Loading({ what = "正在加载" }: { what?: string }) {
-  return <p className="note" role="status">{what}</p>;
+// ---------- 加载、出错、空状态 ----------
+export function Loading({ what = "正在加载", lines = 3 }: { what?: string; lines?: number }) {
+  return (
+    <div className="loading" role="status" aria-label={what}>
+      {Array.from({ length: lines }, (_, i) => (
+        <span key={i} className="skeleton" style={{ width: `${[92, 76, 58, 84, 66][i % 5]}%` }} />
+      ))}
+      <span className="sr-only">{what}</span>
+    </div>
+  );
 }
 
 export function Problem({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <p className="error-text" role="alert">
-      {message}
+    <div className="problem" role="alert">
+      <span>{message}</span>
       {onRetry && (
-        <>
-          {" "}
-          <button type="button" className="btn-text" style={{ minHeight: 0 }} onClick={onRetry}>
-            再试一次
-          </button>
-        </>
+        <button type="button" className="btn btn-sm" onClick={onRetry}>
+          <RotateCcw size={14} aria-hidden="true" />再试一次
+        </button>
       )}
-    </p>
+    </div>
   );
+}
+
+export function Empty({ icon: Icon, title, children }: { icon?: LucideIcon; title: string; children?: ReactNode }) {
+  return (
+    <div className="empty">
+      {Icon && <span className="empty-icon"><Icon size={18} aria-hidden="true" /></span>}
+      <strong>{title}</strong>
+      {children && <span className="note">{children}</span>}
+    </div>
+  );
+}
+
+// ---------- 卡片、指标卡 ----------
+export function Card({ title, sub, action, children, className = "", bodyClass = "card-body", id }: {
+  title?: ReactNode; sub?: ReactNode; action?: ReactNode; children: ReactNode; className?: string; bodyClass?: string; id?: string;
+}) {
+  return (
+    <section className={`card ${className}`} aria-labelledby={id && title ? `${id}-t` : undefined}>
+      {(title || action) && (
+        <div className="card-head">
+          <div>
+            {title && <h2 id={id ? `${id}-t` : undefined}>{title}</h2>}
+            {sub && <p className="card-sub">{sub}</p>}
+          </div>
+          {action}
+        </div>
+      )}
+      <div className={bodyClass}>{children}</div>
+    </section>
+  );
+}
+
+/** 指标卡：一个数，加上和上周比的变化。变化的颜色只表示好坏方向，旁边一定有箭头和文字。 */
+export function Stat({ icon: Icon, label, value, unit, delta, deltaText, goodWhenUp = true, foot, children }: {
+  icon?: LucideIcon; label: string; value: ReactNode; unit?: string; delta?: number | null; deltaText?: string;
+  goodWhenUp?: boolean; foot?: ReactNode; children?: ReactNode;
+}) {
+  let deltaEl: ReactNode = null;
+  if (delta !== undefined && delta !== null) {
+    const up = delta > 0;
+    const cls = delta === 0 ? "delta" : up === goodWhenUp ? "delta delta-up" : "delta delta-down";
+    deltaEl = (
+      <span className={cls}>
+        {delta > 0 ? <TrendingUp aria-hidden="true" /> : delta < 0 ? <TrendingDown aria-hidden="true" /> : null}
+        {delta > 0 ? "+" : ""}{delta}{deltaText ?? ""}
+      </span>
+    );
+  }
+  return (
+    <div className="card stat">
+      <span className="stat-label">{Icon && <Icon aria-hidden="true" />}{label}</span>
+      <div className="stat-row">
+        <span className="stat-value num">{value}{unit && <small>{unit}</small>}</span>
+        {deltaEl}
+      </div>
+      {children}
+      {foot && <span className="stat-foot">{foot}</span>}
+    </div>
+  );
+}
+
+/** 一排事实：小标签、一个不太大的数、一句说明。学生端用它代替大数字卡片。 */
+export function Facts({ items, label }: { items: { label: string; value: ReactNode; note?: ReactNode }[]; label: string }) {
+  return (
+    <dl className="card facts-strip" aria-label={label}>
+      {items.map((it) => (
+        <div key={it.label} className="fact">
+          <dt>{it.label}</dt>
+          <dd className="fact-value num">{it.value}</dd>
+          {it.note && <dd className="fact-note">{it.note}</dd>}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** 分段按钮：几个互斥的选项。 */
+export function Segmented<T extends string>({ value, options, onChange, label }: {
+  value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void; label: string;
+}) {
+  return (
+    <div className="seg" role="radiogroup" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={value === o.value} onClick={() => onChange(o.value)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 头像：名字的最后一个字。 */
+export function Avatar({ name, dark = false }: { name: string; dark?: boolean }) {
+  const ch = name.trim().slice(-1) || "?";
+  return <span className={dark ? "avatar avatar-dark" : "avatar"} aria-hidden="true">{ch}</span>;
 }
