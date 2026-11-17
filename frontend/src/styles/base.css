@@ -1,0 +1,425 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%; /* 一屏布局；不用 100vh，手机浏览器的地址栏会遮挡 */
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--fs-14);
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  overflow: hidden; /* 页面主体永远不横向滚动；各栏自己滚动 */
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+dl,
+dd,
+figure {
+  margin: 0;
+  padding: 0;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+a {
+  color: var(--ink);
+}
+
+a:hover {
+  color: #000000;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-code);
+}
+
+/* 键盘焦点必须看得见 */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.on-dark :focus-visible,
+.rail :focus-visible {
+  outline-color: var(--surface);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- 通用控件 ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-6);
+  height: var(--control-h);
+  padding: 0 var(--sp-14);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--fs-14);
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--ground);
+}
+
+.btn:disabled {
+  border-color: var(--field);
+  color: var(--ink-2);
+}
+
+.btn[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.btn-primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #000000;
+}
+
+.btn-primary:disabled {
+  background: var(--ink-2);
+  border-color: var(--ink-2);
+  color: var(--surface);
+}
+
+.btn-text {
+  border: 0;
+  background: none;
+  padding: 0 var(--sp-4);
+  min-height: var(--control-h);
+  color: var(--ink);
+  font-size: var(--fs-14);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.btn-text:hover {
+  color: #000000;
+}
+
+.field {
+  width: 100%;
+  height: var(--input-h);
+  padding: 0 var(--sp-12);
+  border: 1px solid var(--field);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--fs-14);
+}
+
+.field::placeholder {
+  color: var(--ink-2);
+}
+
+.note {
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.error-text {
+  font-size: var(--fs-13);
+  color: var(--fail);
+}
+
+/* ---------- 测试点格子 ---------- */
+.cells {
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  max-width: 140px;
+}
+
+.cell {
+  display: block;
+  width: 10px;
+  height: 10px;
+}
+
+/* 通过：实心；未通过：白底红框的空心格。形状和颜色一起区分。 */
+.cell-pass {
+  background: var(--pass);
+}
+
+.cell-fail {
+  border: 2px solid var(--fail);
+  background: var(--surface);
+}
+
+.cell-none {
+  background: var(--meter-off);
+}
+
+/* ---------- 掌握档位 ---------- */
+.meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-8);
+  font-size: var(--fs-13);
+  white-space: nowrap;
+}
+
+.meter-bars {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.meter-bars span {
+  display: block;
+  width: 14px;
+  height: 6px;
+  background: var(--meter-off);
+}
+
+.meter-bars span.on {
+  background: var(--ink);
+}
+
+/* ---------- 代码块 ---------- */
+.code {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  max-width: 560px;
+  background: var(--surface);
+}
+
+.code-cap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  min-height: 32px;
+  padding: 0 var(--sp-4) 0 var(--sp-12);
+  background: var(--ground);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-12h);
+  color: var(--ink-2);
+}
+
+.code-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+
+.code-copy:hover {
+  color: var(--ink);
+}
+
+.code-body {
+  overflow-x: auto; /* 横向超宽时在代码块内部滚动 */
+  font-family: var(--font-code);
+  font-size: var(--code-fs);
+  line-height: var(--code-lh);
+}
+
+.code-lines {
+  display: inline-block;
+  min-width: 100%;
+}
+
+.code-line {
+  display: flex;
+}
+
+.code-line.marked {
+  background: var(--mark); /* 只用底色标出，不加图标和色条 */
+}
+
+.code-line.removed {
+  background: var(--removed);
+}
+
+.code-no {
+  width: var(--lineno-w);
+  flex-shrink: 0;
+  padding-right: var(--sp-12);
+  text-align: right;
+  color: var(--ink-2);
+  user-select: none;
+}
+
+.code-text {
+  white-space: pre;
+  padding-right: var(--sp-12);
+  tab-size: 4;
+}
+
+.code-blank {
+  display: inline-block;
+  min-width: 12em;
+  border-bottom: 2px solid var(--ink);
+}
+
+p code,
+li code {
+  font-size: 0.93em;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--ground);
+}
+
+/* ---------- 抽屉 ---------- */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--scrim);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+  max-width: 88vw;
+  overflow: hidden;
+}
+
+.drawer-left {
+  left: 0;
+  width: 300px;
+  border-right: 1px solid var(--line);
+}
+
+.drawer-right {
+  right: 0;
+  width: 320px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 48px;
+  padding: 0 var(--sp-8) 0 var(--sp-16);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink);
+}
+
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .drawer-left {
+    animation: slide-left 0.16s ease-out;
+  }
+  .drawer-right {
+    animation: slide-right 0.16s ease-out;
+  }
+  @keyframes slide-left {
+    from {
+      transform: translateX(-24px);
+      opacity: 0.6;
+    }
+  }
+  @keyframes slide-right {
+    from {
+      transform: translateX(24px);
+      opacity: 0.6;
+    }
+  }
+}
+
+/* ---------- 细横幅 ---------- */
+.banner {
+  flex-shrink: 0;
+  padding: var(--sp-6) var(--gutter);
+  background: var(--mark);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-13);
+}

@@ -1,0 +1,697 @@
+/* 整体布局（《设计规范》第 3 节）
+   ≥1280：导航条 72 | 题目列表 300 | 对话 | 这道题的情况 300
+   1024–1279：导航条 | 题目列表 260 | 对话；右栏收进抽屉
+   768–1023：导航条 | 对话；题目列表、右栏都收进抽屉
+   <768：手机布局，底部标签栏 */
+
+.shell {
+  display: flex;
+  height: 100%;
+  background: var(--ground);
+  overflow: hidden;
+}
+
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---------- 导航条 ---------- */
+.rail {
+  width: var(--rail-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-12) var(--sp-8);
+  background: var(--ink);
+}
+
+.rail a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  min-height: 56px;
+  padding: var(--sp-10) 0;
+  border-radius: var(--radius);
+  color: var(--rail-text);
+  font-size: var(--fs-12);
+  text-decoration: none;
+  position: relative;
+}
+
+.rail a:hover {
+  color: var(--surface);
+}
+
+.rail a[aria-current="page"] {
+  background: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.rail-dot {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+}
+
+.rail a[aria-current="page"] .rail-dot {
+  background: var(--ink);
+}
+
+/* ---------- 题目列表栏 ---------- */
+.listcol {
+  width: var(--list-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--ground);
+}
+
+.picker {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-16);
+  border-bottom: 1px solid var(--line);
+}
+
+.picker-label {
+  font-size: var(--fs-12h);
+  color: var(--ink-2);
+}
+
+.picker-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: var(--sp-4) var(--sp-12);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: var(--fs-15);
+  font-weight: 600;
+  text-align: left;
+}
+
+.picker-btn span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-menu {
+  position: absolute;
+  left: var(--sp-16);
+  right: var(--sp-16);
+  top: calc(var(--sp-16) + 19px + var(--sp-6) + var(--control-h) + 2px);
+  z-index: 20;
+  max-height: 60vh;
+  overflow-y: auto;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.picker-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-8) var(--sp-12);
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: none;
+  text-align: left;
+}
+
+.picker-option:last-child {
+  border-bottom: 0;
+}
+
+.picker-option:hover {
+  background: var(--ground);
+}
+
+.picker-option[aria-selected="true"] {
+  background: var(--accent);
+}
+
+.picker-option strong {
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+
+.picker-option small {
+  font-size: var(--fs-12h);
+  color: var(--ink-2);
+}
+
+.picker-option[aria-selected="true"] small {
+  color: var(--ink);
+}
+
+.plist {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-12) var(--sp-16);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.prow:hover {
+  background: #e3e6e8;
+  color: var(--ink);
+}
+
+.prow[aria-current="true"] {
+  background: var(--accent);
+  border-bottom-color: var(--line);
+}
+
+.prow-top,
+.prow-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-8);
+}
+
+.prow-bottom {
+  align-items: center;
+}
+
+.prow-title {
+  font-size: var(--fs-15);
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prow-time {
+  font-size: var(--fs-12h);
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+
+.prow-state {
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.prow[aria-current="true"] .prow-time,
+.prow[aria-current="true"] .prow-state {
+  color: var(--ink);
+}
+
+.plist-empty {
+  padding: var(--sp-16);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+/* ---------- 对话栏 ---------- */
+.chatcol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  position: relative;
+}
+
+.chat-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-16);
+  min-height: 64px;
+  padding: var(--sp-8) var(--gutter);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.chat-head-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-head h1 {
+  font-size: var(--fs-17);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.chat-head-brief {
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.chat-head-side {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  flex-shrink: 0;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.chat-head-tools {
+  display: none;
+  gap: var(--sp-8);
+}
+
+.only-narrow {
+  display: none;
+}
+
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-20) var(--gutter);
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-18);
+  min-height: 100%;
+  justify-content: flex-end;
+}
+
+.msg {
+  display: flex;
+  gap: var(--sp-16);
+}
+
+.msg-who {
+  width: 56px;
+  flex-shrink: 0;
+  padding-top: 2px;
+  font-size: var(--fs-13);
+  font-weight: 600;
+}
+
+.msg-student .msg-who {
+  color: var(--ink-2);
+}
+
+.msg-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+  font-size: var(--fs-15);
+}
+
+.msg-body > p {
+  max-width: 640px;
+  overflow-wrap: anywhere;
+}
+
+.msg-actions {
+  display: flex;
+  gap: var(--sp-8);
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.day-sep {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  font-size: var(--fs-12h);
+  color: var(--ink-2);
+}
+
+.day-sep::before,
+.day-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.typing {
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.typing i {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 3px;
+  background: var(--ink-2);
+  vertical-align: middle;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .typing i {
+    animation: blink 1.2s infinite both;
+  }
+  .typing i:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .typing i:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+  @keyframes blink {
+    0%,
+    80%,
+    100% {
+      opacity: 0.25;
+    }
+    40% {
+      opacity: 1;
+    }
+  }
+}
+
+.chat-empty {
+  margin: auto 0;
+  padding: var(--sp-24) 0;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+  max-width: 640px;
+}
+
+.composer {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--sp-10);
+  align-items: flex-end;
+  padding: var(--sp-14) var(--gutter);
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface);
+}
+
+.composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--input-h);
+  max-height: 180px;
+  padding: 9px var(--sp-12);
+  border: 1px solid var(--field);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: var(--fs-14);
+  line-height: 20px;
+  resize: none;
+}
+
+.composer textarea.has-code {
+  font-family: var(--font-code);
+  font-size: var(--fs-13);
+}
+
+.composer textarea::placeholder {
+  color: var(--ink-2);
+  font-family: var(--font-ui);
+}
+
+.composer .btn-primary {
+  height: var(--input-h);
+  padding: 0 var(--sp-18);
+}
+
+/* ---------- 右栏：这道题的情况 ---------- */
+.sidecol {
+  width: var(--side-w);
+  flex-shrink: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-24);
+  padding: var(--sp-20) var(--sp-16);
+}
+
+.side section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+}
+
+.side h2 {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.side-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sp-8);
+  font-size: var(--fs-14);
+}
+
+.side-sub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  width: 100%;
+}
+
+.side-sub:first-of-type .side-row > span:first-child {
+  font-weight: 600;
+}
+
+.side-sub:not(:first-of-type) .side-row > span:first-child {
+  color: var(--ink-2);
+}
+
+.side-time {
+  font-size: var(--fs-12h);
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+
+.side-link {
+  align-self: flex-start;
+  min-height: 0;
+  padding: 0;
+}
+
+/* ---------- 普通页面（提交、学情、教师端）---------- */
+.page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--surface);
+}
+
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-16);
+  flex-wrap: wrap;
+  padding: var(--sp-20) var(--gutter) var(--sp-16);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.page-head h1 {
+  font-size: var(--fs-17);
+  font-weight: 600;
+}
+
+.page-body {
+  padding: var(--sp-20) var(--gutter) 48px;
+  max-width: 1180px;
+}
+
+/* ---------- 断点 ---------- */
+@media (max-width: 1279px) {
+  .sidecol {
+    display: none;
+  }
+  .chat-head-tools {
+    display: flex;
+  }
+  .hide-below-1280 {
+    display: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .listcol {
+    display: none;
+  }
+  .only-narrow {
+    display: inline-flex;
+  }
+}
+
+/* 手机 */
+@media (max-width: 767px) {
+  .shell {
+    flex-direction: column-reverse; /* 导航条变成底部标签栏 */
+  }
+
+  .rail {
+    width: 100%;
+    flex-direction: row;
+    padding: var(--sp-6) var(--sp-8);
+    padding-bottom: calc(var(--sp-6) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .rail a {
+    flex: 1;
+    min-height: 48px;
+    padding: 0;
+    gap: 2px;
+  }
+
+  .rail-dot {
+    right: calc(50% - 22px);
+    top: 6px;
+  }
+
+  .chat-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-6);
+    min-height: 0;
+    padding: var(--sp-12) var(--sp-16);
+    background: var(--ground);
+    border-bottom-color: var(--line);
+  }
+
+  .chat-head-side {
+    justify-content: space-between;
+    color: var(--ink);
+  }
+
+  .chat-head-tools {
+    display: none;
+  }
+
+  .only-narrow {
+    display: none;
+  }
+
+  .chat-head-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-8);
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: left;
+    min-height: 44px;
+  }
+
+  .chat-scroll {
+    padding: var(--sp-16);
+  }
+
+  .chat-list {
+    gap: var(--sp-14);
+  }
+
+  .msg {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .msg-who {
+    width: auto;
+    padding: 0;
+    font-size: var(--fs-12h);
+  }
+
+  .msg-body {
+    gap: var(--sp-8);
+  }
+
+  .msg-actions {
+    flex-wrap: nowrap;
+  }
+
+  .msg-actions .btn {
+    flex: 1;
+    padding: 0 var(--sp-4);
+    min-width: 0;
+  }
+
+  .composer {
+    padding: var(--sp-10) var(--sp-12);
+    gap: var(--sp-8);
+  }
+
+  .composer textarea {
+    font-size: var(--fs-15);
+    padding: 11px var(--sp-12);
+  }
+
+  .composer .btn-primary {
+    padding: 0 var(--sp-16);
+    font-size: var(--fs-15);
+  }
+
+  .code {
+    max-width: none;
+  }
+
+  .drawer-left,
+  .drawer-right {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .page-head {
+    padding: var(--sp-14) var(--sp-16) var(--sp-12);
+    background: var(--ground);
+    border-bottom-color: var(--line);
+  }
+
+  .page-body {
+    padding: var(--sp-16) var(--sp-16) 40px;
+  }
+}

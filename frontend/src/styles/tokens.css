@@ -1,0 +1,75 @@
+/* 设计令牌（《设计规范（A 工作台）》第 2 节）。组件里不写死颜色、字号、间距，都从这里取。 */
+:root {
+  /* 颜色 */
+  --ground: #eceeef;      /* 页面底色、题目列表栏、代码块标题条 */
+  --surface: #ffffff;     /* 对话区、输入框、按钮底 */
+  --panel: #f6f7f8;       /* 右侧“这道题的情况”栏 */
+  --ink: #1d2125;         /* 正文、主按钮底、导航条底 */
+  --ink-2: #55616e;       /* 次要文字 */
+  --line: #cdd2d6;        /* 栏与栏之间的分隔、代码块边框 */
+  --line-soft: #dadee1;   /* 列表行之间、对话区内部分隔 */
+  --field: #7c8791;       /* 输入框边框 */
+  --rail-text: #d6dadd;   /* 导航条上未选中的文字 */
+  --accent: #ffd43b;      /* 当前选中 */
+  --mark: #fff3bf;        /* 代码里被指出的那一行 */
+  --pass: #1e7a4c;        /* 通过（实心格） */
+  --fail: #c4321f;        /* 未通过（空心格的边框） */
+  --meter-off: #c3c9ce;   /* 档位条里未点亮的段 */
+  --removed: #fbe3e0;     /* 差异视图里删除的行 */
+  --scrim: rgba(29, 33, 37, 0.4);
+
+  /* 字体：中文用系统字体，不从外部加载；等宽字体只用于代码 */
+  --font-ui: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Noto Sans SC", sans-serif;
+  --font-code: "JetBrains Mono", "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+
+  /* 字号 */
+  --fs-12: 12px;
+  --fs-12h: 12.5px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-17: 17px;
+
+  /* 间距刻度 */
+  --sp-4: 4px;
+  --sp-6: 6px;
+  --sp-8: 8px;
+  --sp-10: 10px;
+  --sp-12: 12px;
+  --sp-14: 14px;
+  --sp-16: 16px;
+  --sp-18: 18px;
+  --sp-20: 20px;
+  --sp-24: 24px;
+
+  --radius: 4px;
+
+  /* 随屏幕变化的尺寸 */
+  --rail-w: 72px;
+  --list-w: 300px;
+  --side-w: 300px;
+  --control-h: 36px;      /* 手机上是 44 */
+  --input-h: 40px;
+  --code-fs: 13px;
+  --code-lh: 24px;
+  --lineno-w: 40px;
+  --gutter: 24px;
+}
+
+@media (max-width: 1279px) {
+  :root {
+    --list-w: 260px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --control-h: 44px;
+    --input-h: 44px;
+    --code-fs: 12.5px;
+    --code-lh: 22px;
+    --lineno-w: 30px;
+    --gutter: 16px;
+  }
+}
