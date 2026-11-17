@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import datetime as dt
 import logging
 
@@ -45,9 +46,18 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
                 s.add(m.ClassSource(server_id=ctx.server_id, class_id=c.class_id, data_source_id=ctx.source_id))
     ctx.bump("classes", len(classes))
 
+    # 班级列表里 id 和 classId 不一样时，记下对应关系：作业里“布置给哪些班”可能用的是另一个
+    alt = {c.alt_id: c.class_id for c in classes if c.alt_id is not None}
+    with db.session_scope() as s:
+        set_state(s, ctx.server_id, "class_alt_ids", json.dumps({str(k): v for k, v in alt.items()}))
+
     seen: dict[str, int] = {}
     for c in classes:
-        students = ep.list_students(ctx.client, c.class_id)
+        _activity(f"同步学生名单（{c.class_name or c.class_id}）")
+        students = ep.list_students(ctx.client, c.class_id, c.alt_id)
+        if not students:
+            log.warning("班级 %s（%s）的名单是空的：按 class_id=%s%s 都没取到学生。请运行 python -m app.cli doctor 看一下",
+                        c.class_id, c.class_name, c.class_id, f" 和 {c.alt_id}" if c.alt_id else "")
         with db.session_scope() as s:
             for st in students:
                 seen[st.user_id] = c.class_id
@@ -100,6 +110,8 @@ def _enroll(s, ctx: SyncContext, user_id: str, class_id: int) -> None:
 def sync_contests(ctx: SyncContext) -> None:
     _activity("同步作业")
     contests = ep.list_contests(ctx.client)
+    with db.session_scope() as s:
+        alt = {int(k): v for k, v in json.loads(get_state(s, ctx.server_id, "class_alt_ids") or "{}").items()}
     for c in contests:
         problem_ids = c.problem_ids if c.problem_ids is not None else ep.contest_problem_ids(ctx.client, c.contest_id)
         with db.session_scope() as s:
@@ -111,7 +123,7 @@ def sync_contests(ctx: SyncContext) -> None:
             row.raw_json, row.fetched_at = c.raw, ctx.now()
             s.execute(delete(m.ContestClass).where(
                 m.ContestClass.server_id == ctx.server_id, m.ContestClass.contest_id == c.contest_id))
-            for cid in dict.fromkeys(c.class_ids):
+            for cid in dict.fromkeys(alt.get(x, x) for x in c.class_ids):
                 s.add(m.ContestClass(server_id=ctx.server_id, contest_id=c.contest_id, class_id=cid))
             s.execute(delete(m.ContestProblem).where(
                 m.ContestProblem.server_id == ctx.server_id, m.ContestProblem.contest_id == c.contest_id))

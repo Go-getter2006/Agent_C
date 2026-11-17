@@ -89,6 +89,21 @@ def xdoj_probe() -> None:
             shape = {k: type(v).__name__ for k, v in first.items()}
             total = body.get("totalCount") if isinstance(body, dict) else None
             typer.echo(f"{path}  共 {total} 条\n  {json.dumps(shape, ensure_ascii=False)}")
+        # 名单接口按哪个编号筛：班级列表的 classId 还是 id。两个都试，只打印条数和字段名
+        body = c.post_json("/class/list.do", {"page": 1, "rows": 1})
+        rows = body.get("data") if isinstance(body, dict) else body
+        if rows:
+            first = rows[0]
+            for label in ("classId", "id"):
+                fid = first.get(label)
+                if fid is None:
+                    continue
+                filters = json.dumps({"groupOp": "AND", "rules": [{"field": "class_id", "op": "eq", "data": str(fid)}]})
+                sb = c.post_json("/user/listStudents.do", {"page": 1, "rows": 1, "search": "true", "filters": filters})
+                srows = sb.get("data") if isinstance(sb, dict) else sb
+                shape = {k: type(v).__name__ for k, v in scrub(srows[0]).items()} if srows else {}
+                total = sb.get("totalCount") if isinstance(sb, dict) else None
+                typer.echo(f"/user/listStudents.do 按班级的 {label} 筛  共 {total} 人\n  {json.dumps(shape, ensure_ascii=False)}")
 
 
 @cli.command("sync-meta")
@@ -165,6 +180,52 @@ def stats() -> None:
             typer.echo(f"\n服务器 {server.id}（{server.name}）  进度 H={store.get_state(s, server.id, 'max_submission_id', '0')}"
                        f"  轮询档位 {tier[0]}/{tier[1]} 秒  最近请求成功率 {rate}")
             typer.echo(f"  队列积压 {json.dumps(store.queue_backlog(s, server.id), ensure_ascii=False)}")
+
+
+@cli.command("doctor")
+def doctor() -> None:
+    """同步出了什么问题：后台同步在不在跑、每个老师名下有几个班、每个班几个人、作业布置给了哪些班、队列、最近的错误。
+    只读本地的库，不向 XDOJ 发请求，可以在网页运行时随时执行。"""
+    from .xdoj import store
+    from .xdoj.daemon import last_beat
+
+    with db.session_scope() as s:
+        beat, activity = last_beat(s)
+        ago = f"{(db.now() - beat).total_seconds():.0f} 秒前" if beat else "从来没有"
+        typer.echo(f"后台同步心跳：{ago}；正在：{activity or '（不知道）'}")
+        for src in s.scalars(select(m.DataSource).order_by(m.DataSource.id)).all():
+            server = s.get(m.Server, src.server_id)
+            typer.echo(f"\n数据源 {src.id}：服务器 {server.code if server else src.server_id}，老师账号 {src.teacher_user_id}，"
+                       f"{'启用' if src.enabled else '没启用'}，上次名单和作业 {store.get_time(s, src.server_id, 'last_meta_at') or '还没有'}")
+            class_ids = [cs.class_id for cs in s.scalars(select(m.ClassSource).where(
+                m.ClassSource.data_source_id == src.id)).all()]
+            if not class_ids:
+                typer.echo("  名下没有班级：班级列表还没同步下来，或者接口返回的字段和程序找的不一样（看日志里的 WARNING）")
+            for cid in class_ids:
+                cls = s.get(m.XClass, (src.server_id, cid))
+                n = s.scalar(select(func.count()).select_from(m.Enrollment).where(
+                    m.Enrollment.server_id == src.server_id, m.Enrollment.class_id == cid, m.Enrollment.status == "active"))
+                hw = s.scalar(select(func.count()).select_from(m.ContestClass).where(
+                    m.ContestClass.server_id == src.server_id, m.ContestClass.class_id == cid))
+                typer.echo(f"  班级 {cid}（{cls.class_name if cls else ''}）：名单 {n} 人，布置给它的作业 {hw} 个"
+                           + ("  ← 名单是空的" if not n else "") + ("  ← 没有作业对得上这个班" if not hw else ""))
+        for server in s.scalars(select(m.Server).where(m.Server.code != "demo")).all():
+            contests = s.scalar(select(func.count()).select_from(m.Contest).where(m.Contest.server_id == server.id))
+            unmatched = s.scalar(select(func.count()).select_from(m.ContestClass).where(
+                m.ContestClass.server_id == server.id,
+                ~m.ContestClass.class_id.in_(select(m.XClass.class_id).where(m.XClass.server_id == server.id))))
+            typer.echo(f"\n服务器 {server.code}：作业 {contests} 个，其中 {unmatched} 条“布置给某班”对不上已知的班级；"
+                       f"题目 {s.scalar(select(func.count()).select_from(m.Problem).where(m.Problem.server_id == server.id))} 道；"
+                       f"提交 {s.scalar(select(func.count()).select_from(m.Submission).where(m.Submission.server_id == server.id))} 条")
+            typer.echo(f"  队列：{json.dumps(store.queue_backlog(s, server.id), ensure_ascii=False)}")
+            failed = s.scalars(select(m.FetchTask).where(m.FetchTask.server_id == server.id, m.FetchTask.status == "failed")
+                               .order_by(m.FetchTask.id.desc()).limit(5)).all()
+            for t in failed:
+                typer.echo(f"  失败的任务：{t.kind} {t.target_id}：{t.last_error[:120]}")
+            bad = s.scalars(select(m.RequestLog).where(m.RequestLog.server_id == server.id, m.RequestLog.ok.is_(False))
+                            .order_by(m.RequestLog.id.desc()).limit(5)).all()
+            for r in bad:
+                typer.echo(f"  失败的请求：{r.endpoint} → {r.status_code}")
 
 
 @cli.command("graph-update")

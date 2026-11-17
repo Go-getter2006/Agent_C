@@ -406,3 +406,16 @@ def test_bank_synced_once_per_server_per_day(ctx, fake, clock):
     paths = [p for _m, p in fake.requests[before:]]
     assert "/problem/list.do" in paths
     assert not any("download" in p.lower() and "testcase" in p for p in paths)
+
+
+def test_roster_filter_falls_back_to_other_class_id(ctx, fake):
+    """班级列表里 id 和 classId 不一样，名单接口按 id 筛：先按 classId 取不到人，换 id 再取；作业里的班级也对上。"""
+    fake.classes = [{"id": 9031, "classId": 31, "className": "测试一班", "ownerId": fake.teacher_id}]
+    for st in fake.students:
+        st["classId"] = 9031           # 名单接口认的是 id
+    fake.contests[0]["classes"] = [{"id": 9031}]
+    sync_meta.sync_metadata(ctx)
+    with db.session_scope() as s:
+        names = {e.user_id for e in s.scalars(select(m.Enrollment).where(m.Enrollment.class_id == 31)).all()}
+        assert names == {"2500000001", "2500000002", "2500000003"}
+        assert s.get(m.ContestClass, (1, 501, 31)) is not None
