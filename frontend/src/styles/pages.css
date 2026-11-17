@@ -602,3 +602,174 @@
     min-height: 44px;
   }
 }
+
+/* ---------- 教师端：比学生端更密，沿用同一套令牌 ---------- */
+.t-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+  flex-wrap: wrap;
+}
+
+.t-head select.field {
+  width: auto;
+  min-width: 220px;
+  max-width: 100%;
+  font-weight: 600;
+}
+
+.t-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+.t-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+  min-width: 0;
+}
+
+.t-section > h2 {
+  padding-bottom: var(--sp-8);
+  border-bottom: 1px solid var(--ink);
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.t-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 36px 40px;
+}
+
+.table.dense td {
+  padding-top: var(--sp-6);
+  padding-bottom: var(--sp-6);
+  font-size: var(--fs-13);
+}
+
+.table.dense td.strong,
+.table td.strong {
+  font-weight: 600;
+  font-size: var(--fs-14);
+}
+
+.table td.strong a {
+  white-space: nowrap;
+}
+
+.table .topic-row td {
+  padding-top: var(--sp-14);
+  border-bottom-color: var(--line);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.table .code-cell {
+  font-family: var(--font-code);
+  font-size: var(--fs-12h);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* 四档分布条：实心深色 = 已掌握，灰 = 基本掌握，空心 = 待加强，浅灰 = 还没练到 */
+.dist {
+  display: flex;
+  width: 100%;
+  min-width: 140px;
+  height: 12px;
+}
+
+.dist span {
+  display: block;
+  height: 100%;
+}
+
+.dist .d0,
+.legend .d0 {
+  background: var(--ink);
+}
+
+.dist .d1,
+.legend .d1 {
+  background: var(--field);
+}
+
+.dist .d2,
+.legend .d2 {
+  background: var(--surface);
+  border: 2px solid var(--ink);
+}
+
+.dist .d3,
+.legend .d3 {
+  background: var(--line-soft);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-6) var(--sp-16);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-6);
+}
+
+.legend i {
+  display: inline-block;
+  width: 14px;
+  height: 12px;
+}
+
+.flag {
+  display: inline-block;
+  padding: 0 var(--sp-6);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  font-size: var(--fs-12h);
+  white-space: nowrap;
+}
+
+.trial {
+  padding: var(--sp-10) var(--sp-12);
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--mark);
+  font-size: var(--fs-13);
+}
+
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: 32px;
+  font-size: var(--fs-13);
+}
+
+@media (max-width: 1023px) {
+  .t-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767px) {
+  .t-scroll {
+    overflow-x: auto;
+  }
+
+  .t-scroll .table {
+    min-width: 760px; /* 宽表格在自己的容器里横向滚动，列不挤成一个字一行 */
+  }
+
+  .t-head select.field {
+    width: 100%;
+  }
+}

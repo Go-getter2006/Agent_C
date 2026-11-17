@@ -288,7 +288,7 @@ def stuck_list(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
             continue
         last = points[-1]
         problem = s.get(m.Problem, (last.server_id, last.problem_id)) if last.problem_id else None
-        rows.append({"userId": uid, "name": people[uid], **_skill_view(skill), "times": len(points),
+        rows.append({"userId": uid, "name": people[uid], "skill": _skill_view(skill), "times": len(points),
                      "stubborn": any(p.stubborn for p in points), "lastTime": last.created_at.isoformat(),
                      "lastProblem": problem.title if problem else "", "lastProblemId": last.problem_id,
                      "resolution": last.resolution, "passedAfter": last.passed_after,
@@ -389,8 +389,8 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
             updated = r.updated_at if updated is None or r.updated_at > updated else updated
         for code, st in simple.items():
             if code in post and st.raw >= 1 and abs(st.p - post[code]) >= config.GRAPH["big_gap"]:
-                gaps.append({"userId": uid, "name": people[uid], **_skill_view(code), "simple": round(st.p, 2),
-                             "graph": round(post[code], 2), "level": st.level})
+                gaps.append({"userId": uid, "name": people[uid], "skill": _skill_view(code),
+                             "simple": round(st.p, 2), "graph": round(post[code], 2), "level": st.level})
         for r in graphmodel.root_causes(simple, post):
             roots_by_skill[r["root"]] += 1
             root_rows.append({"userId": uid, "name": people[uid], "skill": _skill_view(r["skill"]),

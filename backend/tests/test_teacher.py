@@ -84,7 +84,9 @@ def test_stuck_list_and_graph_page(client, demo):
     key = f"c{sid}-31"
     stuck = client.get(f"/api/teacher/classes/{key}/stuck").json()
     row = stuck["rows"][0]
-    assert (row["userId"], row["code"], row["times"], row["lastProblem"]) == (UID, "C06.03.02", 2, "成绩最高分")
+    assert (row["userId"], row["name"], row["skill"]["code"], row["times"], row["lastProblem"]) == (
+        UID, "林晓", "C06.03.02", 2, "成绩最高分")
+    assert row["skill"]["name"].startswith("最值的初值设定")
     assert stuck["onceOnly"] >= 1 and stuck["common"][0]["students"] >= 1
     g = client.get(f"/api/teacher/classes/{key}/graph").json()
     assert g["trial"] is True and g["prereqStatus"] == "初稿，未审定"
@@ -93,6 +95,7 @@ def test_stuck_list_and_graph_page(client, demo):
     assert g["weekly"] and all(0 <= w["simpleAccuracy"] <= 1 and 0 <= w["graphAccuracy"] <= 1 for w in g["weekly"])
     assert g["edges"] and {"parent", "child", "n", "withParent", "withoutParent", "doubtful"} <= set(g["edges"][0])
     assert all(abs(x["simple"] - x["graph"]) >= config.GRAPH["big_gap"] - 0.006 for x in g["gaps"])
+    assert all(x["name"] in ("林晓", "周航") or len(x["name"]) <= 4 for x in g["gaps"]) and all("code" in x["skill"] for x in g["gaps"])
 
 
 def test_other_teacher_sees_nothing(client, demo):

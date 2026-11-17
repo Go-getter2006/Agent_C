@@ -7,6 +7,7 @@ import { useSession } from "../session";
 export default function Login() {
   const { setMe } = useSession();
   const info = useLoad(() => api.authInfo(), []);
+  const servers = useLoad(() => api.teacherServers().then((r) => r.servers), []);
   const [tab, setTab] = useState<"student" | "teacher">("student");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -20,7 +21,9 @@ export default function Login() {
     setBusy(true);
     setError(null);
     try {
-      if (tab === "teacher" && !useDevTeacher) await api.teacherLogin(server, name.trim(), password);
+      if (tab === "teacher" && !useDevTeacher && servers.data?.length) {
+        await api.teacherLogin(server || servers.data[0].code, name.trim(), password);
+      }
       else await api.login(name.trim(), password);
       setMe(await api.me());
     } catch (err) {
@@ -31,8 +34,8 @@ export default function Login() {
   };
 
   const demo = info.data?.demo ?? false;
-  // 演示数据没有真实的 XDOJ 可以试登，教师也用演示口令
-  const useDevTeacher = demo && name.trim() === "demo-teacher";
+  // 演示数据没有真实的 XDOJ 可以试登：演示教师、管理员用服务器上的口令登录
+  const useDevTeacher = (demo && name.trim() === "demo-teacher") || !(servers.data?.length);
 
   return (
     <main className="login">
@@ -42,10 +45,12 @@ export default function Login() {
           <button type="button" role="tab" aria-selected={tab === "student"} onClick={() => { setTab("student"); setError(null); }}>学生</button>
           <button type="button" role="tab" aria-selected={tab === "teacher"} onClick={() => { setTab("teacher"); setError(null); }}>教师</button>
         </div>
-        {tab === "teacher" && !demo && (
+        {tab === "teacher" && !useDevTeacher && (servers.data?.length ?? 0) > 0 && (
           <label>
-            XDOJ 服务器地址
-            <input className="field" value={server} onChange={(e) => setServer(e.target.value)} placeholder="http://服务器地址/xdoj-ssm" autoComplete="url" required />
+            XDOJ 服务器
+            <select className="field" value={server || servers.data![0].code} onChange={(e) => setServer(e.target.value)}>
+              {servers.data!.map((sv) => <option key={sv.code} value={sv.code}>{sv.name}</option>)}
+            </select>
           </label>
         )}
         <label>
@@ -58,7 +63,7 @@ export default function Login() {
         </label>
         {error && <p className="error-text" role="alert">{error}</p>}
         <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "正在登录" : "登录"}</button>
-        {tab === "teacher" && !demo && (
+        {tab === "teacher" && !useDevTeacher && (servers.data?.length ?? 0) > 0 && (
           <p className="note">
             系统会用这个账号去 XDOJ 试着登录一次，成功后建立教师账号，并只读地同步你名下班级的练习数据。
             同步要长期进行，所以密码会加密保存在服务器上。

@@ -44,8 +44,8 @@ async function request<T>(method: string, path: string, body?: unknown, quiet401
   return data as T;
 }
 
-const get = <T,>(path: string) => request<T>("GET", path);
-const post = <T,>(path: string, body: unknown = {}) => request<T>("POST", path, body);
+export const get = <T,>(path: string) => request<T>("GET", path);
+export const post = <T,>(path: string, body: unknown = {}) => request<T>("POST", path, body);
 
 export const api = {
   authInfo: () => get<AuthInfo>("/api/auth/info"),
@@ -55,6 +55,7 @@ export const api = {
   teacherLogin: (server: string, userId: string, password: string) =>
     request<{ role: Me["role"]; name: string }>("POST", "/api/teacher/login", { server, userId, password }, true),
   logout: () => post<{ ok: boolean }>("/api/auth/logout"),
+  teacherServers: () => get<{ servers: { code: string; name: string }[] }>("/api/teacher/servers"),
 
   status: () => get<StatusInfo>("/api/status"),
   homeworks: () => get<{ homeworks: Homework[] }>("/api/homeworks"),
