@@ -56,6 +56,7 @@ class ClassRow:
     class_id: int
     class_name: str
     owner_id: str
+    alt_id: int | None = None  # 列表里 id 和 classId 都有、又不一样时，另一个（名单接口按哪个筛还没实测）
 
 
 def list_classes(client: XdojClient) -> list[ClassRow]:
@@ -64,7 +65,9 @@ def list_classes(client: XdojClient) -> list[ClassRow]:
         cid = to_int(pick(r, "classId", "id"))
         if cid is None:
             continue
-        out.append(ClassRow(cid, str(pick(r, "className", "name", default="")), str(pick(r, "ownerId", default=""))))
+        other = to_int(r.get("id"))
+        out.append(ClassRow(cid, str(pick(r, "className", "name", default="")), str(pick(r, "ownerId", default="")),
+                            other if other is not None and other != cid else None))
     return out
 
 
@@ -75,16 +78,25 @@ class StudentRow:
     class_id: int
 
 
-def list_students(client: XdojClient, class_id: int) -> list[StudentRow]:
-    """只取学号、姓名、班级。接口返回里的密码、令牌、登录 IP 在这里就丢掉，不往外传。"""
-    filters = json.dumps({"groupOp": "AND", "rules": [{"field": "class_id", "op": "eq", "data": str(class_id)}]})
+def list_students(client: XdojClient, class_id: int, alt_id: int | None = None) -> list[StudentRow]:
+    """只取学号、姓名、班级。接口返回里的密码、令牌、登录 IP 在这里就丢掉，不往外传。
+
+    按 class_id 筛选。班级列表里 id 和 classId 不一样时不确定该用哪个：先用 classId，取不到人再用 id 试一次。
+    """
+    out = _students_by(client, class_id, class_id)
+    if not out and alt_id is not None:
+        out = _students_by(client, alt_id, class_id)
+    return out
+
+
+def _students_by(client: XdojClient, filter_id: int, class_id: int) -> list[StudentRow]:
+    filters = json.dumps({"groupOp": "AND", "rules": [{"field": "class_id", "op": "eq", "data": str(filter_id)}]})
     out = []
     for raw in _paged(client, "POST", "/user/listStudents.do", {"search": "true", "filters": filters}):
         uid = pick(raw, "userId")
         if uid is None or str(uid).strip() == "":
             continue
-        out.append(StudentRow(str(uid).strip(), str(pick(raw, "userName", default="")).strip(),
-                              to_int(pick(raw, "classId"), class_id) or class_id))
+        out.append(StudentRow(str(uid).strip(), str(pick(raw, "userName", default="")).strip(), class_id))
         del raw  # 原始行不保留
     return out
 
