@@ -27,6 +27,11 @@ def create_app() -> FastAPI:
             ensure_known(s)  # C 语言那台的地址写在代码里，教师登录页可以直接选
             if s.scalar(select(m.QuizItem.id).limit(1)) is None:
                 quiz.load_bank(s)
+        if config.SYNC_IN_WEB:
+            from ..xdoj.daemon import start_in_thread
+
+            start_in_thread()
+            log.info("后台同步在网页进程里运行")
         yield
 
     app = FastAPI(title="程序设计智能体", lifespan=lifespan,

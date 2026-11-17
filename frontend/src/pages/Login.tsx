@@ -79,7 +79,7 @@ export default function Login() {
           </div>
           <div>
             <h1>登录</h1>
-            <p className="page-sub">{tab === "student" ? "用学号和密码登录。" : "用你在 XDOJ 上的教师账号登录。"}</p>
+            <p className="page-sub">{tab === "student" ? "用 XDOJ 的学号和密码登录。密码只拿去 XDOJ 核对一次，不会保存。" : "用你在 XDOJ 上的教师账号登录。第一次登录后会自动同步你名下的班级和学生名单。"}</p>
           </div>
           <Segmented label="身份" value={tab} onChange={(v) => { setTab(v); setError(null); }}
             options={[
