@@ -129,7 +129,7 @@ export default function Workbench() {
             )
           ) : (
             <div className="chat-head-side">
-              {statusText && <span className={layout === "two" ? undefined : ""}>{statusText}</span>}
+              {statusText && <span>{statusText}</span>}
               <span className="chat-head-tools">
                 <button type="button" className="btn only-narrow" onClick={() => setDrawer("list")}>题目</button>
                 {d && <button type="button" className="btn" onClick={() => setDrawer("side")}>这道题</button>}

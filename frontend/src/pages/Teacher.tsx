@@ -1,6 +1,6 @@
 // 教师端：班级概况、学生、卡点、图模型（试验中）、数据源。只看自己名下的班。
 import { useMemo, useState, type ReactNode } from "react";
-import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { get, post } from "../api";
 import { Shell, type NavItem } from "../components/Shell";
 import { Cells, CodeBlock, Icon, Loading, Problem } from "../components/ui";
@@ -618,7 +618,6 @@ function Sources() {
 
 // ---------------------------------------------------------------- 路由
 export default function Teacher() {
-  const navigate = useNavigate();
   return (
     <Routes>
       <Route path="class" element={<Page title="班级概况">{(cls) => cls && <ClassOverview cls={cls} />}</Page>} />
@@ -627,12 +626,7 @@ export default function Teacher() {
       <Route path="stuck" element={<Page title="卡点">{(cls) => cls && <Stuck cls={cls} />}</Page>} />
       <Route path="graph" element={<Page title="图模型">{(cls) => cls && <Graph cls={cls} />}</Page>} />
       <Route path="sources" element={<Page title="数据源" withClass={false}>{() => <Sources />}</Page>} />
-      <Route path="*" element={<Redirect to={() => navigate("/teacher/class", { replace: true })} />} />
+      <Route path="*" element={<Navigate to="/teacher/class" replace />} />
     </Routes>
   );
-}
-
-function Redirect({ to }: { to: () => void }) {
-  useState(() => { queueMicrotask(to); return null; });
-  return null;
 }

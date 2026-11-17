@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import catalog, db, llm, progress, quiz
+from .. import accounts, catalog, db, llm, progress, quiz
 from .. import models as m
 from ..chat import workflow
 from ..taxonomy import UI_EVENTS
@@ -319,7 +319,7 @@ def ui_event(body: EventBody, user: m.User = Depends(student), s: Session = Depe
 @router.get("/status")
 def status(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     """XDOJ 连得上吗、数据是什么时候的。连不上时页面顶部显示一条细横幅。"""
-    servers = {sid for sid, _cid in __import__("app.accounts", fromlist=["x"]).active_class_keys(s, user.student_id)}
+    servers = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id)}
     worst = {"ok": True, "dataTime": None, "demo": False}
     for sid in servers:
         source = s.scalar(select(m.DataSource).where(m.DataSource.server_id == sid, m.DataSource.enabled.is_(True)))
