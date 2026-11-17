@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# 一条命令装好并启动。第一次运行会自动：生成 .env 和密钥、问一次 DeepSeek 的 key、
-# 建 Python 虚拟环境装依赖、装前端依赖并构建、建表；之后再运行只做有变化的那几步。
+# 一条命令装好并在后台启动，终端马上还给你。第一次运行会自动：生成 .env 和密钥、问一次 DeepSeek 的 key、
+# 建 Python 虚拟环境装依赖、建表；之后再运行只做有变化的那几步。前端已经构建好放在仓库里，服务器上不用装 Node。
 #
-#   ./run.sh            启动（网页 + 后台同步）。老师在登录页选“教师”用 XDOJ 账号登录，自动同步班级和名单；
-#                       学生用名单里的学号和自己的 XDOJ 密码登录
-#   ./run.sh demo       用演示数据启动（单独一个库，不碰真实数据）
-#   ./run.sh update     拉最新代码、更新依赖、重新构建，然后启动
-#   ./run.sh deps       在 Ubuntu / Debian 上装好 Python、gcc、Node 20（要 sudo，只需一次）
+#   ./run.sh            在后台启动（网页 + 同步）
+#   ./run.sh stop       停止
+#   ./run.sh restart    重启
+#   ./run.sh status     看在不在跑
+#   ./run.sh log        看运行日志（Ctrl+C 只是退出看日志，程序继续跑）
+#   ./run.sh update     拉最新代码，更新依赖，重启
+#   ./run.sh demo       用演示数据在后台启动（单独一个库，不碰真实数据）
+#   ./run.sh fg         在前台运行（调试用，Ctrl+C 停止）
+#   ./run.sh deps       在 Ubuntu / Debian 上装 Python 和 gcc（要 sudo，只需一次）
 #   ./run.sh service    装成开机自启的系统服务（要 sudo）
 #
 # 端口默认 8000，可以 PORT=8080 ./run.sh 改。
@@ -16,6 +20,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
+PIDFILE="$ROOT/data/server.pid"
+LOGFILE="$ROOT/data/server.log"
 
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
@@ -65,16 +71,10 @@ setup_backend() {
 }
 
 setup_frontend() {
-  command -v node >/dev/null 2>&1 || die "需要 Node 20 以上。Ubuntu / Debian 上可以先运行 ./run.sh deps"
-  if [ ! -d frontend/node_modules ] || ! stamp_ok frontend/package-lock.json frontend/node_modules/.lock-stamp; then
-    say "安装前端依赖"
-    (cd frontend && npm ci --no-audit --no-fund --loglevel=error)
-    stamp_set frontend/package-lock.json frontend/node_modules/.lock-stamp
-  fi
-  if [ ! -f frontend/dist/index.html ] || [ -n "$(find frontend/src frontend/index.html frontend/public -newer frontend/dist/index.html -print -quit)" ]; then
-    say "构建前端"
-    (cd frontend && npm run build --silent >/dev/null)
-  fi
+  [ -f frontend/dist/index.html ] && return 0   # 仓库里带着构建好的前端
+  command -v node >/dev/null 2>&1 || die "缺少 frontend/dist（构建好的前端），也没有 Node。先 git pull 拿到构建好的前端"
+  say "构建前端"
+  (cd frontend && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent >/dev/null)
 }
 
 setup_all() {
@@ -84,7 +84,7 @@ setup_all() {
   setup_frontend
 }
 
-# 以前按旧步骤把演示数据灌进了正式的库：挪开（不删），让正式的库从老师登录开始只有真实的 XDOJ 账号
+# 以前按旧步骤把演示数据灌进了正式的库：挪开（不删），让正式的库只有真实的 XDOJ 账号
 move_demo_out() {
   local f="$ROOT/data/agent.sqlite3"
   [ -f "$f" ] && [ -z "${DATABASE_URL:-}" ] || return 0
@@ -104,27 +104,107 @@ PY
   fi
 }
 
-start() {
-  cd "$ROOT/backend"
-  mkdir -p "$ROOT/data"
-  .venv/bin/python -m app.cli init-db
+running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+
+url_hint() {
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  say "打开 http://127.0.0.1:$PORT ${ip:+（别的电脑：http://$ip:$PORT）}，按 Ctrl+C 停止。后台同步在同一个进程里运行"
+  echo "http://127.0.0.1:$PORT${ip:+ （别的电脑：http://$ip:$PORT）}"
+}
+
+prepare_db() {
+  mkdir -p "$ROOT/data"
+  (cd "$ROOT/backend" && .venv/bin/python -m app.cli init-db >/dev/null)
+}
+
+fg_start() {
+  prepare_db
+  cd "$ROOT/backend"
+  say "在前台运行：$(url_hint)，Ctrl+C 停止"
   exec .venv/bin/python -m app.cli serve --host "$HOST" --port "$PORT"
+}
+
+bg_start() {
+  if running; then
+    say "已经在运行了：$(url_hint)"
+    return 0
+  fi
+  prepare_db
+  cd "$ROOT/backend"
+  nohup .venv/bin/python -m app.cli serve --host "$HOST" --port "$PORT" < /dev/null >> "$LOGFILE" 2>&1 &
+  echo $! > "$PIDFILE"
+  disown 2>/dev/null || true
+  cd "$ROOT"
+  sleep 2
+  if running; then
+    say "已在后台启动：$(url_hint)"
+    echo "    停止：./run.sh stop    看日志：./run.sh log    看状态：./run.sh status"
+  else
+    tail -n 20 "$LOGFILE" || true
+    die "没有启动起来，上面是日志的最后几行"
+  fi
+}
+
+bg_stop() {
+  if running; then
+    kill "$(cat "$PIDFILE")" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do running || break; sleep 1; done
+    if running; then kill -9 "$(cat "$PIDFILE")" 2>/dev/null || true; fi
+    say "已停止"
+  else
+    say "本来就没有在运行"
+  fi
+  rm -f "$PIDFILE"
+}
+
+install_service() {
+  local unit=/etc/systemd/system/agent-c.service
+  {
+    echo "[Unit]"
+    echo "Description=程序设计智能体（网页和 XDOJ 同步）"
+    echo "After=network-online.target"
+    echo
+    echo "[Service]"
+    echo "User=$(id -un)"
+    echo "WorkingDirectory=$ROOT"
+    echo "Environment=PORT=$PORT HOST=$HOST"
+    echo "ExecStart=$ROOT/run.sh fg"
+    echo "Restart=always"
+    echo "RestartSec=5"
+    echo
+    echo "[Install]"
+    echo "WantedBy=multi-user.target"
+  } | sudo tee "$unit" >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now agent-c
+  say "已经装成系统服务，开机会自己启动。看状态：systemctl status agent-c；看日志：journalctl -u agent-c -f"
 }
 
 case "${1:-}" in
   "")
     setup_all
     move_demo_out
-    start
+    bg_start
     ;;
-  start)  # 系统服务用：不做安装，直接启动
-    start
+  stop)
+    bg_stop
+    ;;
+  restart)
+    bg_stop
+    bg_start
+    ;;
+  status)
+    if running; then say "在运行（进程 $(cat "$PIDFILE")）：$(url_hint)"; else say "没有在运行。启动：./run.sh"; fi
+    ;;
+  log)
+    tail -n 50 -f "$LOGFILE"
+    ;;
+  fg|start)  # start：给以前装的系统服务用
+    fg_start
     ;;
   demo)
     setup_all
+    bg_stop >/dev/null
     export DATABASE_URL="sqlite:///$ROOT/data/demo.sqlite3"
     if ! grep -q '^DEV_LOGIN_PASSWORD=..*' .env; then
       sed -i "s|^DEV_LOGIN_PASSWORD=.*|DEV_LOGIN_PASSWORD=demo|" .env
@@ -133,49 +213,28 @@ case "${1:-}" in
     mkdir -p data
     (cd backend && .venv/bin/python -m app.cli demo-seed >/dev/null)
     say "演示账号：学生 2500000001；教师在登录页选“教师”，账号 demo-teacher。密码都是 .env 里的 DEV_LOGIN_PASSWORD"
-    start
+    bg_start
     ;;
   update)
     say "拉最新代码"
     git pull --ff-only
     setup_all
-    start
+    bg_stop
+    bg_start
     ;;
   deps)
-    command -v apt-get >/dev/null 2>&1 || die "这个命令只支持 Ubuntu / Debian，别的系统请自己装 Python 3.11+、gcc、Node 20+"
+    command -v apt-get >/dev/null 2>&1 || die "这个命令只支持 Ubuntu / Debian，别的系统请自己装 Python 3.11+ 和 gcc"
     sudo apt-get update
-    sudo apt-get install -y git curl gcc python3 python3-venv python3-pip
-    if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
-      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-      sudo apt-get install -y nodejs
-    fi
+    sudo apt-get install -y git gcc python3 python3-venv python3-pip
     PY="$(find_python)"
     say "好了，接着运行 ./run.sh"
     ;;
   service)
     setup_all
-    unit=/etc/systemd/system/agent-c.service
-    sudo tee "$unit" >/dev/null <<EOF
-[Unit]
-Description=程序设计智能体（网页和 XDOJ 同步）
-After=network-online.target
-
-[Service]
-User=$(id -un)
-WorkingDirectory=$ROOT
-Environment=PORT=$PORT HOST=$HOST
-ExecStart=$ROOT/run.sh start
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now agent-c
-    say "已经装成系统服务，开机会自己启动。看状态：systemctl status agent-c；看日志：journalctl -u agent-c -f"
+    bg_stop >/dev/null
+    install_service
     ;;
   *)
-    sed -n '2,12p' "$0"
+    sed -n '2,16p' "$0"
     ;;
 esac

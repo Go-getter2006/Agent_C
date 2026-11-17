@@ -5,6 +5,5 @@ __pycache__/
 .pytest_cache/
 backend/.venv/
 node_modules/
-frontend/dist/
 *.sqlite3
 *.log
