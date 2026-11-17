@@ -296,18 +296,21 @@ class Daemon:
         with db.session_scope() as s:
             store.set_state(s, ctx.server_id, "last_meta_date", ctx.now().astimezone(db.BEIJING).date().isoformat())
 
+    def _meta_due(self, ctx: SyncContext) -> bool:
+        """名单和作业今天同步过没有。名单关系到学生能不能登录，所以排在一切之前（启动后第一件事）。"""
+        local = ctx.now().astimezone(db.BEIJING)
+        with db.session_scope() as s:
+            last = store.get_state(s, ctx.server_id, "last_meta_date")
+        return last != local.date().isoformat() and (not last or local.hour >= config.SYNC["meta_hour"])
+
     def _periodic(self, ctx: SyncContext) -> bool:
         now = ctx.now()
         with db.session_scope() as s:
             last_recheck = store.get_time(s, ctx.server_id, "last_recheck_at")
-            last_meta_date = store.get_state(s, ctx.server_id, "last_meta_date")
         if last_recheck is None or now - last_recheck >= dt.timedelta(seconds=config.SYNC["recheck_interval_seconds"]):
             sync_submissions.enqueue_recheck(ctx)
             return True
         local = now.astimezone(db.BEIJING)
-        if last_meta_date != local.date().isoformat() and (not last_meta_date or local.hour >= config.SYNC["meta_hour"]):
-            self._run_meta(ctx)
-            return True
         if self._nightly is not None and ctx is self.contexts[0]:
             with db.session_scope() as s:
                 done = store.get_state(s, 0, "last_nightly_date")
@@ -326,6 +329,10 @@ class Daemon:
         """做一件事，返回做了什么；没事可做返回 None。"""
         if self._handle_triggers():
             return "trigger"
+        for ctx in self.contexts:  # 先同步名单：学生要在名单里才能登录
+            if self._meta_due(ctx):
+                self._run_meta(ctx)
+                return "meta"
         stages: list[tuple[str, Callable[[SyncContext], bool]]] = [
             ("p0", lambda c: self._run_task(c, ("detail", "pending_judge"), 0)),
             ("poll", lambda c: self._poll_due(c) and (self._poll(c) or True)),
