@@ -17,7 +17,7 @@ from .. import accounts, db
 from .. import models as m
 from . import endpoints as ep
 from .store import SyncContext, enqueue, get_state, get_time, set_state, set_time
-from .util import detect_encoding, extract_problem_text, json_hash, sha256
+from .util import detect_encoding, extract_problem_text, json_hash, sha256, to_int
 
 log = logging.getLogger("xdoj.meta")
 
@@ -50,6 +50,9 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
     alt = {c.alt_id: c.class_id for c in classes if c.alt_id is not None}
     with db.session_scope() as s:
         set_state(s, ctx.server_id, "class_alt_ids", json.dumps({str(k): v for k, v in alt.items()}))
+        # 原始的 classId（可能是文本或带前导零）→ 本地班级号：作业里的“布置给哪些班”可能写的是它
+        codes = {c.roster_filter_id: c.class_id for c in classes if c.roster_filter_id}
+        set_state(s, ctx.server_id, "class_codes", json.dumps(codes, ensure_ascii=False))
 
     seen: dict[str, int] = {}
     for c in classes:
@@ -57,7 +60,7 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
         students = ep.list_students(ctx.client, c.class_id, c.alt_id, roster_filter_id=c.roster_filter_id)
         if not students:
             log.warning("班级 %s（%s）的名单是空的：按 class_id=%s%s 都没取到学生。请运行 python -m app.cli doctor 看一下",
-                        c.class_id, c.class_name, c.class_id, f" 和 {c.alt_id}" if c.alt_id else "")
+                        c.class_id, c.class_name, c.roster_filter_id or c.class_id, f" 和 {c.alt_id}" if c.alt_id else "")
         with db.session_scope() as s:
             for st in students:
                 seen[st.user_id] = c.class_id
@@ -112,6 +115,23 @@ def sync_contests(ctx: SyncContext) -> None:
     contests = ep.list_contests(ctx.client)
     with db.session_scope() as s:
         alt = {int(k): v for k, v in json.loads(get_state(s, ctx.server_id, "class_alt_ids") or "{}").items()}
+        codes = json.loads(get_state(s, ctx.server_id, "class_codes") or "{}")
+        known = set(s.scalars(select(m.XClass.class_id).where(m.XClass.server_id == ctx.server_id)).all())
+
+    def local_class(cands: list[str]) -> int | None:
+        """作业里写的班级 → 本地班级号：先认原始 classId，再认另一种数字编号，最后认本地班级号本身。"""
+        for v in cands:
+            if v in codes:
+                return codes[v]
+        for v in cands:
+            n = to_int(v)
+            if n is not None and n in alt:
+                return alt[n]
+        for v in cands:
+            n = to_int(v)
+            if n is not None and n in known:
+                return n
+        return to_int(cands[0]) if cands else None
     for c in contests:
         problem_ids = c.problem_ids if c.problem_ids is not None else ep.contest_problem_ids(ctx.client, c.contest_id)
         with db.session_scope() as s:
@@ -123,7 +143,8 @@ def sync_contests(ctx: SyncContext) -> None:
             row.raw_json, row.fetched_at = c.raw, ctx.now()
             s.execute(delete(m.ContestClass).where(
                 m.ContestClass.server_id == ctx.server_id, m.ContestClass.contest_id == c.contest_id))
-            for cid in dict.fromkeys(alt.get(x, x) for x in c.class_ids):
+            refs = c.class_refs or [[str(x)] for x in c.class_ids]
+            for cid in dict.fromkeys(x for x in (local_class(r) for r in refs) if x is not None):
                 s.add(m.ContestClass(server_id=ctx.server_id, contest_id=c.contest_id, class_id=cid))
             s.execute(delete(m.ContestProblem).where(
                 m.ContestProblem.server_id == ctx.server_id, m.ContestProblem.contest_id == c.contest_id))
