@@ -15,7 +15,7 @@ from sqlalchemy import delete, select
 from .. import accounts, db
 from .. import models as m
 from . import endpoints as ep
-from .store import SyncContext, enqueue, get_time, set_time
+from .store import SyncContext, enqueue, get_state, get_time, set_state, set_time
 from .util import detect_encoding, extract_problem_text, json_hash, sha256
 
 log = logging.getLogger("xdoj.meta")
@@ -127,29 +127,39 @@ def _assigned(ctx: SyncContext) -> set[int]:
             m.ContestProblem.server_id == ctx.server_id)).all())
 
 
-def sync_problems(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> list[int]:
-    """同步题目、标签、测试点和题面。返回新题或有改动的题号（已入队重新标注）。
+BANK_DATE = "last_bank_date"
 
-    题库有几百道题，每道题的测试点文件要一个一个下载，全部在这一步做完要一个小时左右，老师第一次登录后
-    要等很久。所以这里只下载作业里用到的题；题库里其他的题排进低优先级的队列（problem_assets），
-    主循环空下来时慢慢下载。inline_all=True 时全部在这一步做完（命令行用）。
+
+def _today(ctx: SyncContext) -> str:
+    return ctx.now().astimezone(db.BEIJING).date().isoformat()
+
+
+def bank_due(ctx: SyncContext) -> bool:
+    """题库今天在这台服务器上同步过没有。所有老师共用一个题库，所以按服务器记，不按老师记。"""
+    with db.session_scope() as s:
+        return get_state(s, ctx.server_id, BANK_DATE) != _today(ctx)
+
+
+def sync_problems(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> list[int]:
+    """同步题库：题目信息、标签；需要的话再下载测试点和题面。返回当场下载后有变化的题号。
+
+    这台服务器上的老师共用一个题库，所以题库按服务器同步，一天一次，不管有几个老师、谁先登录。
+    这一步只拉题目列表（每页 100 道，几个请求）并比对题目信息，很快；要下载测试点和题面的题排进队列，
+    主循环接着做：作业里用到的题优先（P1），题库里其他的题慢慢来（P3）。已经下载过、没有变化的题不再下载。
+    inline_all=True 时当场下载（命令行用）。
     """
     start_count = ctx.client.request_count
-    _activity("同步题库列表")
+    _activity("同步题库列表（所有老师共用，一台服务器一天一次）")
     problems = ep.list_problems(ctx.client)
     assigned = _assigned(ctx)
-    n_assigned = sum(1 for p in problems if p.problem_id in assigned)
-    done_assigned, queued = 0, 0
     changed: list[int] = []
+    queued = {"new": 0, "check": 0}
     with db.session_scope() as s:
         last_full = get_time(s, ctx.server_id, "last_full_asset_check_at")
     full_check = last_full is None or ctx.now() - last_full >= dt.timedelta(days=FULL_ASSET_CHECK_DAYS)
+    truncated = False
 
     for p in problems:
-        if max_requests is not None and ctx.client.request_count - start_count >= max_requests:
-            log.info("达到本次请求上限，剩下的题下次接着同步")
-            full_check = False
-            break
         meta_hash = json_hash(p.raw)
         with db.session_scope() as s:
             row = s.get(m.Problem, (ctx.server_id, p.problem_id))
@@ -169,22 +179,53 @@ def sync_problems(ctx: SyncContext, max_requests: int | None = None, inline_all:
             for tag in dict.fromkeys(p.tags):
                 s.add(m.ProblemTag(server_id=ctx.server_id, problem_id=p.problem_id, tag=tag[:64]))
             need_assets = is_new or meta_changed or not row.assets_fetched
-        if inline_all or p.problem_id in assigned:
-            done_assigned += 1
-            _activity(f"下载作业里题目的测试点和题面（第 {done_assigned} / {n_assigned} 题）")
-            if sync_problem_assets(ctx, p.problem_id, force_files=need_assets or full_check, is_new=is_new):
-                changed.append(p.problem_id)
-        elif need_assets or full_check:
-            with db.session_scope() as s:
-                enqueue(s, ctx.server_id, "problem_assets", p.problem_id, 3, when=ctx.now())
-            queued += 1
         ctx.bump("problems")
-    if full_check:
+        if inline_all:
+            if max_requests is not None and ctx.client.request_count - start_count >= max_requests:
+                if not truncated:
+                    log.info("达到本次请求上限，剩下的题排进队列")
+                truncated = True
+            else:
+                _activity(f"下载题目的测试点和题面（题号 {p.problem_id}）")
+                if sync_problem_assets(ctx, p.problem_id, force_files=need_assets or full_check, is_new=is_new):
+                    changed.append(p.problem_id)
+                continue
         with db.session_scope() as s:
+            if need_assets or full_check:
+                # 没下载过、题目信息变了，或者到了每周全部核对一遍的日子：下载测试点文件
+                prio = 1 if (p.problem_id in assigned and need_assets) else 3
+                enqueue(s, ctx.server_id, "problem_assets", p.problem_id, prio, when=ctx.now())
+                queued["new"] += 1
+            elif p.problem_id in assigned:
+                # 作业里的题每天轻量核对一次：测试点列表和题面的哈希，变了才重新下载
+                enqueue(s, ctx.server_id, "problem_check", p.problem_id, 3, when=ctx.now())
+                queued["check"] += 1
+    with db.session_scope() as s:
+        if full_check and not truncated:
             set_time(s, ctx.server_id, "last_full_asset_check_at", ctx.now())
+        set_state(s, ctx.server_id, BANK_DATE, _today(ctx))
     ctx.bump("problems_changed", len(changed))
-    log.info("题库：%d 题；作业里的 %d 题已下载测试点和题面，其余 %d 题排队慢慢下载", len(problems), n_assigned, queued)
+    log.info("题库：%d 题；排队下载 %d 题，排队核对 %d 题（这台服务器今天不再重复）",
+             len(problems), queued["new"], queued["check"])
     return changed
+
+
+def queue_assigned(ctx: SyncContext) -> int:
+    """这位老师作业里还没下载过的题，排到前面（别的老师用过的同一道题已经下载过，不再下载）。"""
+    n = 0
+    with db.session_scope() as s:
+        rows = s.execute(select(m.ContestProblem.problem_id, m.Problem.assets_fetched)
+                         .join(m.Problem, (m.Problem.server_id == m.ContestProblem.server_id)
+                               & (m.Problem.problem_id == m.ContestProblem.problem_id), isouter=True)
+                         .where(m.ContestProblem.server_id == ctx.server_id)).all()
+        missing_rows = any(fetched is None for _pid, fetched in rows)
+        for pid, fetched in rows:
+            if fetched is False:
+                enqueue(s, ctx.server_id, "problem_assets", pid, 1, when=ctx.now())
+                n += 1
+    if missing_rows:  # 作业里有今天题库列表之后才加进题库的题：再拉一次列表（几个请求）
+        sync_problems(ctx)
+    return n
 
 
 def sync_problem_assets(ctx: SyncContext, problem_id: int, force_files: bool = True, is_new: bool = False,
@@ -265,9 +306,16 @@ def _sync_problem_text(ctx: SyncContext, problem_id: int) -> bool:
 
 
 def sync_metadata(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> dict:
+    """一位老师的元数据：他名下的班级、名单、作业（几十个请求，一两分钟）。
+
+    题库是这台服务器上所有老师共用的，一台服务器一天只同步一次（谁先触发谁做），老师登录不会再重复下载。
+    """
     sync_classes_and_roster(ctx)
     sync_contests(ctx)
-    sync_problems(ctx, max_requests=max_requests, inline_all=inline_all)
+    if inline_all or bank_due(ctx):
+        sync_problems(ctx, max_requests=max_requests, inline_all=inline_all)
+    else:
+        queue_assigned(ctx)
     with db.session_scope() as s:
         set_time(s, ctx.server_id, "last_meta_at", ctx.now())
     return dict(ctx.stats)
