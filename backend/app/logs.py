@@ -232,10 +232,13 @@ def allowed_students(s: Session, user: m.User) -> set[str] | None:
     """申请人能要哪些学生的日志。None 表示不限（管理员）。现在不在班上、以前在过的也算。"""
     if user.role == "admin":
         return None
-    if user.data_source_id is None:
+    from .accounts import teacher_source_ids
+
+    ids = teacher_source_ids(s, user)
+    if not ids:
         return set()
     classes = s.execute(select(m.ClassSource.server_id, m.ClassSource.class_id).where(
-        m.ClassSource.data_source_id == user.data_source_id)).all()
+        m.ClassSource.data_source_id.in_(ids))).all()
     out: set[str] = set()
     for server_id, class_id in classes:
         out |= set(s.scalars(select(m.Enrollment.user_id).where(

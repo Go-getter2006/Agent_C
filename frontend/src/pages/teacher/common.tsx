@@ -89,12 +89,15 @@ export const useClasses = () => useContext(ClassesContext);
 export function ClassPicker() {
   const { classes, current, pick } = useClasses();
   if (classes.length === 0) return null;
+  const multi = new Set(classes.map((c) => c.server)).size > 1; // 两门课的班级都在时，前面写上课程
   return (
     <label className="class-pick">
       <span className="sr-only">班级</span>
       <Users size={16} aria-hidden="true" />
       <select className="field" value={current?.key ?? ""} onChange={(e) => pick(e.target.value)}>
-        {classes.map((c) => <option key={c.key} value={c.key}>{c.name}（{c.students} 人）</option>)}
+        {classes.map((c) => (
+          <option key={c.key} value={c.key}>{multi ? `${c.server} · ` : ""}{c.name}（{c.students} 人）</option>
+        ))}
       </select>
     </label>
   );

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, crypto, db, graphmodel, logs, mastery, review
+from .. import accounts, catalog, config, crypto, db, graphmodel, logs, mastery, review
 from .. import models as m
 from ..labeling.labeler import current_problem_label
 from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
@@ -42,24 +42,20 @@ def servers(s: Session = Depends(get_session)) -> dict:
     return {"servers": [{"code": r.code, "name": r.name} for r in rows]}
 
 
-@router.post("/login")
-def login(body: TeacherLogin, request: Request, response: Response, s: Session = Depends(get_session)) -> dict:
-    """教师用自己的 XDOJ 账号登录：系统去 XDOJ 试登，成功后建立账号、登记数据源。"""
+def _verify_teacher(s: Session, body: TeacherLogin, key: str) -> tuple[m.Server, str, str | None]:
+    """去 XDOJ 试登这个教师账号。返回 (服务器, XDOJ 账号, 姓名)。不是教师账号、密码错、连不上都抛出。"""
     user_id = body.userId.strip()
-    key = f"t:{request.client.host if request.client else ''}:{user_id}"
-    throttle(key)
     server = s.scalar(select(m.Server).where(m.Server.code == body.server, m.Server.code != "demo"))
     if server is None or not server.base_url:
         raise HTTPException(status_code=400, detail="没有这台 XDOJ 服务器，请联系管理员先登记。")
     client = XdojClient(server.base_url, user_id, body.password, limiter=limiter_for(server.base_url),
                         transport=_test_transport, max_retries=1)
-    name = None
     try:
         client.login()
         if client.user_type is not None and str(client.user_type) != "1":
             record_failure(key)
             raise HTTPException(status_code=403, detail="这不是 XDOJ 的教师账号。学生请在登录页选“学生”。")
-        name = client.teacher_name()
+        return server, user_id, client.teacher_name()
     except SessionError:
         record_failure(key)
         raise HTTPException(status_code=401, detail="XDOJ 账号或密码不对。")
@@ -67,27 +63,92 @@ def login(body: TeacherLogin, request: Request, response: Response, s: Session =
         raise HTTPException(status_code=502, detail="XDOJ 暂时连不上，过一会儿再试。")
     finally:
         client.close()
+
+
+def _save_source(s: Session, server: m.Server, user_id: str, password: str) -> m.DataSource:
     source = s.scalar(select(m.DataSource).where(
         m.DataSource.server_id == server.id, m.DataSource.teacher_user_id == user_id))
     if source is None:
         source = m.DataSource(server_id=server.id, teacher_user_id=user_id)
         s.add(source)
     if not source.from_env:
-        source.password_enc = crypto.encrypt_secret(body.password)  # 后台同步要长期使用，加密保存
+        source.password_enc = crypto.encrypt_secret(password)  # 后台同步要长期使用，加密保存
     source.enabled, source.last_login_at = True, db.now()
     s.flush()
-    login_name = f"{server.code}:{user_id}"
-    user = s.scalar(select(m.User).where(m.User.login_name == login_name))
-    if user is None:
-        user = m.User(role="teacher", login_name=login_name, display_name=name or user_id, data_source_id=source.id)
-        s.add(user)
-    elif name:
-        user.display_name = name
-    user.data_source_id, user.status, user.last_login_at = source.id, "active", db.now()
+    return source
+
+
+def _link(s: Session, user: m.User, source: m.DataSource) -> None:
+    if s.get(m.TeacherSource, (user.id, source.id)) is None:
+        s.add(m.TeacherSource(user_id=user.id, data_source_id=source.id))
+    if user.data_source_id is None:
+        user.data_source_id = source.id
     s.flush()
+
+
+@router.post("/login")
+def login(body: TeacherLogin, request: Request, response: Response, s: Session = Depends(get_session)) -> dict:
+    """教师用某一门课的 XDOJ 账号登录：系统去那台 XDOJ 试登，成功后进入他在本系统的账号。
+
+    这个 XDOJ 账号已经关联给某位老师的，就进那位老师的账号；两门课都教的老师，用哪门课的账号登录都一样。
+    """
+    key = f"t:{request.client.host if request.client else ''}:{body.userId.strip()}"
+    throttle(key)
+    server, user_id, name = _verify_teacher(s, body, key)
+    source = _save_source(s, server, user_id, body.password)
+    user = accounts.owner_of_source(s, source.id)
+    if user is None:
+        login_name = f"{server.code}:{user_id}"
+        user = s.scalar(select(m.User).where(m.User.login_name == login_name))
+        if user is None:
+            user = m.User(role="teacher", login_name=login_name, display_name=name or user_id, data_source_id=source.id)
+            s.add(user)
+            s.flush()
+    if name:
+        user.display_name = name
+    user.status, user.last_login_at = "active", db.now()
+    _link(s, user, source)
     sync_api.request_meta_sync(s, server.id)  # 让主循环马上同步他名下的班级和名单
     set_login_cookie(response, user)
     return {"role": user.role, "name": user.display_name}
+
+
+@router.post("/sources/link")
+def link_source(body: TeacherLogin, request: Request, user: m.User = Depends(teacher),
+                s: Session = Depends(get_session)) -> dict:
+    """关联另一门课的 XDOJ 教师账号（比如数据结构那台，账号密码可能和 C 语言的不同）。"""
+    key = f"t:{request.client.host if request.client else ''}:{body.userId.strip()}"
+    throttle(key)
+    server, user_id, _name = _verify_teacher(s, body, key)
+    existing = s.scalar(select(m.DataSource).where(
+        m.DataSource.server_id == server.id, m.DataSource.teacher_user_id == user_id))
+    if existing is not None:
+        owner = accounts.owner_of_source(s, existing.id)
+        if owner is not None and owner.id != user.id:
+            raise HTTPException(status_code=409, detail="这个 XDOJ 账号已经关联在别的老师名下了。")
+    source = _save_source(s, server, user_id, body.password)
+    _link(s, user, source)
+    sync_api.request_meta_sync(s, server.id)
+    return {"ok": True, "sourceId": source.id}
+
+
+@router.post("/sources/{source_id}/unlink")
+def unlink_source(source_id: int, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """取消关联：不再同步这个 XDOJ 账号，删掉保存的密码。至少要留一个。"""
+    ids = accounts.teacher_source_ids(s, user)
+    if source_id not in ids:
+        raise HTTPException(status_code=404, detail="没有这个数据源。")
+    if len(ids) <= 1:
+        raise HTTPException(status_code=409, detail="至少要保留一个 XDOJ 账号。")
+    link = s.get(m.TeacherSource, (user.id, source_id))
+    if link is not None:
+        s.delete(link)
+    source = s.get(m.DataSource, source_id)
+    if source is not None and not source.from_env:
+        source.enabled, source.password_enc = False, None
+    if user.data_source_id == source_id:
+        user.data_source_id = next(i for i in ids if i != source_id)
+    return {"ok": True}
 
 
 # ------------------------------------------------------------ 权限
@@ -98,14 +159,15 @@ def class_key(server_id: int, class_id: int) -> str:
 def my_classes(s: Session, user: m.User) -> list[m.XClass]:
     if user.role == "admin":
         return list(s.scalars(select(m.XClass).order_by(m.XClass.server_id, m.XClass.class_id)).all())
-    if user.data_source_id is None:
+    ids = accounts.teacher_source_ids(s, user)
+    if not ids:
         return []
     rows = s.scalars(
         select(m.XClass).join(m.ClassSource, (m.ClassSource.server_id == m.XClass.server_id)
                               & (m.ClassSource.class_id == m.XClass.class_id))
-        .where(m.ClassSource.data_source_id == user.data_source_id)
+        .where(m.ClassSource.data_source_id.in_(ids))
         .order_by(m.XClass.server_id, m.XClass.class_id)).all()
-    return list(rows)
+    return list(dict.fromkeys(rows))
 
 
 def _class(s: Session, user: m.User, key: str) -> m.XClass:
@@ -572,7 +634,7 @@ def _source_view(s: Session, source: m.DataSource) -> dict:
 def sources_list(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     q = select(m.DataSource).order_by(m.DataSource.id)
     if user.role != "admin":
-        q = q.where(m.DataSource.id == (user.data_source_id or -1))
+        q = q.where(m.DataSource.id.in_(accounts.teacher_source_ids(s, user) or [-1]))
     rows = [_source_view(s, src) for src in s.scalars(q).all()]
     candidates = s.scalars(select(m.LabelCandidate).order_by(m.LabelCandidate.id.desc()).limit(30)).all() \
         if user.role == "admin" else []
@@ -591,7 +653,7 @@ def sources_list(user: m.User = Depends(teacher), s: Session = Depends(get_sessi
 def source_sync(source_id: int, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     """立即同步名单和作业：只是通知主循环，这里不直接向 XDOJ 发请求。"""
     source = s.get(m.DataSource, source_id)
-    if source is None or (user.role != "admin" and source.id != user.data_source_id):
+    if source is None or (user.role != "admin" and source.id not in accounts.teacher_source_ids(s, user)):
         raise HTTPException(status_code=404, detail="没有这个数据源。")
     if not source.enabled:
         raise HTTPException(status_code=409, detail="这个数据源没有启用（演示数据不连 XDOJ）。")
