@@ -13,9 +13,11 @@ from . import models as m
 cli = typer.Typer(add_completion=False, help="程序设计智能体：后台命令")
 
 
-def _logging() -> None:
+def _logging(quiet_requests: bool = False) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # httpx 的日志会带完整地址和参数，不要
+    if quiet_requests:  # 网页进程里：每个 XDOJ 请求一行太吵，请求记录在 sync_request_log 表里
+        logging.getLogger("xdoj.client").setLevel(logging.WARNING)
 
 
 def _contexts():
@@ -50,9 +52,10 @@ def demo_seed() -> None:
 
 @cli.command("serve")
 def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
-    """启动网页和接口。"""
+    """启动网页和接口（默认后台同步也在这个进程里跑，日志里能看到“名单：…”“作业：…”这样的进度）。"""
     import uvicorn
 
+    _logging(quiet_requests=True)
     uvicorn.run("app.web.app:app", host=host, port=port, log_level="info")
 
 
@@ -95,7 +98,7 @@ def sync_meta_cmd(max_requests: int = typer.Option(None, help="这次最多发�
     from .xdoj import sync_meta
 
     for ctx in _contexts():
-        typer.echo(json.dumps(sync_meta.sync_metadata(ctx, max_requests=max_requests), ensure_ascii=False))
+        typer.echo(json.dumps(sync_meta.sync_metadata(ctx, max_requests=max_requests, inline_all=True), ensure_ascii=False))
 
 
 @cli.command("backfill")

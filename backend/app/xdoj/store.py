@@ -38,6 +38,9 @@ def request_logger(server_id: int) -> Callable[[RequestRecord], None]:
             s.add(m.RequestLog(
                 server_id=server_id, ts=dt.datetime.fromtimestamp(rec.started_at, db.UTC),
                 endpoint=rec.endpoint, status_code=rec.status_code, duration_ms=rec.duration_ms, ok=rec.ok))
+        from .daemon import touch  # 一步做很久时也能证明主循环还活着
+
+        touch()
 
     return write
 

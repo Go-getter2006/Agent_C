@@ -596,9 +596,9 @@ def _daemon_status(s: Session) -> dict:
     """后台同步还在不在跑：看主循环的心跳（每 20 秒一次）。"""
     from ..xdoj.daemon import last_beat
 
-    beat = last_beat(s)
+    beat, activity = last_beat(s)
     running = beat is not None and (db.now() - beat).total_seconds() < 90
-    return {"running": running, "lastBeat": beat.isoformat() if beat else None}
+    return {"running": running, "lastBeat": beat.isoformat() if beat else None, "activity": activity}
 
 
 # ------------------------------------------------------------ 知识图谱：C 语言和数据结构两张图，加跨课程的联系

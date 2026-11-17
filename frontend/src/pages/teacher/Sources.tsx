@@ -15,7 +15,7 @@ interface SourceRow {
 interface SourcesData {
   sources: SourceRow[]; interval: number;
   known: { code: string; name: string; course: string; baseUrl: string | null; basis: string }[];
-  daemon: { running: boolean; lastBeat: string | null };
+  daemon: { running: boolean; lastBeat: string | null; activity: string };
   candidates: { kind: string; name: string; description: string; nearest: string[]; time: string }[];
   libraries: { errors: number; skills: number; knowledge: number; errorVersion: string; taxonomyVersion: string };
 }
@@ -50,10 +50,16 @@ export default function Sources() {
         <div className="problem" role="alert">
           <span>
             <b>后台同步没有在运行</b>
-            {d.daemon.lastBeat ? `（上次在 ${fullTime(d.daemon.lastBeat)}）` : ""}，所以班级、名单、提交都不会更新。
+            {d.daemon.lastBeat ? `（上次在 ${fullTime(d.daemon.lastBeat)}，当时在${d.daemon.activity || "处理"}）` : ""}，所以班级、名单、提交都不会更新。
             用 <code>./run.sh</code> 或 <code>python -m app.cli serve</code> 启动时会自动带上它；
             如果设了 <code>SYNC_IN_WEB=0</code>，要另外运行 <code>python -m app.cli daemon</code>。日志里搜“后台同步”能看到出错原因。
           </span>
+        </div>
+      )}
+      {d.daemon.running && (
+        <div className="trial trial-info">
+          <RefreshCw size={18} aria-hidden="true" />
+          <p><b>后台同步正在运行</b>：{d.daemon.activity || "处理中"}。第一次登录后先同步名单和作业里的题，一般几分钟；以前的提交会在后面慢慢补齐（几千条要几个小时），这一页每 30 秒刷新一次。</p>
         </div>
       )}
       <div className="trial trial-info">

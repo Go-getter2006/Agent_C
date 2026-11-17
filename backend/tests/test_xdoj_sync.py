@@ -336,7 +336,12 @@ def test_changed_problem_detected_and_archived(ctx, fake, clock):
     fake.add_testcase(408, 1501, "1\n", "1\n")
     clock.advance(8 * 86400)  # 过了一周：测试点文件全部重新核对
     changed = sync_meta.sync_problems(ctx)
-    assert sorted(changed) == [406, 407, 408]
+    # 作业里的题当场下载；新题 408 没布置进作业，排进低优先级的队列，主循环空下来再下载
+    assert sorted(changed) == [406, 407]
+    with db.session_scope() as s:
+        assert s.scalar(select(m.FetchTask).where(m.FetchTask.kind == "problem_assets",
+                                                  m.FetchTask.target_id == 408)).priority == 3
+    assert sync_meta.sync_problem_assets(ctx, 408, priority=3) is True
     with db.session_scope() as s:
         kinds = {(a.kind, a.target_id) for a in s.scalars(select(m.Archive)).all()}
         assert ("problem_text", 406) in kinds and ("testcase", 1402) in kinds
@@ -366,3 +371,24 @@ def test_two_servers_do_not_collide(database, clock):
         assert s.get(m.Submission, (1, 537101)).user_id == "2500000001"
         assert s.get(m.Submission, (2, 537101)).user_id == "2500000003"
         assert store.get_state(s, 1, "max_submission_id") == store.get_state(s, 2, "max_submission_id") == "537104"
+
+
+def test_bank_problems_outside_homework_are_downloaded_later(ctx, fake):
+    """老师第一次登录：作业里的题马上下载；题库里其他的题排队，主循环空下来再下载，同时心跳记下在做什么。"""
+    from app.xdoj import daemon as daemon_mod
+
+    fake.problems.append({"id": 499, "title": "题库里的题", "categoryName": "循环", "tags": [], "difficulty": "易",
+                          "timeLimit": 1000, "memoryLimit": 65536})
+    fake.problem_files[499] = (b"bank", "text/plain")
+    fake.add_testcase(499, 1901, "1\n", "1\n")
+    sync_meta.sync_metadata(ctx)
+    with db.session_scope() as s:
+        assert not s.get(m.Problem, (1, 499)).assets_fetched
+        assert s.get(m.Problem, (1, 406)).assets_fetched
+    Daemon([ctx]).drain()
+    with db.session_scope() as s:
+        assert s.get(m.Problem, (1, 499)).assets_fetched
+        assert s.get(m.Testcase, (1, 1901)).input_bytes is not None
+        assert daemon_mod.claim("test-owner")
+        _when, activity = daemon_mod.last_beat(s)
+    assert activity  # 心跳里带着“正在做什么”
