@@ -195,3 +195,106 @@ def test_prediction_log_is_idempotent(demo):
         rows = s.scalars(select(m.PredictionLog).where(m.PredictionLog.user_id == UID)).all()
         assert len(rows) == 12 and sum(r.outcome for r in rows) == 3   # 12 道题里 3 道一次通过
         assert all(0 <= r.p_simple <= 1 and 0 <= r.p_graph <= 1 for r in rows)
+
+
+# ------------------------------------------------------------ 概况、知识图谱
+def test_overview_kpis_trend_attention(client, demo):
+    login(client, "demo-teacher")
+    ov = client.get(f"/api/teacher/classes/c{demo['server_id']}-31/overview").json()
+    k = ov["kpis"]
+    assert k["students"] == 12 and 0 <= k["active"] <= 12 and "firstTryDelta" in k and "review" in k
+    assert len(ov["trend"]) == 8 and ov["trend"][-1]["label"] == "本周"
+    assert sum(w["submissions"] for w in ov["trend"]) > 100
+    names = {a["name"]: a["reasons"] for a in ov["attention"]}
+    assert all(r for r in names.values())
+
+
+def test_knowledge_map_two_courses_and_cross_links(client, demo):
+    login(client, "demo-teacher")
+    key = f"c{demo['server_id']}-31"
+    g = client.get(f"/api/teacher/classes/{key}/knowledge-map").json()
+    courses = {n["course"] for n in g["nodes"]}
+    assert courses == {"C", "D"} and len(g["nodes"]) == 95
+    cross = [e for e in g["edges"] if e["cross"]]
+    assert cross and all(e["from"].startswith("C") and e["to"].startswith("D") for e in cross)
+    node = {n["code"]: n for n in g["nodes"]}
+    assert node["C06.03"]["covered"] and sum(node["C06.03"]["dist"]) == 12 and node["C06.03"]["mean"] is not None
+    assert not node["D02.02"]["covered"] and node["D02.02"]["mean"] is None
+    assert node["D02.01"]["readiness"] is not None   # 数据结构：由 C 语言推出来的准备度
+    one = client.get(f"/api/teacher/classes/{key}/knowledge-map", params={"student": UID}).json()
+    me = {n["code"]: n for n in one["nodes"]}
+    assert me["C06.03"]["student"]["level"] in ("基本掌握", "待加强")
+    assert client.get(f"/api/teacher/classes/{key}/knowledge-map", params={"student": "2500000101"}).status_code == 404
+    d = client.get(f"/api/teacher/classes/{key}/knowledge-map/C06.03").json()
+    assert d["name"] == "最值、求和、统计" and {p["title"] for p in d["problems"]} >= {"成绩最高分", "最大差值"}
+    assert any(x["cross"] for x in client.get(f"/api/teacher/classes/{key}/knowledge-map/C10.01").json()["next"])
+
+
+# ------------------------------------------------------------ 按需申请学生日志
+def test_log_request_scoped_audited_and_minimal(client, demo):
+    from app.chat import workflow
+
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        workflow.handle(s, UID, (sid, 406), "我的手机号是 13800000000，帮我看看")   # 对话原文默认不导出
+    login(client, "demo-teacher")
+    meta = client.get("/api/teacher/logs").json()
+    assert {k["code"] for k in meta["kinds"]} >= {"submission", "ask", "reply", "quiz", "review", "login", "view"}
+    body = {"ids": f"{UID}, 2500000002 2500000101 9999999999", "dateFrom": "2026-06-01", "dateTo": "2027-05-31",
+            "kinds": ["submission", "ask", "reply", "quiz"], "format": "csv", "purpose": "看看哪些同学卡在最值上"}
+    r = client.post("/api/teacher/logs", json=body)
+    assert r.status_code == 200, r.text
+    req = r.json()["request"]
+    assert req["granted"] == 3 and req["denied"] == ["9999999999"]   # 02 班也在他名下；不存在的学号不给
+    assert req["rows"] > 20 and req["status"] == "ready" and r.json()["preview"]
+    dl = client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": req["token"]})
+    assert dl.status_code == 200 and "attachment" in dl.headers["content-disposition"]
+    text = dl.content.decode("utf-8-sig")
+    header = text.splitlines()[0]
+    assert header.startswith("学号,姓名,时间,类型,交互") and "原文" not in header
+    assert "13800000000" not in text and "林晓" in text and "周航" in text
+    assert "没通过第" in text and "在 XDOJ 提交" in text and "智能体回复" in text
+    with db.session_scope() as s:   # 测试点数据不导出
+        for tc in s.scalars(select(m.Testcase)).all():
+            line = " ".join(tc.input_bytes.decode("utf-8").split())
+            if len(line.split()) >= 4:
+                assert line not in " ".join(text.split())
+    assert client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": "wrong"}).status_code == 404
+    # 勾选“包含对话原文”才有原文
+    with_text = client.post("/api/teacher/logs", json={**body, "includeText": True, "format": "json"}).json()["request"]
+    js = client.get(f"/api/teacher/logs/{with_text['id']}/download", params={"token": with_text["token"]}).json()
+    assert any("13800000000" in (row.get("text") or "") for row in js["rows"])
+    assert js["request"]["purpose"] == "看看哪些同学卡在最值上"
+    # 作废之后不能再下载；记录还在（审计）
+    client.post(f"/api/teacher/logs/{req['id']}/revoke")
+    assert client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": req["token"]}).status_code == 410
+    listed = client.get("/api/teacher/logs").json()["requests"]
+    assert [x["status"] for x in listed][:2] == ["ready", "revoked"] and listed[1]["downloads"] == 1
+
+
+def test_other_teacher_cannot_get_logs_of_my_students(client, demo):
+    with db.session_scope() as s:
+        src = m.DataSource(server_id=demo["server_id"], teacher_user_id="someone-else", enabled=False)
+        s.add(src)
+        s.flush()
+        s.add(m.User(role="teacher", login_name="other-teacher", display_name="别的老师", data_source_id=src.id))
+    login(client, "other-teacher")
+    r = client.post("/api/teacher/logs", json={"ids": UID, "dateFrom": "2026-11-01", "dateTo": "2026-11-30",
+                                               "kinds": ["submission"], "purpose": "想看看别班"}).json()["request"]
+    assert r["granted"] == 0 and r["denied"] == [UID] and r["rows"] == 0
+
+
+def test_log_request_rules(client, demo):
+    login(client, "demo-teacher")
+    base = {"ids": UID, "dateFrom": "2026-11-01", "dateTo": "2026-11-30", "kinds": ["submission"], "purpose": "期中前看看"}
+    assert client.post("/api/teacher/logs", json={**base, "purpose": ""}).status_code == 400          # 要写用途
+    assert client.post("/api/teacher/logs", json={**base, "kinds": []}).status_code == 400
+    assert client.post("/api/teacher/logs", json={**base, "dateFrom": "2025-01-01"}).status_code == 400  # 超过 366 天
+    assert client.post("/api/teacher/logs", json={**base, "classKeys": ["c1-32"], "ids": ""}).status_code == 200
+    assert client.post("/api/teacher/logs", json={**base, "classKeys": ["c9-99"]}).status_code == 403
+    for _ in range(19):
+        client.post("/api/teacher/logs", json=base)
+    assert client.post("/api/teacher/logs", json=base).status_code == 400    # 每天最多 20 次
+    client.post("/api/auth/logout")
+    login(client, UID)
+    assert client.get("/api/teacher/logs").status_code == 403                # 学生不能申请

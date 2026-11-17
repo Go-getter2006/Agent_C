@@ -12,11 +12,11 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, crypto, db, graphmodel, mastery
+from .. import catalog, config, crypto, db, graphmodel, logs, mastery, review
 from .. import models as m
 from ..labeling.labeler import current_problem_label
-from ..taxonomy import (ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, error_name, kp_of_skill,
-                        skill_name)
+from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
+                        error_name, kp_of_skill, skill_name, skills_of_kp)
 from ..taxonomy.prereq import PREREQ_STATUS
 from ..xdoj import api as sync_api
 from ..xdoj import store
@@ -234,9 +234,84 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
     week = now - dt.timedelta(days=7)
     active = sum(1 for uid in data.ids if any(sub.submit_time and sub.submit_time >= week
                                               for subs in data.subs[uid].values() for sub in subs))
+    trend = _weekly(s, data, now)
+    this, last = trend[-1], trend[-2]
+    fps = s.scalars(select(m.CodeFingerprint).where(
+        m.CodeFingerprint.server_id == cls.server_id, m.CodeFingerprint.user_id.in_(data.ids),
+        m.CodeFingerprint.suspicious.is_(True))).all() if data.ids else []
+    stuck_week = s.scalar(select(func.count()).select_from(m.StuckPoint).where(
+        m.StuckPoint.user_id.in_(data.ids), m.StuckPoint.created_at >= week)) if data.ids else 0
+    kpis = {
+        "students": len(data.ids), "active": this["active"], "activeDelta": this["active"] - last["active"],
+        "firstTryRate": this["firstTryRate"], "firstTryDelta": (None if this["firstTryRate"] is None or last["firstTryRate"] is None
+                                                               else this["firstTryRate"] - last["firstTryRate"]),
+        "submissions": this["submissions"], "submissionsDelta": this["submissions"] - last["submissions"],
+        "stuckThisWeek": stuck_week or 0, "suspicious": len(fps), "review": review.teacher_stats(s, data.ids, now),
+    }
     return {"class": {"key": key, "name": cls.class_name, "students": len(data.ids), "activeThisWeek": active},
+            "kpis": kpis, "trend": trend, "attention": _attention(s, data, now),
             "levels": list(LEVELS), "knowledge": knowledge, "errors": errors, "overconfident": overconfident[:8],
             "homeworks": homeworks}
+
+
+def _weekly(s: Session, data: "_ClassData", now: dt.datetime, weeks: int = 8) -> list[dict]:
+    """按周：交了多少次、多少人交过、新题第一次就通过的比例、求助回合数。旧的在前。"""
+    local = now.astimezone(db.BEIJING)
+    monday = (local - dt.timedelta(days=local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    rounds = s.scalars(select(m.ChatRound.started_at).where(m.ChatRound.user_id.in_(data.ids))).all() if data.ids else []
+    out = []
+    for i in range(weeks - 1, -1, -1):
+        start, end = monday - dt.timedelta(weeks=i), monday - dt.timedelta(weeks=i - 1)
+        n = 0
+        people = set()
+        first_total = first_ok = 0
+        for uid in data.ids:
+            for subs in data.subs[uid].values():
+                inside = [x for x in subs if x.submit_time and start <= x.submit_time < end]
+                n += len(inside)
+                if inside:
+                    people.add(uid)
+                if subs and subs[0].submit_time and start <= subs[0].submit_time < end:
+                    first_total += 1
+                    first_ok += subs[0].judgement == "AC"
+        out.append({"label": "本周" if i == 0 else f"{start.month}/{start.day}", "start": start.date().isoformat(),
+                    "submissions": n, "active": len(people),
+                    "firstTryRate": round(100 * first_ok / first_total) if first_total else None,
+                    "rounds": sum(1 for t in rounds if start <= t < end)})
+    return out
+
+
+def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
+    """需要留意的学生，每人列出理由。规则是透明的，不是训练出来的预测模型。"""
+    out = []
+    week = now - dt.timedelta(days=7)
+    stubborn = {sp.user_id for sp in s.scalars(select(m.StuckPoint).where(
+        m.StuckPoint.user_id.in_(data.ids), m.StuckPoint.stubborn.is_(True))).all()} if data.ids else set()
+    copied = Counter(f.user_id for f in s.scalars(select(m.CodeFingerprint).where(
+        m.CodeFingerprint.user_id.in_(data.ids), m.CodeFingerprint.suspicious.is_(True))).all()) if data.ids else Counter()
+    for st in data.students:
+        reasons = []
+        per = data.subs[st.user_id]
+        tried = [k for k, v in per.items() if v]
+        if st.user_id in stubborn:
+            reasons.append("同一个知识点卡住三次以上")
+        weak = [kp for kp in data.kps[st.user_id].values() if kp.level == "待加强"]
+        if len(weak) >= 3:
+            reasons.append(f"{len(weak)} 个知识点待加强")
+        last = max((x.submit_time for k in tried for x in per[k] if x.submit_time), default=None)
+        if tried and last is not None and last < week:
+            reasons.append(f"{(now - last).days} 天没有交题")
+        if not tried:
+            reasons.append("还没有交过题")
+        stuck_on = [k for k in tried if len(per[k]) >= 5 and not any(x.judgement == "AC" for x in per[k])]
+        if stuck_on:
+            reasons.append(f"{len(stuck_on)} 道题交了 5 次以上还没通过")
+        if copied.get(st.user_id):
+            reasons.append(f"{copied[st.user_id]} 次通过和同学的代码雷同")
+        if reasons:
+            out.append({"userId": st.user_id, "name": st.name, "reasons": reasons})
+    out.sort(key=lambda r: -len(r["reasons"]))
+    return out[:12]
 
 
 @router.get("/classes/{key}/students")
@@ -253,6 +328,15 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
             m.ChatRound.user_id.in_(data.ids)).group_by(m.ChatRound.user_id)).all())
     else:
         rounds = {}
+    # 提交名次：每道题按第一次提交的先后排，换成百分位（越小越早）。Qu 等（2019）发现它和成绩明显相关
+    order_pct: dict = {}
+    for prob in data.problems:
+        firsts = sorted((data.subs[uid][prob][0].submit_time, uid) for uid in data.ids
+                        if data.subs[uid].get(prob) and data.subs[uid][prob][0].submit_time)
+        for rank, (_t, uid) in enumerate(firsts):
+            order_pct[(uid, prob)] = 100 * rank / max(1, len(firsts) - 1) if len(firsts) > 1 else 0
+    copied = Counter(f.user_id for f in s.scalars(select(m.CodeFingerprint).where(
+        m.CodeFingerprint.user_id.in_(data.ids), m.CodeFingerprint.suspicious.is_(True))).all()) if data.ids else Counter()
     rows = []
     for st in data.students:
         per = data.subs[st.user_id]
@@ -262,7 +346,11 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
         total = sum(len(per[k]) for k in tried)
         times = [x.submit_time for k in tried for x in per[k] if x.submit_time]
         levels = Counter(kp.level for kp in data.kps[st.user_id].values())
+        orders = [order_pct[(st.user_id, k)] for k in tried if (st.user_id, k) in order_pct]
         rows.append({
+            "orderPct": round(sum(orders) / len(orders)) if orders else None,
+            "copies": copied.get(st.user_id, 0),
+            "activeDays": len({x.submit_time.astimezone(db.BEIJING).date() for k in tried for x in per[k] if x.submit_time}),
             "userId": st.user_id, "name": st.name, "tried": len(tried), "passed": passed, "submissions": total,
             "firstTryRate": round(100 * first / len(tried)) if tried else None,
             "weak": levels.get("待加强", 0), "mastered": levels.get("已掌握", 0),
@@ -304,20 +392,40 @@ def stuck_list(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
 def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     student, cls = _student_in_my_classes(s, user, user_id)
     problem_set = set(class_problems(s, cls))
-    simple = mastery.skill_states(s, user_id)
+    simple = mastery.skill_states(s, user_id, model="v1")
+    v2 = mastery.skill_states(s, user_id, model="v2", with_predicted=True)
     post = {r.skill_code: r for r in s.scalars(select(m.GraphPosterior).where(m.GraphPosterior.user_id == user_id)).all()}
     gap = config.GRAPH["big_gap"]
     skills = []
     for code in sorted(set(simple) | {c for c, r in post.items() if r.has_evidence}):
-        st = simple.get(code)
-        g = post.get(code)
+        st, st2, g = simple.get(code), v2.get(code), post.get(code)
         row = {**_skill_view(code), "p": round(st.p, 2) if st else None, "level": st.level if st else "还没练到",
                "yes": round(st.s, 2) if st else 0, "no": round(st.f, 2) if st else 0,
-               "graph": round(g.p, 2) if g else None}
-        row["bigGap"] = bool(st and g and abs(st.p - g.p) >= gap)
+               "v2": round(st2.p, 2) if st2 else None, "v2Level": st2.level if st2 else "还没练到",
+               "v2Interval": [round(x, 2) for x in st2.interval] if st2 else None,
+               "halfLife": round(st2.half_life) if st2 and st2.half_life else None,
+               "discounted": st2.discounted if st2 else 0, "graph": round(g.p, 2) if g else None}
+        row["bigGap"] = bool(st2 and g and abs(st2.p - g.p) >= gap)
         skills.append(row)
-    kps = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "level": kp.level, "p": round(kp.p, 2)}
-           for code, kp in sorted(mastery.kp_states(s, user_id).items())]
+    kp1 = mastery.kp_states(s, user_id, model="v1")
+    kp2 = mastery.kp_states(s, user_id, model="v2", with_predicted=True)
+    kps = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "level": kp.level, "p": round(kp.p, 2),
+            "v1": round(kp1[code].p, 2) if code in kp1 else None, "v1Level": kp1[code].level if code in kp1 else None}
+           for code, kp in sorted(kp2.items()) if not kp.predicted]
+    readiness = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "p": round(kp.p, 2)}
+                 for code, kp in sorted(kp2.items()) if kp.predicted and code.startswith("D")]
+    reviews = [{**_skill_view(r.skill_code), "origin": review.ORIGIN_TEXT.get(r.origin, r.origin), "state": r.state,
+                "halfLife": round(r.half_life, 1), "retention": round(review.retention(r), 2), "reps": r.reps,
+                "lapses": r.lapses, "streak": r.streak, "due": r.due_at.isoformat()}
+               for r in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)).all()]
+    copies = []
+    for f in s.scalars(select(m.CodeFingerprint).where(m.CodeFingerprint.user_id == user_id,
+                                                       m.CodeFingerprint.suspicious.is_(True))).all():
+        other = s.get(m.Student, f.matched_user_id) if f.matched_user_id else None
+        prob = s.get(m.Problem, (f.server_id, f.problem_id))
+        copies.append({"problem": prob.title if prob else "", "problemId": f.problem_id, "submissionId": f.submission_id,
+                       "matchedName": other.name if other else "", "matchedUserId": f.matched_user_id,
+                       "share": f.share, "time": f.submit_time.isoformat() if f.submit_time else None})
 
     subs = s.scalars(select(m.Submission).where(
         m.Submission.server_id == cls.server_id, m.Submission.user_id == user_id
@@ -366,6 +474,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
             "knowledge": kps, "skills": skills, "submissions": sub_rows, "moreSubmissions": max(0, len(subs) - 80),
             "stuck": stuck, "rounds": rounds, "quizzes": quizzes,
             "rootCauses": [{"skill": _skill_view(r["skill"]), "root": _skill_view(r["root"]), "p": r["p"]} for r in roots],
+            "reviews": reviews, "copies": copies, "readiness": readiness,
             "graphUpdatedAt": max((r.updated_at for r in post.values()), default=None)}
 
 
@@ -462,3 +571,188 @@ def source_sync(source_id: int, user: m.User = Depends(teacher), s: Session = De
         raise HTTPException(status_code=409, detail="这个数据源没有启用（演示数据不连 XDOJ）。")
     sync_api.request_meta_sync(s, source.server_id)
     return {"ok": True}
+
+
+# ------------------------------------------------------------ 知识图谱：C 语言和数据结构两张图，加跨课程的联系
+def _course_of_class(s: Session, cls: m.XClass) -> str:
+    server = s.get(m.Server, cls.server_id)
+    return server.course if server else "C"
+
+
+@router.get("/classes/{key}/knowledge-map")
+def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(teacher),
+                  s: Session = Depends(get_session)) -> dict:
+    """知识点一层的图：节点是知识点，边由技能之间的先修边汇总而来。跨课程的边单独标出。
+
+    节点上的数字：这个班每个知识点四档各几人（v2），有证据的人的平均估计；数据结构的知识点没有证据时，
+    给的是由 C 语言推出来的平均准备度。传 student 时再带上这个学生自己的。
+    """
+    from ..taxonomy.prereq import PREREQ_STATUS, kp_edges
+
+    cls = _class(s, user, key)
+    people = class_students(s, cls)
+    ids = [p.user_id for p in people]
+    if student is not None and student not in ids:
+        raise HTTPException(status_code=404, detail="这个学生不在这个班里。")
+    covered: set[str] = set()
+    for server_id, problem_id in class_problems(s, cls):
+        label = current_problem_label(s, server_id, problem_id)
+        if label is not None:
+            covered |= {kp_of_skill(c) for c in [label.primary_skill, *(label.secondary_skills or [])]}
+    states = {uid: mastery.kp_states(s, uid, model="v2", with_predicted=True) for uid in ids}
+    nodes = []
+    for code, name in KNOWLEDGE_POINTS.items():
+        dist = Counter()
+        ps, preds = [], []
+        for uid in ids:
+            st = states[uid].get(code)
+            if st is None or st.predicted:
+                dist["还没练到"] += 1
+                if st is not None:
+                    preds.append(st.p)
+            else:
+                dist[st.level] += 1
+                ps.append(st.p)
+        node = {"code": code, "name": name, "course": course_of(code), "topic": code[:3],
+                "topicName": TOPICS.get(code[:3], ""), "skills": len(skills_of_kp(code)), "covered": code in covered,
+                "dist": [dist.get(level, 0) for level in LEVELS], "mean": round(sum(ps) / len(ps), 2) if ps else None,
+                "withEvidence": len(ps), "readiness": round(sum(preds) / len(preds), 2) if preds else None}
+        if student is not None:
+            st = states[student].get(code)
+            node["student"] = None if st is None else {"level": st.level, "p": round(st.p, 2), "predicted": st.predicted}
+        nodes.append(node)
+    topics = [{"code": c, "name": n, "course": course_of(c)} for c, n in TOPICS.items()]
+    return {"class": {"key": key, "name": cls.class_name, "course": _course_of_class(s, cls)},
+            "courses": [{"code": c, "name": n} for c, n in COURSE_NAMES.items()], "topics": topics, "nodes": nodes,
+            "edges": [{"from": a, "to": b, "n": n, "cross": cross} for a, b, n, cross in kp_edges()],
+            "levels": list(LEVELS), "status": PREREQ_STATUS,
+            "students": [{"userId": p.user_id, "name": p.name} for p in people]}
+
+
+@router.get("/classes/{key}/knowledge-map/{kp}")
+def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    from ..taxonomy.prereq import kp_edges
+
+    cls = _class(s, user, key)
+    if kp not in KNOWLEDGE_POINTS:
+        raise HTTPException(status_code=404, detail="没有这个知识点。")
+    people = class_students(s, cls)
+    ids = [p.user_id for p in people]
+    skill_states = {uid: mastery.skill_states(s, uid, model="v2", with_predicted=True) for uid in ids}
+    skills = []
+    for code in skills_of_kp(kp):
+        dist = Counter()
+        for uid in ids:
+            st = skill_states[uid].get(code)
+            dist[st.level if st is not None and not st.predicted else "还没练到"] += 1
+        skills.append({**_skill_view(code), "dist": [dist.get(level, 0) for level in LEVELS]})
+    weak = []
+    for p in people:
+        kps = mastery.kp_states(s, p.user_id, model="v2", with_predicted=True)
+        st = kps.get(kp)
+        if st is not None and (st.level == "待加强" or (st.predicted and st.p < 0.45)):
+            weak.append({"userId": p.user_id, "name": p.name, "level": st.level, "p": round(st.p, 2),
+                         "predicted": st.predicted})
+    weak.sort(key=lambda r: r["p"])
+    errs = Counter()
+    if ids:
+        rows = s.execute(
+            select(m.SubmissionLabel.error_code)
+            .join(m.Submission, (m.Submission.server_id == m.SubmissionLabel.server_id)
+                  & (m.Submission.submission_id == m.SubmissionLabel.submission_id))
+            .where(m.SubmissionLabel.is_current.is_(True), m.Submission.user_id.in_(ids),
+                   m.SubmissionLabel.skill_code.like(kp + ".%"))).all()
+        errs.update(r[0] for r in rows)
+    problems = []
+    for server_id, problem_id in class_problems(s, cls):
+        label = current_problem_label(s, server_id, problem_id)
+        if label is not None and kp in {kp_of_skill(c) for c in [label.primary_skill, *(label.secondary_skills or [])]}:
+            prob = s.get(m.Problem, (server_id, problem_id))
+            problems.append({"problemId": problem_id, "title": prob.title if prob else "", "brief": label.brief,
+                             "primary": kp_of_skill(label.primary_skill) == kp})
+    edges = kp_edges()
+    ref = lambda c, cross: {"code": c, "name": KNOWLEDGE_POINTS.get(c, ""), "course": course_of(c), "cross": cross}  # noqa: E731
+    return {"code": kp, "name": KNOWLEDGE_POINTS[kp], "course": course_of(kp), "topicName": TOPICS.get(kp[:3], ""),
+            "skills": skills, "weak": weak, "errors": [{"code": c, "name": error_name(c), "count": n}
+                                                       for c, n in errs.most_common(6)],
+            "problems": problems, "prereqs": [ref(a, cross) for a, b, _n, cross in edges if b == kp],
+            "next": [ref(b, cross) for a, b, _n, cross in edges if a == kp], "levels": list(LEVELS)}
+
+
+# ------------------------------------------------------------ 按需申请学生日志（参考 DBEDU 的做法，见 app/logs.py）
+class LogBody(BaseModel):
+    ids: str = ""
+    classKeys: list[str] = []
+    dateFrom: str
+    dateTo: str
+    kinds: list[str]
+    includeText: bool = False
+    format: str = "csv"
+    purpose: str = ""
+
+
+def _day(text: str, end: bool) -> dt.datetime:
+    try:
+        d = dt.date.fromisoformat(text)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期的格式应当是 2026-11-17。")
+    t = dt.datetime.combine(d, dt.time(23, 59, 59) if end else dt.time(0, 0, 0)).replace(tzinfo=db.BEIJING)
+    return t.astimezone(db.UTC)
+
+
+@router.get("/logs")
+def log_requests(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    q = select(m.LogRequest).order_by(m.LogRequest.id.desc()).limit(50)
+    if user.role != "admin":
+        q = q.where(m.LogRequest.requester_id == user.id)
+    now = db.now()
+    return {"kinds": [{"code": k, "name": v} for k, v in logs.KINDS.items()],
+            "classes": [{"key": class_key(c.server_id, c.class_id), "name": c.class_name} for c in my_classes(s, user)],
+            "requests": [logs.view(r, now) for r in s.scalars(q).all()],
+            "limits": {"ids": logs.MAX_IDS, "days": logs.MAX_DAYS, "daily": logs.DAILY_LIMIT, "ttlDays": logs.TTL_DAYS},
+            "admin": user.role == "admin"}
+
+
+@router.post("/logs")
+def log_create(body: LogBody, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    mine = {class_key(c.server_id, c.class_id) for c in my_classes(s, user)}
+    bad = [k for k in body.classKeys if k not in mine]
+    if bad:
+        raise HTTPException(status_code=403, detail="选的班级里有不在你名下的。")
+    try:
+        req = logs.create(s, user, body.ids, body.classKeys, _day(body.dateFrom, False), _day(body.dateTo, True),
+                          body.kinds, body.includeText, body.format, body.purpose)
+    except logs.RequestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    rows = logs.collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text)
+    preview = [{"userId": r.user_id, "name": r.name, "time": r.time.isoformat(), "kind": logs.KINDS.get(r.kind, r.kind),
+                "action": r.action, "problem": r.problem, "problemId": r.problem_id, "samples": r.samples,
+                "detail": r.detail} for r in rows[-12:]]
+    by_kind = Counter(logs.KINDS.get(r.kind, r.kind) for r in rows)
+    return {"request": logs.view(req), "preview": preview, "byKind": dict(by_kind)}
+
+
+@router.get("/logs/{req_id}/download")
+def log_download(req_id: int, token: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)):
+    from urllib.parse import quote
+
+    req = s.get(m.LogRequest, req_id)
+    if req is None or (user.role != "admin" and req.requester_id != user.id) or token != req.token:
+        raise HTTPException(status_code=404, detail="没有这个申请，或者链接不对。")
+    if logs.state_of(req) != "ready":
+        raise HTTPException(status_code=410, detail="这个下载链接已经失效了，请重新申请。")
+    data, mime, filename = logs.render(s, req)
+    req.downloads += 1
+    req.last_download_at = db.now()
+    return Response(content=data, media_type=mime,
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+                             "Cache-Control": "no-store"})
+
+
+@router.post("/logs/{req_id}/revoke")
+def log_revoke(req_id: int, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    req = s.get(m.LogRequest, req_id)
+    if req is None or (user.role != "admin" and req.requester_id != user.id):
+        raise HTTPException(status_code=404, detail="没有这个申请。")
+    req.status = "revoked"
+    return logs.view(req)
