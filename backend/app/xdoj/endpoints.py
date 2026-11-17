@@ -125,6 +125,8 @@ class ContestRow:
     class_ids: list[int]
     problem_ids: list[int] | None  # 列表接口自带时直接用
     raw: dict = field(default_factory=dict)
+    # “布置给哪些班”的原始写法：每个班一组候选值（id、classId，可能是文本编号），由 sync_meta 换算成本地班级号
+    class_refs: list[list[str]] = field(default_factory=list)
 
 
 def _id_list(value) -> list[int] | None:
@@ -135,6 +137,20 @@ def _id_list(value) -> list[int] | None:
         v = to_int(pick(item, "id", "classId", "problemId")) if isinstance(item, dict) else to_int(item)
         if v is not None:
             out.append(v)
+    return out
+
+
+def _class_refs(value) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        if isinstance(item, dict):
+            cands = [str(item[k]) for k in ("classId", "id") if item.get(k) not in (None, "")]
+        else:
+            cands = [str(item)] if item not in (None, "") else []
+        if cands:
+            out.append(cands)
     return out
 
 
@@ -153,6 +169,7 @@ def list_contests(client: XdojClient) -> list[ContestRow]:
             class_ids=_id_list(r.get("classes")) or [],
             problem_ids=_id_list(r.get("problems")),
             raw=scrub(r),
+            class_refs=_class_refs(r.get("classes")),
         ))
     return out
 

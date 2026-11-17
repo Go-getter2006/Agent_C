@@ -491,3 +491,15 @@ def test_submission_cursor_is_per_teacher(ctx, fake, clock):
         s.execute(text("DELETE FROM xdoj_submissions"))
     other = replace(ctx, source_id=99)
     assert sync_submissions.poll_new_submissions(other) == n
+
+
+def test_homework_assigned_by_text_class_code(ctx, fake):
+    """作业里的“布置给哪些班”写的是文本 classId（不是数字 id），也要对上本地的班级。"""
+    fake.classes = [{"id": 9031, "classId": "COURSE-2026", "className": "测试一班", "ownerId": fake.teacher_id}]
+    for st in fake.students:
+        st["classId"] = "COURSE-2026"
+    fake.contests[0]["classes"] = ["COURSE-2026"]
+    sync_meta.sync_metadata(ctx)
+    with db.session_scope() as s:
+        assert s.get(m.ContestClass, (1, 501, 9031)) is not None
+        assert len(s.scalars(select(m.Enrollment).where(m.Enrollment.class_id == 9031)).all()) == 3
