@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
+import socket
+import threading
 import time
 from typing import Callable
 
@@ -41,6 +44,46 @@ def poll_tier(now: dt.datetime, last_new: dt.datetime | None, last_trigger: dt.d
     if start <= hour < end and quiet:
         return "night", cfg["poll_night_seconds"]
     return "normal", cfg["poll_normal_seconds"]
+
+
+HEARTBEAT_KEY = "daemon_heartbeat"
+
+
+def claim(owner: str, stale_seconds: int = 60) -> bool:
+    """占住“正在同步”的位置并写心跳。别的主循环一分钟内跳过心跳，就让给它，免得两个进程同时向 XDOJ 发请求。"""
+    with db.session_scope() as s:
+        row = s.get(m.SyncState, (0, HEARTBEAT_KEY))
+        now = db.now()
+        if row is None:
+            s.add(m.SyncState(server_id=0, key=HEARTBEAT_KEY, value=owner, updated_at=now))
+            return True
+        if row.value != owner and row.updated_at and (now - row.updated_at).total_seconds() < stale_seconds:
+            return False
+        row.value, row.updated_at = owner, now
+        return True
+
+
+def last_beat(s) -> dt.datetime | None:
+    row = s.get(m.SyncState, (0, HEARTBEAT_KEY))
+    return row.updated_at if row is not None else None
+
+
+def start_in_thread() -> threading.Thread:
+    """在网页进程里起一个后台线程跑主循环。"""
+    from .. import graphmodel, pipeline, sources
+
+    def run() -> None:
+        while True:
+            try:
+                Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
+                       nightly=graphmodel.nightly).run_forever()
+            except Exception:  # 出错了等一会儿重来，不能把网页带崩
+                log.exception("后台同步出错，30 秒后重启")
+                time.sleep(30)
+
+    t = threading.Thread(target=run, name="xdoj-sync", daemon=True)
+    t.start()
+    return t
 
 
 class Daemon:
@@ -261,7 +304,19 @@ class Daemon:
         self.startup()
         log.info("主循环启动，数据源 %d 个", len(self.contexts))
         last_reload = time.monotonic()
+        last_beat = 0.0
+        owner = f"{socket.gethostname()}:{os.getpid()}:{id(self)}"
         while True:
+            if time.monotonic() - last_beat >= 20:
+                last_beat = time.monotonic()
+                try:
+                    if not claim(owner):
+                        log.warning("另一个后台同步进程正在运行，这个先等着")
+                        self._sleep(30)
+                        last_beat = 0.0
+                        continue
+                except Exception:  # 心跳写不进去不影响同步
+                    log.exception("写心跳失败")
             if self._reload is not None and time.monotonic() - last_reload >= 60:
                 last_reload = time.monotonic()
                 known = {c.source_id for c in self.contexts}

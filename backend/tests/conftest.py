@@ -11,6 +11,7 @@ import pytest
 
 os.environ.setdefault("APP_ENV", "dev")
 os.environ.setdefault("DEV_LOGIN_PASSWORD", "test-pass")
+os.environ["SYNC_IN_WEB"] = "0"
 os.environ["DEEPSEEK_API_KEY"] = ""
 os.environ["SANDBOX_MODE"] = "local"
 
@@ -22,6 +23,7 @@ from app.xdoj.store import SyncContext, request_logger  # noqa: E402
 
 config.DEEPSEEK_API_KEY = ""
 config.DEV_LOGIN_PASSWORD = "test-pass"
+config.SYNC_IN_WEB = False
 
 
 @pytest.fixture()

@@ -74,6 +74,7 @@ class FakeXdoj:
         self._next_session = 1
         self.login_count = 0
         self.clock = None  # 测试可以注入时钟，记录请求时刻
+        self.student_passwords: dict[str, str] = {}  # 学生自己在 XDOJ 上的密码（只在假服务器里，用来测学生登录）
 
     # ------------------------------------------------------------ 造数据
     def add_student(self, user_id: str, name: str, class_id: int) -> None:
@@ -136,11 +137,13 @@ class FakeXdoj:
             return httpx.Response(200, text="<html>login</html>",
                                   headers={"set-cookie": f"JSESSIONID={session_id}; Path=/"})
         if path == "/user/login.do":
-            if args.get("userId") == self.teacher_id and args.get("password") == self.password \
-                    and session_id in self._sessions:
+            uid, pw = args.get("userId"), args.get("password")
+            teacher_ok = uid == self.teacher_id and pw == self.password
+            student_ok = uid in self.student_passwords and pw == self.student_passwords[uid]
+            if (teacher_ok or student_ok) and session_id in self._sessions:
                 self._sessions[session_id] = True
                 self.login_count += 1
-                return self._json({"error": 0, "userId": self.teacher_id})
+                return self._json({"error": 0, "userId": uid})
             return self._json({"error": 1, "message": "用户名或密码错误"})
         if not self._sessions.get(session_id):
             return httpx.Response(302, headers={"location": "/xdoj-ssm/login.jsp"})

@@ -1,5 +1,8 @@
-# 校内服务器上的部署。HTTPS 由前面的反向代理（学校的网关或 nginx、caddy）负责，这里只在本机端口上提供服务。
+# 正式部署：服务器上只需要装 Docker，不用装 Python 和 Node（前端在镜像里构建）。
 # 启动：docker compose up -d --build        看日志：docker compose logs -f daemon
+# 要 HTTPS：.env 里填 DOMAIN=你的域名，域名解析到这台服务器，然后
+#   docker compose --profile https up -d --build
+# Caddy 会自动申请和续期证书。已经有学校网关或 nginx 做 HTTPS 的，不用这个，转发到本机 8000 端口即可。
 services:
   db:
     image: postgres:16
@@ -24,6 +27,7 @@ services:
       DATABASE_URL: postgresql+psycopg://pda:${POSTGRES_PASSWORD}@db:5432/pda
       SANDBOX_MODE: socket
       SANDBOX_SOCKET: /run/sandbox/sandbox.sock
+      SYNC_IN_WEB: "0"   # 同步由下面的 daemon 容器负责
     depends_on:
       db:
         condition: service_healthy
@@ -70,6 +74,21 @@ services:
     volumes:
       - sandbox-socket:/run/sandbox
 
+  # 可选：自动 HTTPS（--profile https 时才起）
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", "${DOMAIN:-localhost}", "--to", "web:8000"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+    depends_on:
+      - web
+
 volumes:
   pgdata:
   sandbox-socket:
+  caddy-data:

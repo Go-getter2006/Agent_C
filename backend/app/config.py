@@ -27,19 +27,21 @@ _load_dotenv(ROOT_DIR / ".env")
 
 
 def _env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default)
+    """.env 里写了 KEY= 但没填值，和没写一样，用默认值。"""
+    value = os.environ.get(name, "")
+    return value if value.strip() else default
 
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.environ.get(name, default))
+        return float(os.environ.get(name) or default)
     except ValueError:
         return default
 
 
 def _env_int(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, default))
+        return int(os.environ.get(name) or default)
     except ValueError:
         return default
 
@@ -54,7 +56,9 @@ DEV_SECRET_FALLBACK = "dev-only-not-for-production"
 
 # 登录方式。dev：学号 + 统一口令，只供开发和演示。
 # 学生正式怎么登录（转发 XDOJ 试登）还在待确认，确认前不实现。
-AUTH_MODE = _env("AUTH_MODE", "dev")
+# 网页进程里顺带跑后台同步（一个进程就够用）。docker compose 里同步单独一个容器，那里设成 0。
+SYNC_IN_WEB = _env("SYNC_IN_WEB", "1") == "1"
+AUTH_MODE = _env("AUTH_MODE", "xdoj")  # xdoj：学生去 XDOJ 核对密码；dev：真实名单里的学生也能用演示口令（只用于调试）
 DEV_LOGIN_PASSWORD = _env("DEV_LOGIN_PASSWORD", "")
 SESSION_HOURS = _env_int("SESSION_HOURS", 12)
 

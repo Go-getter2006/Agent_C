@@ -573,7 +573,7 @@ def sources_list(user: m.User = Depends(teacher), s: Session = Depends(get_sessi
 
     known = [{"code": k.code, "name": k.name, "course": k.course, "baseUrl": k.base_url, "basis": k.basis}
              for k in KNOWN.values()]
-    return {"sources": rows, "interval": config.XDOJ_MIN_INTERVAL, "known": known,
+    return {"sources": rows, "interval": config.XDOJ_MIN_INTERVAL, "known": known, "daemon": _daemon_status(s),
             "candidates": [{"kind": c.kind, "name": c.name, "description": c.description, "nearest": c.nearest,
                             "time": c.created_at.isoformat()} for c in candidates],
             "libraries": {"errors": len(ERRORS), "skills": len(SKILLS), "knowledge": len(KNOWLEDGE_POINTS),
@@ -589,7 +589,16 @@ def source_sync(source_id: int, user: m.User = Depends(teacher), s: Session = De
     if not source.enabled:
         raise HTTPException(status_code=409, detail="这个数据源没有启用（演示数据不连 XDOJ）。")
     sync_api.request_meta_sync(s, source.server_id)
-    return {"ok": True}
+    return {"ok": True, "daemon": _daemon_status(s)}
+
+
+def _daemon_status(s: Session) -> dict:
+    """后台同步还在不在跑：看主循环的心跳（每 20 秒一次）。"""
+    from ..xdoj.daemon import last_beat
+
+    beat = last_beat(s)
+    running = beat is not None and (db.now() - beat).total_seconds() < 90
+    return {"running": running, "lastBeat": beat.isoformat() if beat else None}
 
 
 # ------------------------------------------------------------ 知识图谱：C 语言和数据结构两张图，加跨课程的联系

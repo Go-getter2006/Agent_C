@@ -298,3 +298,44 @@ def test_log_request_rules(client, demo):
     client.post("/api/auth/logout")
     login(client, UID)
     assert client.get("/api/teacher/logs").status_code == 403                # 学生不能申请
+
+
+def test_student_login_through_xdoj(client, monkeypatch):
+    """学生账号来自老师同步下来的名单；登录时去 XDOJ 核对密码，密码不保存。"""
+    import httpx
+
+    from app import accounts
+
+    fx = FakeXdoj()
+    fx.student_passwords["2599000001"] = "stu-xdoj-pw"
+    monkeypatch.setattr(teacher_api, "_test_transport", fx.transport())
+    with db.session_scope() as s:
+        srv = sources.ensure_server(s, "c-test", "C 语言（测试用的假服务器）", "http://fake.test/xdoj-ssm")
+        s.add(m.Student(user_id="2599000001", name="测试生"))
+        s.flush()
+        accounts.ensure_student_user(s, "2599000001", "测试生")
+        s.add(m.Enrollment(user_id="2599000001", server_id=srv.id, class_id=77))
+
+    r = client.post("/api/auth/login", json={"loginName": "2599000099", "password": "x"})
+    assert r.status_code == 401 and "名单" in r.json()["error"]          # 不在任何名单里
+    assert client.post("/api/auth/login", json={"loginName": "2599000001", "password": "wrong"}).status_code == 401
+    # 演示口令不能冒充真实名单里的学生
+    assert client.post("/api/auth/login", json={"loginName": "2599000001", "password": "test-pass"}).status_code == 401
+    r = client.post("/api/auth/login", json={"loginName": "2599000001", "password": "stu-xdoj-pw"})
+    assert r.status_code == 200 and r.json() == {"role": "student", "name": "测试生"}
+    assert client.get("/api/auth/me").json()["loginName"] == "2599000001"
+    with db.session_scope() as s:
+        for table in db.Base.metadata.sorted_tables:
+            for row in s.execute(table.select()).all():
+                assert "stu-xdoj-pw" not in repr(tuple(row)), table.name
+
+    # 演示数据里的学生照旧用演示口令
+    client.post("/api/auth/logout")
+    assert login(client, "2500000001").status_code == 200
+
+    # XDOJ 连不上：说清楚是连不上，不说密码错
+    def down(request):
+        raise httpx.ConnectError("down")
+    monkeypatch.setattr(teacher_api, "_test_transport", httpx.MockTransport(down))
+    r = client.post("/api/auth/login", json={"loginName": "2599000001", "password": "stu-xdoj-pw"})
+    assert r.status_code == 502

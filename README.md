@@ -30,58 +30,54 @@
 | 教师端（总览、学生、学生明细、卡点、知识图谱、模型对比、日志申请、数据源） | 已完成 |
 | 日志申请 | 老师按需下载自己学生的使用记录（CSV / JSON），要写用途、留审计记录、链接 7 天失效 |
 | 图模型（贝叶斯网络，只在教师端显示） | 已完成，参数是经验值，先修边是未审定的初稿 |
-| 学生用 XDOJ 账号登录、新技能和新错误自动入库、接入数据结构的服务器 | 没做（在待确认清单里） |
+| 登录 | 老师用 XDOJ 账号登录，系统自动同步他的班级和名单；学生用名单里的学号和 XDOJ 密码登录（转发给 XDOJ 核对，不保存密码）。**学生这条还没有用真实账号测过** |
+| 新技能和新错误自动入库、接入数据结构的服务器 | 没做（在待确认清单里） |
 
 没做完和需要你确认的地方都列在 [docs/问题清单.md](docs/问题清单.md)。
 
-## 在自己电脑上跑起来（演示数据）
+## 运行
 
-需要 Python 3.11 以上、Node 20 以上；小题的“运行检查”需要 gcc（只在 Linux 上用过）。
+### 试用（Linux 机器或虚拟机，一条命令）
 
 ```bash
-# 1 后端
-cd backend
-python -m venv .venv && . .venv/bin/activate        # Windows：.venv\Scripts\activate
-pip install -r requirements-dev.txt
-cp ../.env.example ../.env                           # 然后编辑 .env，至少填 DEV_LOGIN_PASSWORD
-
-# 2 前端（构建一次，由后端托管）
-cd ../frontend && npm install && npm run build
-
-# 3 入演示数据，启动
-cd ../backend
-python -m app.cli demo-seed
-python -m app.cli serve
+git clone https://github.com/Go-getter2006/Agent_C.git && cd Agent_C
+./run.sh deps     # Ubuntu / Debian 上装 Python、gcc、Node 20，只需一次（要 sudo）
+./run.sh          # 第一次会自动装依赖、构建、生成 .env 和密钥，并问一次 DeepSeek 的 key
 ```
 
-浏览器打开 <http://127.0.0.1:8000>。演示数据是虚构的一个班：
+然后浏览器打开 `http://这台机器的地址:8000`：
 
-- 学生：学号 `2500000001`，密码是 `.env` 里的 `DEV_LOGIN_PASSWORD`；
-- 教师：在登录页选“教师”，账号 `demo-teacher`，密码同上。
+1. **老师**在登录页选“教师”，用自己的 XDOJ 账号登录。系统会去 XDOJ 核对一次，成功后自动同步他名下的班级、学生名单、作业和提交（后台同步和网页在同一个进程里，不用另外启动）。“数据源”页能看到同步进度。
+2. **学生**用名单里的学号和自己的 XDOJ 密码登录。密码只拿去 XDOJ 核对一次，不保存。名单还没同步下来的学号登录不了。
 
-演示数据不是直接写进表里的：程序先搭一台假的 XDOJ，再让真实的同步程序去同步它，然后按时间顺序跑标注、学情和几段对话。所以页面上看到的每一项都是真实流程产生的。
+以后再启动还是 `./run.sh`；拉新代码并更新用 `./run.sh update`；想开机自启用 `./run.sh service`。
 
-改前端时可以另开一个终端运行 `npm run dev`（<http://127.0.0.1:5173>，接口会转发到 8000 端口）。
+只想看看界面、不连 XDOJ：`./run.sh demo`。演示数据放在单独的库里（`data/demo.sqlite3`），是虚构的一个班：学生学号 `2500000001`，教师选“教师”后账号 `demo-teacher`，密码都是 `.env` 里的 `DEV_LOGIN_PASSWORD`（第一次运行时设成 `demo`）。
 
-## 接真实的 XDOJ（试点）
+为什么是 Linux：小题的“运行检查”要编译、运行学生改的代码，沙箱用的是 Linux 才有的限制（资源上限、断网、换成无权限用户）。Windows 上可以跑网页，但小题检查不安全，不建议。
 
-先看 [docs/怎么验证.md](docs/怎么验证.md) 第 2 节，按顺序做：
+### 正式部署（公网）
+
+服务器上只装 Docker，不用装 Python 和 Node：
 
 ```bash
-# .env 里填 XDOJ_BASE_URL、XDOJ_USER、XDOJ_PASS、SECRET_KEY
+git clone https://github.com/Go-getter2006/Agent_C.git && cd Agent_C
+cp .env.example .env    # 填 SECRET_KEY、POSTGRES_PASSWORD、DEEPSEEK_API_KEY，要 HTTPS 再填 DOMAIN
+docker compose --profile https up -d --build
+```
+
+会起五个容器：PostgreSQL、网页、后台同步、沙箱（没有网络、只读、去掉全部特权）、Caddy（自动申请 HTTPS 证书）。已经有学校网关或 nginx 做 HTTPS 的，去掉 `--profile https`，把网关转发到本机 8000 端口。更新：`git pull && docker compose up -d --build`。这份 compose 在开发环境里没有实际启动过，第一次部署请留意。
+
+### 命令行里测 XDOJ（可选）
+
+```bash
+cd backend && . .venv/bin/activate
+# .env 里填 XDOJ_USER、XDOJ_PASS（地址不用填，就是 C 语言那台）
 python -m app.cli login-test          # 只测登录
 python -m app.cli xdoj-probe          # 核对接口字段名（只打印字段名和类型）
-python -m app.cli sync-meta --max-requests 200
-python -m app.cli backfill --max-requests 2000
-python -m app.cli daemon              # 常驻主循环
-python -m app.cli stats
 ```
 
 对 XDOJ 只读：客户端里写死了允许访问的十几个查询接口，其他路径一律不发；所有请求排队，两次请求至少间隔 0.5 秒。名单接口带回的学生密码、令牌、登录 IP 在内存里就丢掉，不进库也不进日志。
-
-## 部署
-
-`docker compose up -d --build` 会起四个容器：PostgreSQL、网页和接口、常驻主循环、沙箱。沙箱容器没有网络、根文件系统只读、去掉了全部特权，只通过共享卷上的套接字收请求。HTTPS 由前面的反向代理负责。部署前在 `.env` 里填 `SECRET_KEY`、`POSTGRES_PASSWORD`。这份 compose 文件在开发环境里没有实际启动过，第一次部署时请留意。
 
 ## 测试
 

@@ -15,6 +15,7 @@ interface SourceRow {
 interface SourcesData {
   sources: SourceRow[]; interval: number;
   known: { code: string; name: string; course: string; baseUrl: string | null; basis: string }[];
+  daemon: { running: boolean; lastBeat: string | null };
   candidates: { kind: string; name: string; description: string; nearest: string[]; time: string }[];
   libraries: { errors: number; skills: number; knowledge: number; errorVersion: string; taxonomyVersion: string };
 }
@@ -32,8 +33,11 @@ export default function Sources() {
   const d = data.data;
   const sync = async (id: number) => {
     try {
-      await post(`/api/teacher/sources/${id}/sync`);
-      setNote({ id, text: "已经通知同步程序，名单和作业会在几分钟内更新。", bad: false });
+      const r = await post<{ daemon: { running: boolean } }>(`/api/teacher/sources/${id}/sync`);
+      setNote(r.daemon.running
+        ? { id, text: "已经通知后台同步，名单和作业会在几分钟内更新，这一页会自己刷新。", bad: false }
+        : { id, text: "已经记下了，但后台同步现在没有在运行，所以不会有反应。见页面顶部的说明。", bad: true });
+      data.reload();
     } catch (err) {
       setNote({ id, text: (err as Error).message, bad: true });
     }
@@ -42,6 +46,16 @@ export default function Sources() {
   if (!d) return <div className="card card-body"><Loading what="正在取数据源的状态" lines={5} /></div>;
   return (
     <div className="stack">
+      {!d.daemon.running && d.sources.some((x) => !x.demo) && (
+        <div className="problem" role="alert">
+          <span>
+            <b>后台同步没有在运行</b>
+            {d.daemon.lastBeat ? `（上次在 ${fullTime(d.daemon.lastBeat)}）` : ""}，所以班级、名单、提交都不会更新。
+            用 <code>./run.sh</code> 或 <code>python -m app.cli serve</code> 启动时会自动带上它；
+            如果设了 <code>SYNC_IN_WEB=0</code>，要另外运行 <code>python -m app.cli daemon</code>。日志里搜“后台同步”能看到出错原因。
+          </span>
+        </div>
+      )}
       <div className="trial trial-info">
         <ShieldCheck size={18} aria-hidden="true" />
         <p>系统对 XDOJ 只读：只访问写死的十几个查询接口，所有请求排队发送，两次请求至少相隔 {d.interval} 秒。名单接口带回的学生密码、令牌、登录 IP 在内存里就丢掉，不进库也不进日志。</p>
