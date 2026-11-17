@@ -177,7 +177,7 @@ def stats() -> None:
             recent = s.scalars(select(m.RequestLog.ok).where(m.RequestLog.server_id == server.id)
                                .order_by(m.RequestLog.id.desc()).limit(200)).all()
             rate = f"{100 * sum(recent) / len(recent):.0f}%" if recent else "还没有请求"
-            typer.echo(f"\n服务器 {server.id}（{server.name}）  进度 H={store.get_state(s, server.id, 'max_submission_id', '0')}"
+            typer.echo(f"\n服务器 {server.id}（{server.name}）  进度 H={','.join(r.key.split(':')[-1] + '=' + r.value for r in s.scalars(select(m.SyncState).where(m.SyncState.server_id == server.id, m.SyncState.key.like('max_submission_id%'))).all()) or '0'}"
                        f"  轮询档位 {tier[0]}/{tier[1]} 秒  最近请求成功率 {rate}")
             typer.echo(f"  队列积压 {json.dumps(store.queue_backlog(s, server.id), ensure_ascii=False)}")
 

@@ -75,6 +75,10 @@ class FakeXdoj:
         self.login_count = 0
         self.clock = None  # 测试可以注入时钟，记录请求时刻
         self.student_passwords: dict[str, str] = {}  # 学生自己在 XDOJ 上的密码（只在假服务器里，用来测学生登录）
+        self.teacher_name = "王老师"
+        # 和真实接口一样：评测记录、测试点结果只给数字，语言是一个对象（测试用来核对兼容）
+        self.numeric_results = False
+        self.language_object = False
 
     # ------------------------------------------------------------ 造数据
     def add_student(self, user_id: str, name: str, class_id: int) -> None:
@@ -143,10 +147,13 @@ class FakeXdoj:
             if (teacher_ok or student_ok) and session_id in self._sessions:
                 self._sessions[session_id] = True
                 self.login_count += 1
-                return self._json({"error": 0, "userId": uid})
+                return self._json({"error": 0, "userId": uid, "userType": 1 if teacher_ok else 2})
             return self._json({"error": 1, "message": "用户名或密码错误"})
         if not self._sessions.get(session_id):
             return httpx.Response(302, headers={"location": "/xdoj-ssm/login.jsp"})
+        if path == "/admin/dashboard.do":
+            return httpx.Response(200, text=f'<ul><li class="light-blue"><span class="user-info"><small>{self.teacher_name}</small>'
+                                            f'<small>{self.teacher_id}</small></span></li></ul>')
 
         page = int(args.get("page", 1) or 1)
         size = int(args.get("rows", 20) or 20)
@@ -194,12 +201,15 @@ class FakeXdoj:
                 rows = rows[::-1]
             data = [{"id": r.id, "userId": r.user_id, "userName": r.user_name, "problemId": r.problem_id,
                      "contestId": r.contest_id, "classId": r.class_id, "submitTime": r.submit_time,
-                     "language": r.language, "judgementStr": r.judgement, "points": r.points} for r in rows]
+                     "language": ({"id": 1, "name": r.language, "compiler": "gcc " * 30} if self.language_object
+                                  else r.language),
+                     "judgementStr": r.judgement, "points": r.points} for r in rows]
             return self._json(self._page(data, page, size))
         if path == "/submission/listJudge.do":
             sub = self.submissions.get(int(args.get("submissionId", 0)))
-            rows = [{"id": j.id, "submissionId": sub.id, "resultStr": j.result, "points": j.points,
-                     "startTime": j.start, "endTime": j.end, "compileOutputStr": j.compile_output}
+            rows = [{"id": j.id, "submissionId": sub.id, "points": j.points,
+                     "startTime": j.start, "endTime": j.end, "compileOutputStr": j.compile_output,
+                     **({"judgement": 9} if self.numeric_results else {"resultStr": j.result})}
                     for j in (sub.judges if sub else [])]
             return self._json(self._page(rows, 1, 20))
         if path == "/submission/listAllJudgeRun.do":
@@ -208,7 +218,8 @@ class FakeXdoj:
                 for j in sub.judges:
                     if j.id == jid:
                         return self._json([{"id": r.id, "judgeId": jid, "testcaseId": r.testcase_id,
-                                            "result": r.result, "runTime": r.run_time, "memory": r.memory}
+                                            "result": (1 if r.result == "正确" else 2) if self.numeric_results else r.result,
+                                            "runTime": r.run_time, "memory": r.memory}
                                            for r in j.runs])
             return self._json([])
         if path == "/submission/getRunOutput.do":

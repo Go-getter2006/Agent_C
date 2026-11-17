@@ -53,8 +53,13 @@ def login(body: TeacherLogin, request: Request, response: Response, s: Session =
         raise HTTPException(status_code=400, detail="没有这台 XDOJ 服务器，请联系管理员先登记。")
     client = XdojClient(server.base_url, user_id, body.password, limiter=limiter_for(server.base_url),
                         transport=_test_transport, max_retries=1)
+    name = None
     try:
         client.login()
+        if client.user_type is not None and str(client.user_type) != "1":
+            record_failure(key)
+            raise HTTPException(status_code=403, detail="这不是 XDOJ 的教师账号。学生请在登录页选“学生”。")
+        name = client.teacher_name()
     except SessionError:
         record_failure(key)
         raise HTTPException(status_code=401, detail="XDOJ 账号或密码不对。")
@@ -74,8 +79,10 @@ def login(body: TeacherLogin, request: Request, response: Response, s: Session =
     login_name = f"{server.code}:{user_id}"
     user = s.scalar(select(m.User).where(m.User.login_name == login_name))
     if user is None:
-        user = m.User(role="teacher", login_name=login_name, display_name=user_id, data_source_id=source.id)
+        user = m.User(role="teacher", login_name=login_name, display_name=name or user_id, data_source_id=source.id)
         s.add(user)
+    elif name:
+        user.display_name = name
     user.data_source_id, user.status, user.last_login_at = source.id, "active", db.now()
     s.flush()
     sync_api.request_meta_sync(s, server.id)  # 让主循环马上同步他名下的班级和名单

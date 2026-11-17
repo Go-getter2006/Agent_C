@@ -23,6 +23,7 @@ log = logging.getLogger("xdoj.client")
 WHITELIST: frozenset[tuple[str, str]] = frozenset({
     ("GET", "/"),  # 只为拿到会话 Cookie
     ("POST", "/user/login.do"),
+    ("GET", "/admin/dashboard.do"),  # 只读教师姓名（页面右上角）
     ("POST", "/class/list.do"),
     ("POST", "/user/listStudents.do"),
     ("POST", "/contest/list.do"),
@@ -138,6 +139,7 @@ class XdojClient:
             headers={"User-Agent": "xdoj-sync/1.0 (read-only)"},
         )
         self.logged_in = False
+        self.user_type = None
         self.request_count = 0
         self.consecutive_failures = 0
 
@@ -158,7 +160,8 @@ class XdojClient:
             t0 = time.monotonic()
             status, ok = 0, False
             try:
-                resp = self._http.request(method.upper(), url, params=params, data=data)
+                headers = {"X-Requested-With": "XMLHttpRequest"} if method.upper() == "POST" else None
+                resp = self._http.request(method.upper(), url, params=params, data=data, headers=headers)
                 status = resp.status_code
                 ok = 200 <= status < 300
                 return resp
@@ -210,7 +213,28 @@ class XdojClient:
             raise SessionError("登录接口返回的不是 JSON") from exc
         if not isinstance(body, dict) or body.get("error") != 0:
             raise SessionError("XDOJ 登录失败：账号或密码不对，或账号被停用")
+        self.user_type = body.get("userType")  # 1 = 教师
         self.logged_in = True
+
+    def teacher_name(self) -> str | None:
+        """从教师首页右上角读姓名：.user-info 里第一个 <small> 是姓名，第二个是账号。对不上就返回 None。"""
+        try:
+            resp = self._send_with_retry("GET", "/admin/dashboard.do", None, None)
+        except XdojError:
+            return None
+        if resp.status_code != 200:
+            return None
+        import html
+        import re
+
+        block = re.search(r'class="[^"]*user-info[^"]*"(.*?)</(?:span|div|a)>', resp.text, re.S)
+        if not block:
+            return None
+        smalls = [html.unescape(re.sub(r"<[^>]+>", "", x)).strip()
+                  for x in re.findall(r"<small[^>]*>(.*?)</small>", block.group(1), re.S)]
+        if len(smalls) >= 2 and smalls[1] == self._user_id and smalls[0]:
+            return smalls[0][:64]
+        return None
 
     @staticmethod
     def _looks_logged_out(resp: httpx.Response, expect: str) -> bool:

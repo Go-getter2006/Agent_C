@@ -22,15 +22,17 @@ def poll_new_submissions(ctx: SyncContext, backfill: bool = False, max_requests:
     rows_per_page = config.SYNC["page_rows"]
     total_new = 0
     start_count = ctx.client.request_count
+    # 进度按数据源（老师）记：每位老师能看到的提交不一样，共用一个进度会漏掉后来的老师更早的提交
+    key = f"max_submission_id:{ctx.source_id or 0}"
     while True:
         with db.session_scope() as s:
-            cursor = int(get_state(s, ctx.server_id, "max_submission_id", "0") or 0)
+            cursor = int(get_state(s, ctx.server_id, key, "0") or 0)
         batch, _total = ep.list_submissions_after(ctx.client, cursor, rows_per_page)
         with db.session_scope() as s:
             for row in batch:
                 total_new += _store_submission(s, ctx, row, backfill)
             if batch:
-                set_state(s, ctx.server_id, "max_submission_id", batch[-1].submission_id)
+                set_state(s, ctx.server_id, key, batch[-1].submission_id)
                 set_time(s, ctx.server_id, "last_new_submission_at", ctx.now())
             set_time(s, ctx.server_id, "last_poll_at", ctx.now())
         if len(batch) < rows_per_page:
@@ -89,6 +91,7 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
         if sub is None:
             raise LookupError(f"库里没有提交 {submission_id}")
         problem_id = sub.problem_id
+        list_code, list_text = sub.judgement, sub.judgement_text
     if source_first:  # P0：先拿到源码
         _fetch_source(ctx, submission_id)
 
@@ -97,6 +100,9 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
         raise NotJudgedYet()
     latest = judges[-1]
     code = normalize_judgement(latest.result_text)
+    judge_text_ok = code != "UNKNOWN"
+    if not judge_text_ok and list_code not in ("UNKNOWN", ""):
+        code = list_code  # 评测记录里的结果认不出（比如只有数字），用提交列表里的文字结果
     with db.session_scope() as s:
         s.execute(update(m.Judge).where(
             m.Judge.server_id == ctx.server_id, m.Judge.submission_id == submission_id).values(is_latest=False))
@@ -125,13 +131,15 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
                                  testcase_id=r.testcase_id)
                 s.add(row)
             row.result_text, row.result = r.result_text, normalize_judgement(r.result_text)
+            if row.result == "UNKNOWN" and code == "AC":
+                row.result = "AC"  # 整条提交通过，每组测试点都通过
             row.passed = row.result == "AC"
             row.run_time_ms, row.memory_kb, row.fetched_at = r.run_time_ms, r.memory_kb, ctx.now()
             if row.result == "UNKNOWN" and r.result_text:
                 log.warning("不认识的测试点结果，已原样保存（运行记录 %s）", r.run_id)
 
     for r in runs:
-        if normalize_judgement(r.result_text) == "AC":
+        if normalize_judgement(r.result_text) == "AC" or code == "AC":
             continue  # 通过的测试点不取输出
         with db.session_scope() as s:
             if s.get(m.RunOutput, (ctx.server_id, r.run_id)) is not None:
@@ -148,8 +156,10 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
         sub = s.get(m.Submission, (ctx.server_id, submission_id))
         sub.detail_status = "done"
         sub.judgement = code
-        if latest.result_text:
+        if latest.result_text and judge_text_ok:
             sub.judgement_text = latest.result_text
+        elif list_text:
+            sub.judgement_text = list_text
         if latest.points is not None:
             sub.points = latest.points
         enqueue(s, ctx.server_id, "post_process", submission_id, 1 if code != "AC" else 2, when=ctx.now())
