@@ -64,7 +64,7 @@ export default function StudentDetail() {
       tools={d ? (
         <>
           <Link to={`/teacher/map?student=${d.student.userId}`} className="btn btn-sm"><Waypoints size={15} aria-hidden="true" />在知识图谱里看</Link>
-          <Link to={`/teacher/logs?ids=${d.student.userId}`} className="btn btn-sm"><FileDown size={15} aria-hidden="true" />申请他的日志</Link>
+          <Link to={`/teacher/logs?ids=${d.student.userId}`} className="btn btn-sm"><FileDown size={15} aria-hidden="true" />申请这个学生的日志</Link>
         </>
       ) : null}>
       {() => (
@@ -203,7 +203,7 @@ export default function StudentDetail() {
                 )}
                 {d.stuck.filter((sp) => sp.givenCode).slice(0, 1).map((sp, i) => (
                   <div key={i} className="card-body">
-                    <CodeBlock caption={`最近一次给他的示例代码（${sp.name}）`} lines={sp.givenCode.split("\n")} copyable={false} />
+                    <CodeBlock caption={`最近一次给这个学生的示例代码（${sp.name}）`} lines={sp.givenCode.split("\n")} copyable={false} />
                   </div>
                 ))}
               </Card>
