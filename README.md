@@ -37,24 +37,35 @@
 
 ## 运行
 
-### 试用（Linux 机器或虚拟机，一条命令）
+### 试用（Linux 机器或虚拟机）
+
+只需要 Python 3.11 以上和 gcc。前端已经构建好放在仓库里，不用装 Node。
 
 ```bash
 git clone https://github.com/Go-getter2006/Agent_C.git && cd Agent_C
-./run.sh deps     # Ubuntu / Debian 上装 Python、gcc、Node 20，只需一次（要 sudo）
-./run.sh          # 第一次会自动装依赖、构建、生成 .env 和密钥，并问一次 DeepSeek 的 key
+./run.sh deps     # Ubuntu / Debian 上装 Python 和 gcc，只需一次（要 sudo）
+./run.sh          # 第一次会自动装依赖、生成 .env 和密钥，问一次 DeepSeek 的 key；然后在后台启动，终端还给你
 ```
+
+| 命令 | 做什么 |
+|---|---|
+| `./run.sh` | 在后台启动（网页和同步在同一个进程里） |
+| `./run.sh stop` / `restart` / `status` | 停止、重启、看在不在跑 |
+| `./run.sh log` | 看运行日志（Ctrl+C 只是退出看日志，程序继续跑） |
+| `./run.sh update` | 拉最新代码、更新依赖、重启 |
+| `./run.sh service` | 装成开机自启的系统服务 |
+| `./run.sh demo` | 用演示数据启动（单独一个库） |
 
 然后浏览器打开 `http://这台机器的地址:8000`：
 
-1. **老师**在登录页选“教师”，用自己的 XDOJ 账号登录。系统会去 XDOJ 核对一次，成功后自动同步他名下的班级、学生名单、作业和提交（后台同步和网页在同一个进程里，不用另外启动）。“数据源”页能看到同步进度。
-2. **学生**用名单里的学号和自己的 XDOJ 密码登录。密码只拿去 XDOJ 核对一次，不保存。名单还没同步下来的学号登录不了。
+1. **老师**在登录页选“教师”，用自己的 XDOJ 账号登录，系统自动同步他名下的班级、学生名单、作业和提交。
+2. **学生**用名单里的学号和自己的 XDOJ 密码登录。名单还没同步下来的学号登录不了。
 
-以后再启动还是 `./run.sh`；拉新代码并更新用 `./run.sh update`；想开机自启用 `./run.sh service`。
+只想看看界面、不连 XDOJ：`./run.sh demo`。学生学号 `2500000001`，教师选“教师”后账号 `demo-teacher`，密码都是 `.env` 里的 `DEV_LOGIN_PASSWORD`（第一次运行时设成 `demo`）。
 
-只想看看界面、不连 XDOJ：`./run.sh demo`。演示数据放在单独的库里（`data/demo.sqlite3`），是虚构的一个班：学生学号 `2500000001`，教师选“教师”后账号 `demo-teacher`，密码都是 `.env` 里的 `DEV_LOGIN_PASSWORD`（第一次运行时设成 `demo`）。
+为什么是 Linux：小题的“运行检查”要编译、运行学生改的代码，沙箱用的是 Linux 才有的限制。
 
-为什么是 Linux：小题的“运行检查”要编译、运行学生改的代码，沙箱用的是 Linux 才有的限制（资源上限、断网、换成无权限用户）。Windows 上可以跑网页，但小题检查不安全，不建议。
+改了前端代码以后，要在装了 Node 的机器上 `cd frontend && npm run build`，把 `frontend/dist` 一起提交。
 
 ### 正式部署（公网）
 
@@ -68,7 +79,9 @@ docker compose --profile https up -d --build
 
 会起五个容器：PostgreSQL、网页、后台同步、沙箱（没有网络、只读、去掉全部特权）、Caddy（自动申请 HTTPS 证书）。已经有学校网关或 nginx 做 HTTPS 的，去掉 `--profile https`，把网关转发到本机 8000 端口。更新：`git pull && docker compose up -d --build`。这份 compose 在开发环境里没有实际启动过，第一次部署请留意。
 
-### 命令行里测 XDOJ（可选）
+### 核对 XDOJ 的接口
+
+能访问 XDOJ 的人（或另一个 AI）可以按 [docs/XDOJ接口核对清单.md](docs/XDOJ接口核对清单.md) 发请求，把结果发回来；也可以在这台机器上用命令行：
 
 ```bash
 cd backend && . .venv/bin/activate
