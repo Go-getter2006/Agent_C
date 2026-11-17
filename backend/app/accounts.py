@@ -30,5 +30,21 @@ def active_class_keys(s: Session, user_id: str) -> set[tuple[int, int]]:
     return {(r[0], r[1]) for r in rows}
 
 
+def teacher_source_ids(s: Session, user: m.User) -> list[int]:
+    """这位老师关联的全部数据源（每门课的 XDOJ 账号各一个）。"""
+    ids = set(s.scalars(select(m.TeacherSource.data_source_id).where(m.TeacherSource.user_id == user.id)).all())
+    if user.data_source_id is not None:
+        ids.add(user.data_source_id)
+    return sorted(ids)
+
+
+def owner_of_source(s: Session, source_id: int) -> m.User | None:
+    """这个 XDOJ 账号已经关联给了哪位老师。"""
+    uid = s.scalar(select(m.TeacherSource.user_id).where(m.TeacherSource.data_source_id == source_id))
+    if uid is None:
+        uid = s.scalar(select(m.User.id).where(m.User.data_source_id == source_id, m.User.role == "teacher"))
+    return s.get(m.User, uid) if uid is not None else None
+
+
 def touch_login(s: Session, user: m.User) -> None:
     user.last_login_at = now()

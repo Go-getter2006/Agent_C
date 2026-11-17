@@ -86,13 +86,16 @@ export default function Login() {
               { value: "student", label: <><GraduationCap size={16} aria-hidden="true" />学生</> },
               { value: "teacher", label: <><Users size={16} aria-hidden="true" />教师</> },
             ]} />
-          {teacherXdoj && (
+          {teacherXdoj && servers.data!.length > 1 && (
             <label className="label">
-              XDOJ 服务器
+              用哪门课的 XDOJ 账号
               <select className="field" value={server || servers.data![0].code} onChange={(e) => setServer(e.target.value)}>
                 {servers.data!.map((sv) => <option key={sv.code} value={sv.code}>{sv.name}</option>)}
               </select>
             </label>
+          )}
+          {teacherXdoj && servers.data!.length > 1 && (
+            <p className="note">两门课都教的老师，用任意一门课的账号登录，再到“数据源”页关联另一门课的账号。</p>
           )}
           <label className="label">
             {tab === "student" ? "学号" : "XDOJ 教师账号"}

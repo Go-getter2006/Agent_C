@@ -5,7 +5,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app import config, crypto, db, graphmodel, sources
 from app import models as m
@@ -355,3 +355,51 @@ def test_teacher_login_checks_role_and_reads_name(client, monkeypatch):
         assert s.scalar(select(m.DataSource).where(m.DataSource.teacher_user_id == "2599000002")) is None
     r = client.post("/api/teacher/login", json={"server": "c-test", "userId": "t-li", "password": "pw"})
     assert r.status_code == 200 and r.json()["name"] == "李老师"
+
+
+def test_teacher_links_accounts_of_both_courses(client, monkeypatch):
+    """C 语言和数据结构是两台 XDOJ，同一位老师的账号密码可能不同：关联以后用哪个账号登录都进同一个账号。"""
+    import httpx
+
+    c_fx = FakeXdoj(teacher_id="t-zhang", password="c-pass")
+    ds_fx = FakeXdoj(teacher_id="zhang-ds", password="ds-pass")
+    stu = FakeXdoj(teacher_id="t-other", password="other-pass")
+    hosts = {"c.test": c_fx, "ds.test": ds_fx}
+    monkeypatch.setattr(teacher_api, "_test_transport",
+                        httpx.MockTransport(lambda req: hosts.get(req.url.host, stu).handle(req)))
+    with db.session_scope() as s:
+        sources.ensure_server(s, "c-test", "C 语言（测试）", "http://c.test/xdoj-ssm")
+        sources.ensure_server(s, "ds-test", "数据结构（测试）", "http://ds.test/xdoj-ssm", "D")
+        sources.ensure_server(s, "o-test", "另一台（测试）", "http://other.test/xdoj-ssm")
+
+    r = client.post("/api/teacher/login", json={"server": "c-test", "userId": "t-zhang", "password": "c-pass"})
+    assert r.status_code == 200
+    # 关联数据结构那台的账号（密码不同）；密码错不行
+    bad = {"server": "ds-test", "userId": "zhang-ds", "password": "wrong"}
+    assert client.post("/api/teacher/sources/link", json=bad).status_code == 401
+    r = client.post("/api/teacher/sources/link", json={**bad, "password": "ds-pass"})
+    assert r.status_code == 200
+    codes = sorted(x["serverCode"] for x in client.get("/api/teacher/sources").json()["sources"])
+    assert codes == ["c-test", "ds-test"]
+
+    # 换用数据结构的账号登录：进的是同一个账号，两门课都在
+    client.post("/api/auth/logout")
+    r = client.post("/api/teacher/login", json={"server": "ds-test", "userId": "zhang-ds", "password": "ds-pass"})
+    assert r.status_code == 200
+    assert sorted(x["serverCode"] for x in client.get("/api/teacher/sources").json()["sources"]) == ["c-test", "ds-test"]
+    with db.session_scope() as s:
+        assert s.scalar(select(func.count()).select_from(m.User).where(m.User.role == "teacher",
+                                                                      m.User.login_name.like("%zhang%"))) == 1
+
+    # 别的老师不能把已经关联的账号拿走
+    client.post("/api/auth/logout")
+    assert client.post("/api/teacher/login", json={"server": "o-test", "userId": "t-other", "password": "other-pass"}).status_code == 200
+    r = client.post("/api/teacher/sources/link", json={"server": "ds-test", "userId": "zhang-ds", "password": "ds-pass"})
+    assert r.status_code == 409
+
+    # 取消关联：至少留一个
+    client.post("/api/auth/logout")
+    client.post("/api/teacher/login", json={"server": "c-test", "userId": "t-zhang", "password": "c-pass"})
+    srcs = {x["serverCode"]: x["id"] for x in client.get("/api/teacher/sources").json()["sources"]}
+    assert client.post(f"/api/teacher/sources/{srcs['ds-test']}/unlink").status_code == 200
+    assert client.post(f"/api/teacher/sources/{srcs['c-test']}/unlink").status_code == 409

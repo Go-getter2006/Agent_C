@@ -70,6 +70,18 @@ class XClass(Base):
     fetched_at: Mapped[Dt] = _ts()
 
 
+class TeacherSource(Base):
+    """一位老师（本系统的账号）关联的 XDOJ 账号：每门课的 XDOJ 是不同的服务器，账号密码可能不同。
+
+    老师用其中任何一个账号登录，进的都是同一个本系统账号，能看到所有关联课程的班级。
+    """
+
+    __tablename__ = "teacher_sources"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    data_source_id: Mapped[int] = mapped_column(ForeignKey("data_sources.id"), primary_key=True)
+    created_at: Mapped[Dt] = _ts()
+
+
 class ClassSource(Base):
     """哪个数据源（教师账号）能看到哪个班。教师端的权限按这张表控制。"""
 

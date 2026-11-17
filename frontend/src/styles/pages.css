@@ -2392,3 +2392,16 @@
     flex: 1;
   }
 }
+
+.link-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) auto;
+  align-items: end;
+  gap: var(--sp-12);
+}
+
+@media (max-width: 767px) {
+  .link-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

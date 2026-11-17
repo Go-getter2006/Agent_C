@@ -24,7 +24,7 @@
 ## 已经实测确认的接口细节
 
 - 班级的 `classId` 可能是文本或带前导零（如 `000031`）：名单接口按 `classId` 原值筛选（`filters` 里 `field=class_id`），名单按 `user_id` 排序。
-- 登录返回 `userType`，1 是教师。教师姓名在 `GET /admin/dashboard.do` 页面的 `.user-info` 里第一个 `<small>`。
+- 登录返回 `userType`，1 是教师。C 语言和数据结构是两台 XDOJ，同一位老师的账号密码可能不同：一位老师在本系统里一个账号，关联多个 XDOJ 账号（`teacher_sources`）。教师姓名在 `GET /admin/dashboard.do` 页面的 `.user-info` 里第一个 `<small>`。
 - 提交列表里的 `language` 是对象，取 `name`；评测记录的文字结果在 `judgementText`；“未评判”表示还在评测。
 
 ## 还没确认的
