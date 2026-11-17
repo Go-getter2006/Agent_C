@@ -339,3 +339,19 @@ def test_student_login_through_xdoj(client, monkeypatch):
     monkeypatch.setattr(teacher_api, "_test_transport", httpx.MockTransport(down))
     r = client.post("/api/auth/login", json={"loginName": "2599000001", "password": "stu-xdoj-pw"})
     assert r.status_code == 502
+
+
+def test_teacher_login_checks_role_and_reads_name(client, monkeypatch):
+    """XDOJ 登录返回 userType：只有教师（1）能登记成老师；姓名从教师首页右上角读。"""
+    fx = FakeXdoj(teacher_id="t-li", password="pw")
+    fx.teacher_name = "李老师"
+    fx.student_passwords["2599000002"] = "stu-pw"
+    monkeypatch.setattr(teacher_api, "_test_transport", fx.transport())
+    with db.session_scope() as s:
+        sources.ensure_server(s, "c-test", "C 语言（测试用的假服务器）", "http://fake.test/xdoj-ssm")
+    r = client.post("/api/teacher/login", json={"server": "c-test", "userId": "2599000002", "password": "stu-pw"})
+    assert r.status_code == 403
+    with db.session_scope() as s:
+        assert s.scalar(select(m.DataSource).where(m.DataSource.teacher_user_id == "2599000002")) is None
+    r = client.post("/api/teacher/login", json={"server": "c-test", "userId": "t-li", "password": "pw"})
+    assert r.status_code == 200 and r.json()["name"] == "李老师"

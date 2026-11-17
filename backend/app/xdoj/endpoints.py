@@ -78,6 +78,13 @@ class StudentRow:
     class_id: int
 
 
+def _language(value) -> str:
+    """语言：真实接口是一个对象（{"id":..,"name":"C",...}），也兼容字符串。表里只有 32 个字符。"""
+    if isinstance(value, dict):
+        value = pick(value, "name", "languageName", "title", default="")
+    return str(value or "").strip()[:32]
+
+
 def list_students(client: XdojClient, class_id: int, alt_id: int | None = None) -> list[StudentRow]:
     """只取学号、姓名、班级。接口返回里的密码、令牌、登录 IP 在这里就丢掉，不往外传。
 
@@ -92,7 +99,7 @@ def list_students(client: XdojClient, class_id: int, alt_id: int | None = None) 
 def _students_by(client: XdojClient, filter_id: int, class_id: int) -> list[StudentRow]:
     filters = json.dumps({"groupOp": "AND", "rules": [{"field": "class_id", "op": "eq", "data": str(filter_id)}]})
     out = []
-    for raw in _paged(client, "POST", "/user/listStudents.do", {"search": "true", "filters": filters}):
+    for raw in _paged(client, "POST", "/user/listStudents.do", {"search": "true", "filters": filters}, sidx="user_id"):
         uid = pick(raw, "userId")
         if uid is None or str(uid).strip() == "":
             continue
@@ -251,7 +258,7 @@ def list_submissions_after(client: XdojClient, after_id: int, rows: int = 100) -
             contest_id=to_int(pick(r, "contestId")),
             class_id=to_int(pick(r, "classId")),
             submit_time=parse_time(pick(r, "submitTime", "createTime", "time")),
-            language=str(pick(r, "language", "languageName", default="")),
+            language=_language(pick(r, "language", "languageName", default="")),
             judgement_text=str(pick(r, "judgementStr", "judgementText", "resultStr", "result", "judgement", default="")),
             points=to_float(pick(r, "points", "score")),
         ))
@@ -277,7 +284,9 @@ def list_judges(client: XdojClient, submission_id: int) -> list[JudgeRow]:
         if jid is None:
             continue
         compile_output = pick(r, "compileOutputStr", "compileOutput")
-        result_text = str(pick(r, "resultStr", "judgementStr", "result", "judgement", default=""))
+        # 真实接口：judgementText 是文字（“正确”“答案错误”…），judgement / result 是数字。先取文字
+        result_text = str(pick(r, "judgementText", "judgementStr", "resultText", "resultStr", "result", "judgement",
+                               default=""))
         if result_text.strip() == "3":  # 已知：judgement=3 是编译错误
             result_text = "编译错误"
         out.append(JudgeRow(
@@ -305,7 +314,7 @@ def list_judge_runs(client: XdojClient, judge_id: int) -> list[RunRow]:
         rid, tid = to_int(r.get("id")), to_int(r.get("testcaseId"))
         if rid is None or tid is None:
             continue
-        out.append(RunRow(rid, tid, str(pick(r, "resultStr", "result", default="")),
+        out.append(RunRow(rid, tid, str(pick(r, "resultText", "judgementText", "resultStr", "result", default="")),
                           to_int(r.get("runTime")), to_int(r.get("memory"))))
     out.sort(key=lambda x: x.run_id)
     return out

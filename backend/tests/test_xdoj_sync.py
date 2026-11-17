@@ -266,7 +266,7 @@ def test_crash_midway_then_rerun_no_dup_no_miss(database, clock, monkeypatch):
     with pytest.raises(RuntimeError):
         sync_submissions.poll_new_submissions(ctx, backfill=True)
     with db.session_scope() as s:
-        assert store.get_state(s, 1, "max_submission_id") == str(sorted(fx.submissions)[99])
+        assert store.get_state(s, 1, "max_submission_id:0") == str(sorted(fx.submissions)[99])
     assert count(m.Submission) == 100, "崩溃的那一批整批回滚，进度没有前移"
 
     monkeypatch.setattr(sync_submissions, "_store_submission", real)
@@ -365,7 +365,7 @@ def test_two_servers_do_not_collide(database, clock):
     with db.session_scope() as s:
         assert s.get(m.Submission, (1, 537101)).user_id == "2500000001"
         assert s.get(m.Submission, (2, 537101)).user_id == "2500000003"
-        assert store.get_state(s, 1, "max_submission_id") == store.get_state(s, 2, "max_submission_id") == "537104"
+        assert store.get_state(s, 1, "max_submission_id:0") == store.get_state(s, 2, "max_submission_id:0") == "537104"
 
 
 def test_bank_problems_are_queued_not_downloaded_inline(ctx, fake):
@@ -419,3 +419,32 @@ def test_roster_filter_falls_back_to_other_class_id(ctx, fake):
         names = {e.user_id for e in s.scalars(select(m.Enrollment).where(m.Enrollment.class_id == 31)).all()}
         assert names == {"2500000001", "2500000002", "2500000003"}
         assert s.get(m.ContestClass, (1, 501, 31)) is not None
+
+
+def test_real_response_shapes_numeric_results_and_language_object(ctx, fake):
+    """真实接口：评测记录只给数字结果、语言是对象。正确的提交不能被详情同步改成“结果未知”，语言要取名字。"""
+    fake.numeric_results = True
+    fake.language_object = True
+    full_sync(ctx)
+    with db.session_scope() as s:
+        subs = s.scalars(select(m.Submission)).all()
+        assert subs and all(len(x.language) <= 32 and x.language == "C" for x in subs)
+        ac = [x for x in subs if x.judgement_text == "正确"]
+        assert ac and all(x.judgement == "AC" for x in ac)
+        assert "UNKNOWN" not in {x.judgement for x in subs}
+        for x in ac:
+            judge = s.scalar(select(m.Judge).where(m.Judge.submission_id == x.submission_id, m.Judge.is_latest.is_(True)))
+            runs = s.scalars(select(m.JudgeRun).where(m.JudgeRun.judge_id == judge.judge_id)).all()
+            assert runs and all(r.passed for r in runs)
+
+
+def test_submission_cursor_is_per_teacher(ctx, fake, clock):
+    """两位老师在同一台服务器上：一位把进度推到最后，另一位仍要从头取到自己的提交。"""
+    from dataclasses import replace
+
+    sync_submissions.poll_new_submissions(ctx)
+    n = count(m.Submission)
+    with db.session_scope() as s:
+        s.execute(text("DELETE FROM xdoj_submissions"))
+    other = replace(ctx, source_id=99)
+    assert sync_submissions.poll_new_submissions(other) == n

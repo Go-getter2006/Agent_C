@@ -5,7 +5,7 @@ import { get, post } from "../../api";
 import { Card, Empty, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { shortTime } from "../../lib/time";
-import { Code } from "./common";
+import { Code, useClasses } from "./common";
 
 interface SourceRow {
   id: number; server: string; serverCode: string; account: string; enabled: boolean; fromEnv: boolean; demo: boolean; classes: number;
@@ -30,12 +30,14 @@ function sourceState(src: SourceRow): { text: string; cls: string } {
 export default function Sources() {
   const data = useLoad(() => get<SourcesData>("/api/teacher/sources"), [], 30000);
   const [note, setNote] = useState<{ id: number; text: string } | null>(null);
+  const { reload: reloadClasses } = useClasses();
   const d = data.data;
   const sync = async (id: number) => {
     setNote(null);
     try {
       await post(`/api/teacher/sources/${id}/sync`);
       data.reload();
+      window.setTimeout(reloadClasses, 20000); // 名单一般十几秒到一两分钟同步完；之后还有定时刷新
     } catch (err) {
       setNote({ id, text: (err as Error).message });
     }

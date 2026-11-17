@@ -53,12 +53,14 @@ interface ClassesValue {
   loading: boolean;
   error: string | null;
   role: string;
+  reload: () => void;
 }
 
-const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher" });
+const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher", reload: () => undefined });
 
 export function ClassesProvider({ children }: { children: ReactNode }) {
-  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string }>("/api/teacher/classes"), []);
+  // 定时刷新：第一次登录后班级和名单是后台陆续同步进来的，页面要跟着出现
+  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string }>("/api/teacher/classes"), [], 15000);
   const [picked, setPicked] = useState<string | null>(() => {
     try {
       return window.localStorage.getItem(CLASS_KEY);
@@ -76,8 +78,9 @@ export function ClassesProvider({ children }: { children: ReactNode }) {
       /* 存不了也不影响使用 */
     }
   }, []);
-  const value = useMemo(() => ({ classes, current, pick, loading: list.loading, error: list.error, role: list.data?.role ?? "teacher" }),
-    [classes, current, pick, list.loading, list.error, list.data?.role]);
+  const value = useMemo(() => ({ classes, current, pick, loading: list.loading && !list.data, error: list.error,
+    role: list.data?.role ?? "teacher", reload: list.reload }),
+  [classes, current, pick, list.loading, list.data, list.error, list.reload]);
   return <ClassesContext.Provider value={value}>{children}</ClassesContext.Provider>;
 }
 
