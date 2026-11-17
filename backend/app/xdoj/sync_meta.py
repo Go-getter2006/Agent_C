@@ -34,6 +34,8 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
                                owner_id=c.owner_id, data_source_id=ctx.source_id, fetched_at=ctx.now()))
             else:
                 row.class_name, row.owner_id, row.fetched_at = c.class_name, c.owner_id, ctx.now()
+            if ctx.source_id is not None and s.get(m.ClassSource, (ctx.server_id, c.class_id, ctx.source_id)) is None:
+                s.add(m.ClassSource(server_id=ctx.server_id, class_id=c.class_id, data_source_id=ctx.source_id))
     ctx.bump("classes", len(classes))
 
     seen: dict[str, int] = {}

@@ -70,6 +70,15 @@ class XClass(Base):
     fetched_at: Mapped[Dt] = _ts()
 
 
+class ClassSource(Base):
+    """哪个数据源（教师账号）能看到哪个班。教师端的权限按这张表控制。"""
+
+    __tablename__ = "class_sources"
+    server_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    class_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    data_source_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+
 class Student(Base):
     __tablename__ = "students"
     user_id: Mapped[str] = mapped_column(String(32), primary_key=True)  # 学号
@@ -313,6 +322,7 @@ class User(Base):
     login_name: Mapped[str] = mapped_column(String(64), unique=True)
     student_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     display_name: Mapped[str] = mapped_column(String(64), default="")
+    data_source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 教师账号对应的数据源
     status: Mapped[str] = mapped_column(String(16), default="active")  # active / removed
     created_at: Mapped[Dt] = _ts()
     last_login_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
@@ -630,3 +640,31 @@ class SkillEvidence(Base):
         UniqueConstraint("source_key", "skill_code", "success"),
         Index("ix_evidence_user_skill", "user_id", "skill_code"),
     )
+
+
+# ============================================================ 图模型（只在教师端显示）
+class GraphPosterior(Base):
+    """贝叶斯网络反推出的“会”的概率。每天夜里全图更新一次。学生端和智能体都不读这张表。"""
+
+    __tablename__ = "graph_posteriors"
+    user_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    skill_code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    p: Mapped[float] = mapped_column(Float)
+    has_evidence: Mapped[bool] = mapped_column(Boolean, default=False)
+    model_version: Mapped[str] = mapped_column(String(24), default="")
+    updated_at: Mapped[Dt] = _ts()
+
+
+class PredictionLog(Base):
+    """两个模型各自对“下一次能不能独立做对”的预测，和实际结果。用来按周比较谁猜得准。"""
+
+    __tablename__ = "prediction_log"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
+    skill_code: Mapped[str] = mapped_column(String(16))
+    source_key: Mapped[str] = mapped_column(String(96), unique=True)  # 哪一次“新题的第一次提交”
+    ts: Mapped[Dt] = _ts()
+    outcome: Mapped[bool] = mapped_column(Boolean)  # 这次是不是一次就独立做对了
+    p_simple: Mapped[float] = mapped_column(Float)
+    p_graph: Mapped[float] = mapped_column(Float)
+    model_version: Mapped[str] = mapped_column(String(24), default="")

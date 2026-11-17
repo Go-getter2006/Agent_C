@@ -55,7 +55,7 @@ def build_contexts() -> list[SyncContext]:
     with db.session_scope() as s:
         ensure_env_source(s)
         rows = s.execute(select(m.DataSource, m.Server).join(m.Server, m.Server.id == m.DataSource.server_id)
-                         .where(m.DataSource.enabled.is_(True))).all()
+                         .where(m.DataSource.enabled.is_(True), m.Server.code != "demo")).all()
         for source, server in rows:
             try:
                 password = password_of(source)

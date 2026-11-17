@@ -117,8 +117,12 @@ def daemon_cmd() -> None:
     _logging()
     from .xdoj.daemon import Daemon
 
+    from . import graphmodel
+
     db.create_all()
-    Daemon(_contexts(), post_process=pipeline.local_task).run_forever()
+    # 还没有数据源也能启动：教师在网页上登记后，一分钟内会被发现
+    Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
+           nightly=graphmodel.nightly).run_forever()
 
 
 @cli.command("assemble")
@@ -153,6 +157,36 @@ def stats() -> None:
             typer.echo(f"\n服务器 {server.id}（{server.name}）  进度 H={store.get_state(s, server.id, 'max_submission_id', '0')}"
                        f"  轮询档位 {tier[0]}/{tier[1]} 秒  最近请求成功率 {rate}")
             typer.echo(f"  队列积压 {json.dumps(store.queue_backlog(s, server.id), ensure_ascii=False)}")
+
+
+@cli.command("graph-update")
+def graph_update() -> None:
+    """图模型全图更新一次，并补记预测（平时由主循环每天夜里做）。"""
+    from . import graphmodel
+
+    typer.echo(json.dumps(graphmodel.nightly(), ensure_ascii=False))
+
+
+@cli.command("server-add")
+def server_add(code: str, name: str, base_url: str, course: str = "C") -> None:
+    """登记一台 XDOJ 服务器（教师登录时可以选它）。例：server-add c "C 语言" http://地址/xdoj-ssm"""
+    db.create_all()
+    with db.session_scope() as s:
+        server = sources.ensure_server(s, code, name, base_url.rstrip("/"), course)
+        typer.echo(f"服务器 {server.id}：{name}")
+
+
+@cli.command("admin-add")
+def admin_add(login_name: str) -> None:
+    """建一个管理员账号（开发用登录方式下，用统一口令登录）。"""
+    db.create_all()
+    with db.session_scope() as s:
+        user = s.scalar(select(m.User).where(m.User.login_name == login_name))
+        if user is None:
+            s.add(m.User(role="admin", login_name=login_name, display_name="管理员"))
+        else:
+            user.role = "admin"
+    typer.echo(f"管理员 {login_name} 已就绪")
 
 
 @cli.command("quiz-verify")

@@ -45,9 +45,13 @@ def poll_tier(now: dt.datetime, last_new: dt.datetime | None, last_trigger: dt.d
 
 class Daemon:
     def __init__(self, contexts: list[SyncContext], *, sleep: Callable[[float], None] = time.sleep,
-                 post_process: Callable[[int, str, int], None] | None = None):
+                 post_process: Callable[[int, str, int], None] | None = None,
+                 reload: Callable[[], list[SyncContext]] | None = None,
+                 nightly: Callable[[], object] | None = None):
         self.contexts = contexts
         self._sleep = sleep
+        self._reload = reload      # 重新读一遍数据源：教师新登记的账号要能被发现
+        self._nightly = nightly    # 每天夜里做一次的事（图模型全图更新）
         # 本地任务（标注、学情证据）的处理函数：(server_id, kind, target_id)
         self._post_process = post_process
         self.poll_failures: dict[int, int] = {c.server_id: 0 for c in contexts}
@@ -212,6 +216,17 @@ class Daemon:
         if last_meta_date != local.date().isoformat() and (not last_meta_date or local.hour >= config.SYNC["meta_hour"]):
             self._run_meta(ctx)
             return True
+        if self._nightly is not None and ctx is self.contexts[0]:
+            with db.session_scope() as s:
+                done = store.get_state(s, 0, "last_nightly_date")
+            if done != local.date().isoformat() and local.hour >= config.SYNC["meta_hour"]:
+                try:
+                    self._nightly()
+                except Exception:
+                    log.exception("夜间任务出错")
+                with db.session_scope() as s:
+                    store.set_state(s, 0, "last_nightly_date", local.date().isoformat())
+                return True
         return False
 
     # ------------------------------------------------------------ 主循环
@@ -245,8 +260,19 @@ class Daemon:
     def run_forever(self) -> None:
         self.startup()
         log.info("主循环启动，数据源 %d 个", len(self.contexts))
+        last_reload = time.monotonic()
         while True:
-            did = self.step()
+            if self._reload is not None and time.monotonic() - last_reload >= 60:
+                last_reload = time.monotonic()
+                known = {c.source_id for c in self.contexts}
+                for ctx in self._reload():
+                    if ctx.source_id not in known:
+                        self.contexts.append(ctx)
+                        self.poll_failures[ctx.server_id] = 0
+                        log.info("发现新的数据源 %s", ctx.source_id)
+                    else:
+                        ctx.client.close()
+            did = self.step() if self.contexts else None
             if did is None:
                 self._sleep(config.SYNC["idle_sleep_seconds"])
 

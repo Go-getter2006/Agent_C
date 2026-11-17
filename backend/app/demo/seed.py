@@ -82,7 +82,11 @@ def ensure_demo_server(s) -> m.Server:
                           base_url="http://demo.invalid/xdoj-ssm")
         s.add(server)
         s.flush()
-        s.add(m.DataSource(server_id=server.id, teacher_user_id=c.TEACHER, from_env=False, enabled=False))
+        source = m.DataSource(server_id=server.id, teacher_user_id=c.TEACHER, from_env=False, enabled=False)
+        s.add(source)
+        s.flush()
+        # 演示用的教师账号：用开发口令登录，名下是演示的两个班
+        s.add(m.User(role="teacher", login_name=c.TEACHER, display_name="演示教师", data_source_id=source.id))
     return server
 
 
@@ -91,6 +95,7 @@ def seed(now: dt.datetime | None = None, with_story: bool = True, verify_quiz: b
     db.create_all()
     with db.session_scope() as s:
         server_id = ensure_demo_server(s).id
+        source_id = s.scalar(select(m.DataSource.id).where(m.DataSource.server_id == server_id))
         if s.scalar(select(m.Submission.submission_id).where(m.Submission.server_id == server_id).limit(1)):
             return {"skipped": "演示数据已经在库里了"}
     fx, extra = build_fake(now)
@@ -100,7 +105,7 @@ def seed(now: dt.datetime | None = None, with_story: bool = True, verify_quiz: b
     limiter = RateLimiter(0.5, clock=lambda: tick["t"], sleep=lambda sec: tick.__setitem__("t", tick["t"] + sec))
     client = XdojClient("http://demo.invalid/xdoj-ssm", fx.teacher_id, fx.password, limiter=limiter,
                         transport=fx.transport(), sleep=lambda sec: None)
-    ctx = SyncContext(server_id=server_id, client=client, term="演示学期", clock=lambda: now)
+    ctx = SyncContext(server_id=server_id, client=client, source_id=source_id, term="演示学期", clock=lambda: now)
     sync_meta.sync_metadata(ctx)
     sync_submissions.poll_new_submissions(ctx, backfill=True)
     Daemon([ctx]).drain()
@@ -120,6 +125,9 @@ def seed(now: dt.datetime | None = None, with_story: bool = True, verify_quiz: b
                 for item in s.scalars(select(m.QuizItem)).all():
                     item.verified = True
         _run_timeline(server_id, now, with_story)
+        from .. import graphmodel
+
+        graphmodel.nightly()  # 图模型全图更新一次，教师端才有东西可看
     finally:
         llm.set_backend(llm_was[0])
         config.DEEPSEEK_API_KEY = llm_was[1]
