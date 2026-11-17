@@ -1,6 +1,6 @@
-"""学生端的学情页：一页四块。只统计和展示这个学生可见的题。
+"""学生端的学情页：概况、接下来做什么、知识点地图、常见错误、做题情况。只统计这个学生可见的题。
 
-不返回：概率数值、技能（细）、内部编码、知识点图、班级排名。
+不返回：概率数值、技能（细）、内部编码、知识点之间的连线、跨课程的内容、班级排名。
 """
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import catalog, db, mastery, quiz
+from . import catalog, db, mastery, review
 from . import models as m
 from .labeling.labeler import current_problem_label
-from .taxonomy import (KNOWLEDGE_POINTS, LEVEL_NONE, LEVEL_SEGMENTS, LEVEL_WEAK, TOPICS, error_name, kp_of_skill)
+from .taxonomy import (KNOWLEDGE_POINTS, LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_SEGMENTS, LEVEL_WEAK, TOPICS,
+                       course_of, error_name, kp_of_skill)
 
 
 def level_view(level: str) -> dict:
@@ -37,6 +38,8 @@ class Snapshot:
             self.skills[key] = ([label.primary_skill] + list(label.secondary_skills or [])) if label else []
             self.subs[key] = catalog.user_submissions(s, user_id, *key)
         self.kp = mastery.kp_states(s, user_id)
+        courses = {s.get(m.Server, sid).course for sid, _ in self.visible if s.get(m.Server, sid) is not None}
+        self.course = "D" if courses == {"D"} else "C"
         self.stuck = s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id == user_id)
                                .order_by(m.StuckPoint.id)).all()
 
@@ -69,30 +72,36 @@ class Snapshot:
 
 
 def knowledge_block(snap: Snapshot) -> list[dict]:
-    """知识点掌握：粗知识点，每个一档，加一句依据和“去练一题”。按主题分组。"""
+    """知识点地图：本课程全部知识点按主题排开，每个一档，加一句依据和“去练一题”。
+
+    作业还没涉及的知识点也列出来（covered=False），让学生看到这门课的全貌；不显示知识点之间的连线和概率。
+    """
     kps: dict[str, list] = {}
     for key in snap.info:
         for kp in snap.kps_of(key):
             kps.setdefault(kp, []).append(key)
+    course = snap.course
     groups: dict[str, list[dict]] = {}
-    for kp in sorted(kps):
-        keys = kps[kp]
+    for kp in sorted(k for k in KNOWLEDGE_POINTS if course_of(k) == course):
+        keys = kps.get(kp, [])
         tried = [k for k in keys if snap.subs.get(k)]
         first = sum(1 for k in tried if snap.first_try(k))
         stuck = sum(1 for p in snap.stuck if kp_of_skill(p.skill_code) == kp)
         state = snap.kp.get(kp)
         level = state.level if state else LEVEL_NONE
-        if not tried:
-            basis = "还没有做过这类题"
+        if not keys:
+            basis = "作业里还没有这类题"
+        elif not tried:
+            basis = f"作业里有 {len(keys)} 道，还没有做"
         elif level == LEVEL_NONE:
             basis = f"做过 {len(tried)} 题，还不够判断"
         else:
             basis = f"做过 {len(tried)} 题，{first} 题一次通过"
             if stuck:
                 basis += f"，卡住过 {stuck} 次"
-        practice = snap.practice_for(kp)
+        practice = snap.practice_for(kp) if keys else None
         groups.setdefault(TOPICS.get(kp[:3], ""), []).append({
-            "name": KNOWLEDGE_POINTS.get(kp, ""), **level_view(level), "basis": basis,
+            "name": KNOWLEDGE_POINTS.get(kp, ""), **level_view(level), "basis": basis, "covered": bool(keys),
             "practice": snap.problem_view(practice) if practice else None})
     return [{"topic": topic, "items": items} for topic, items in groups.items()]
 
@@ -155,11 +164,11 @@ def activity_block(snap: Snapshot) -> dict:
     tried = [k for k in snap.info if snap.subs.get(k)]
     first = sum(1 for k in tried if snap.first_try(k))
     total_subs = sum(len(snap.subs[k]) for k in tried)
-    # 按周：本周一 0 点起算，往前共 4 周
+    # 按周：本周一 0 点起算，往前共 8 周（旧的在前）
     local = snap.now.astimezone(db.BEIJING)
     monday = (local - dt.timedelta(days=local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     weeks = []
-    for i in range(4):
+    for i in range(7, -1, -1):
         start, end = monday - dt.timedelta(weeks=i), monday - dt.timedelta(weeks=i - 1)
         n_subs = n_pass = 0
         for k in tried:
@@ -168,8 +177,8 @@ def activity_block(snap: Snapshot) -> dict:
             first_ac = next((x for x in subs if x.judgement == "AC"), None)
             if first_ac is not None and first_ac.submit_time and start <= first_ac.submit_time < end:
                 n_pass += 1
-        label = ["本周", "上周", "两周前", "三周前"][i]
-        weeks.append({"label": label, "submissions": n_subs, "passed": n_pass})
+        label = "本周" if i == 0 else "上周" if i == 1 else f"{start.month}/{start.day}"
+        weeks.append({"label": label, "start": start.date().isoformat(), "submissions": n_subs, "passed": n_pass})
     return {
         "homeworks": homeworks,
         "tried": len(tried),
@@ -195,22 +204,14 @@ def next_block(snap: Snapshot, errors: list[dict]) -> list[dict]:
     for sp in [p for p in snap.stuck if p.stubborn]:
         kp = kp_of_skill(sp.skill_code)
         add_problem(snap.practice_for(kp, used), f"“{KNOWLEDGE_POINTS.get(kp, '')}”已经卡住好几次了，建议再练一题，也可以找老师当面讲一遍。")
-    due = snap.s.scalars(select(m.RevisitItem).where(
-        m.RevisitItem.user_id == snap.user_id, m.RevisitItem.status == "due", m.RevisitItem.due_at <= snap.now
-    ).order_by(m.RevisitItem.due_at)).all()
-    seen_skill: set[str] = set()
-    for rv in due:
-        if len(out) >= 3 or rv.skill_code in seen_skill:
-            continue
-        seen_skill.add(rv.skill_code)
-        if not quiz.can_start(snap.s, snap.user_id, rv.skill_code, snap.now):
-            continue
+    for rv in review.due_items(snap.s, snap.user_id, snap.now):
+        if len(out) >= 3:
+            break
         kp = KNOWLEDGE_POINTS.get(kp_of_skill(rv.skill_code), "")
-        origin = next((p for p in reversed(snap.stuck) if p.skill_code == rv.skill_code and p.problem_id is not None
-                       and (p.server_id, p.problem_id) in snap.info), None)
-        where = f"你在{snap.info[(origin.server_id, origin.problem_id)].ref}卡过。" if origin else ""
-        out.append({"kind": "quiz", "revisitId": rv.id, "title": f"回访小题：{kp}",
-                    "reason": f"{where}做一道小题，看看现在是不是真的会了。"})
+        ref = review._origin_ref(snap.s, snap.user_id, rv)
+        where = f"你在「{ref['title']}」（{ref['brief']}）里{review.ORIGIN_TEXT.get(rv.origin, '卡过')}。" if ref else ""
+        out.append({"kind": "review", "reviewId": rv.id, "title": f"复习：{kp}",
+                    "reason": f"{where}现在记得大约还有 {round(100 * review.retention(rv, snap.now))}%，做一道小题巩固一下。"})
     for row in errors:
         if row["status"] == "已改正":
             continue
@@ -230,7 +231,19 @@ def build(s: Session, user_id: str) -> dict:
     for row in errors:
         row.pop("_code", None)
         row.pop("_key", None)
-    return {"knowledge": knowledge_block(snap), "errors": errors, "activity": activity_block(snap), "next": nxt}
+    activity = activity_block(snap)
+    weeks = activity["weeks"]
+    rv = review.summary(s, user_id, snap.now)
+    levels = [state.level for state in snap.kp.values()]
+    return {
+        "summary": {
+            "passed": sum(1 for k in snap.info if snap.passed(k)), "total": len(snap.info),
+            "firstTryRate": activity["firstTryRate"], "avgSubmissions": activity["avgSubmissions"],
+            "thisWeek": weeks[-1]["submissions"], "lastWeek": weeks[-2]["submissions"],
+            "reviewDue": len(rv["due"]), "reviewActive": rv["active"],
+            "levels": {lv: levels.count(lv) for lv in (LEVEL_MASTERED, LEVEL_BASIC, LEVEL_WEAK)},
+        },
+        "knowledge": knowledge_block(snap), "errors": errors, "activity": activity, "next": nxt}
 
 
 def problem_knowledge(s: Session, user_id: str, server_id: int, problem_id: int, limit: int = 4) -> list[dict]:
@@ -244,32 +257,3 @@ def problem_knowledge(s: Session, user_id: str, server_id: int, problem_id: int,
         state = states.get(kp)
         out.append({"name": KNOWLEDGE_POINTS.get(kp, ""), **level_view(state.level if state else LEVEL_NONE)})
     return out[:limit]
-
-
-def start_revisit(s: Session, user_id: str, revisit_id: int) -> m.ChatMessage | None:
-    """做一道到期的回访题：出在不绑定题目的线程里。"""
-    rv = s.get(m.RevisitItem, revisit_id)
-    now = db.now()
-    if rv is None or rv.user_id != user_id or rv.status != "due" or rv.due_at > now:
-        return None
-    if rv.attempt_id is not None:
-        return s.scalar(select(m.ChatMessage).where(m.ChatMessage.quiz_attempt_id == rv.attempt_id))
-    if not quiz.can_start(s, user_id, rv.skill_code, now):
-        return None
-    used = set(s.scalars(select(m.QuizItem.scene).join(m.QuizAttempt, m.QuizAttempt.item_id == m.QuizItem.id).where(
-        m.QuizAttempt.user_id == user_id, m.QuizAttempt.skill_code == rv.skill_code)).all())
-    item = quiz.choose_item(s, user_id, rv.skill_code, exclude_scenes=used if rv.stage == "variant" else None)
-    if item is None:
-        rv.status = "dropped"  # 题库里还没有这个技能的小题
-        return None
-    origin = s.scalars(select(m.StuckPoint).where(
-        m.StuckPoint.user_id == user_id, m.StuckPoint.skill_code == rv.skill_code).order_by(m.StuckPoint.id.desc())).first()
-    lead = "来一道回访小题："
-    if rv.stage == "variant":
-        lead = "再来一道，换了个场景："
-    elif origin is not None and origin.problem_id is not None and catalog.is_visible(s, user_id, origin.server_id, origin.problem_id):
-        info = catalog.problem_info(s, origin.server_id, origin.problem_id)
-        lead = f"前几天你在{info.ref}卡过。回忆一下，做这道小题："
-    msg = quiz.start(s, user_id, item, "recall" if rv.stage == "recall" else "revisit", lead, None, None, None, now)
-    rv.attempt_id = msg.quiz_attempt_id
-    return msg

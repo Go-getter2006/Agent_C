@@ -94,7 +94,7 @@ def infer(evidence: dict[str, tuple[float, float]], rng: random.Random | None = 
 
 def evidence_of(s: Session, user_id: str, at: dt.datetime | None = None) -> dict[str, tuple[float, float]]:
     """和简单算法同一批证据、同样的权重和遗忘。"""
-    states = mastery.skill_states(s, user_id, at=at)
+    states = mastery.skill_states(s, user_id, at=at, model="v1")
     return {code: (st.s, st.f) for code, st in states.items() if st.s + st.f > 0}
 
 
@@ -127,11 +127,13 @@ def log_predictions(s: Session, user_id: str) -> int:
         if label is None:
             continue
         before = sub.submit_time - dt.timedelta(seconds=1)
-        simple = mastery.skill_states(s, user_id, at=before).get(label.primary_skill)
+        simple = mastery.skill_states(s, user_id, at=before, model="v1").get(label.primary_skill)
+        v2 = mastery.skill_states(s, user_id, at=before, model="v2", with_predicted=True).get(label.primary_skill)
         graph = infer(evidence_of(s, user_id, at=before) | ({} if simple else {label.primary_skill: (0.0, 0.0)}))
         s.add(m.PredictionLog(
             user_id=user_id, skill_code=label.primary_skill, source_key=source_key, ts=sub.submit_time,
             outcome=sub.judgement == "AC", p_simple=round(simple.p if simple else 0.5, 4),
+            p_v2=round(v2.p if v2 else 0.5, 4),
             p_graph=round(graph.get(label.primary_skill, config.GRAPH["root_prior"]), 4),
             model_version=config.GRAPH_VERSION))
         n += 1
@@ -213,6 +215,8 @@ def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6) -> list[dic
         brier = lambda get: round(sum((get(r) - (1.0 if r.outcome else 0.0)) ** 2 for r in items) / n, 3)  # noqa: E731
         start = monday - dt.timedelta(weeks=idx)
         out.append({"weekStart": start.date().isoformat(), "n": n,
-                    "simpleAccuracy": acc(lambda r: r.p_simple), "graphAccuracy": acc(lambda r: r.p_graph),
-                    "simpleBrier": brier(lambda r: r.p_simple), "graphBrier": brier(lambda r: r.p_graph)})
+                    "simpleAccuracy": acc(lambda r: r.p_simple), "v2Accuracy": acc(lambda r: r.p_v2),
+                    "graphAccuracy": acc(lambda r: r.p_graph),
+                    "simpleBrier": brier(lambda r: r.p_simple), "v2Brier": brier(lambda r: r.p_v2),
+                    "graphBrier": brier(lambda r: r.p_graph)})
     return out

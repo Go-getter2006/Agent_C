@@ -49,10 +49,14 @@ def load_bank(s: Session) -> int:
 
 
 def build_program(template: str, code: str) -> tuple[str, int]:
-    """把显示的代码放回模板。返回 (完整程序, 显示的代码在程序里前面有几行)。"""
+    """把显示的代码放回模板。返回 (完整程序, 显示的代码在程序里前面有几行)。
+
+    占位符那一行前面的空白就是插回去的缩进；占位符顶格写的（题库里的题）按 4 个空格缩进。
+    """
     lines = template.split("\n")
     idx = next(i for i, line in enumerate(lines) if PLACEHOLDER in line)
-    body = ["    " + line if line.strip() else line for line in code.split("\n")]
+    lead = lines[idx][:len(lines[idx]) - len(lines[idx].lstrip())] or "    "
+    body = [lead + line if line.strip() else line for line in code.split("\n")]
     return "\n".join(lines[:idx] + body + lines[idx + 1:]), idx
 
 
@@ -167,7 +171,8 @@ def choose_item(s: Session, user_id: str, skill_code: str, rng: random.Random | 
     """选一道这个技能的小题。按最近 10 道控制“正确代码”占 40%~50%，具体哪道随机。"""
     rng = rng or _rng
     items = s.scalars(select(m.QuizItem).where(
-        m.QuizItem.skill_code == skill_code, m.QuizItem.verified.is_(True))).all()
+        m.QuizItem.skill_code == skill_code, m.QuizItem.verified.is_(True),
+        m.QuizItem.owner_user_id.is_(None))).all()   # 专门给别人出的题不拿来用
     if not items:
         return None
     recent = s.execute(
@@ -185,15 +190,23 @@ def choose_item(s: Session, user_id: str, skill_code: str, rng: random.Random | 
     return rng.choice(pool)
 
 
+def new_attempt(s: Session, user_id: str, item: m.QuizItem, reason: str, at: dt.datetime | None = None,
+                review_item_id: int | None = None) -> m.QuizAttempt:
+    """开始一道小题，不发对话消息（复习页里直接做）。"""
+    attempt = m.QuizAttempt(user_id=user_id, item_id=item.id, quiz_type=item.quiz_type, skill_code=item.skill_code,
+                            reason=reason, state="confidence", created_at=at or db.now(),
+                            review_item_id=review_item_id)
+    s.add(attempt)
+    s.flush()
+    return attempt
+
+
 def start(s: Session, user_id: str, item: m.QuizItem, reason: str, lead: str,
           server_id: int | None = None, problem_id: int | None = None, round_id: int | None = None,
           at: dt.datetime | None = None) -> m.ChatMessage:
-    """出一道小题：一条消息只放一道。"""
+    """在对话里出一道小题：一条消息只放一道。"""
     at = at or db.now()
-    attempt = m.QuizAttempt(user_id=user_id, item_id=item.id, quiz_type=item.quiz_type, skill_code=item.skill_code,
-                            reason=reason, state="confidence", created_at=at)
-    s.add(attempt)
-    s.flush()
+    attempt = new_attempt(s, user_id, item, reason, at)
     msg = m.ChatMessage(user_id=user_id, round_id=round_id, server_id=server_id, problem_id=problem_id,
                         role="agent", kind="quiz", quiz_attempt_id=attempt.id, created_at=at,
                         content={"blocks": [{"t": "p", "text": lead}] if lead else []})
@@ -237,15 +250,10 @@ def _finish(s: Session, attempt: m.QuizAttempt, item: m.QuizItem, outcome: str) 
                 and prev.item_id != attempt.item_id):
             mastery.record_streak_bonus(s, attempt.user_id, attempt.skill_code, f"streak:{attempt.id}",
                                         attempt.finished_at)
-    # 回访队列里对应的那一条
-    for rv in s.scalars(select(m.RevisitItem).where(m.RevisitItem.attempt_id == attempt.id)).all():
-        rv.status = "done"
-        if not attempt.correct:  # 答错了：之后几天再安排一次
-            s.add(m.RevisitItem(user_id=attempt.user_id, skill_code=attempt.skill_code, stage=rv.stage,
-                                due_at=db.now() + dt.timedelta(days=2)))
-        elif rv.stage == "recall":  # 回忆题答对了：再出一道换了场景的变式题
-            s.add(m.RevisitItem(user_id=attempt.user_id, skill_code=attempt.skill_code, stage="variant",
-                                due_at=db.now()))
+    # 复习：更新记忆半衰期、安排下一次；不是复习题但答错了、或没把握却答对，就加进复习
+    from . import review
+
+    review.on_quiz_result(s, attempt)
 
 
 def set_confidence(s: Session, attempt: m.QuizAttempt, value: str, elapsed_ms: int | None) -> None:
@@ -329,15 +337,20 @@ _HEADLINES = {
 def view(s: Session, attempt: m.QuizAttempt) -> dict:
     item = s.get(m.QuizItem, attempt.item_id)
     runs = list(attempt.runs or [])
+    start_line = item.start_line or 1
     out: dict = {
         "attemptId": attempt.id,
         "stem": item.stem,
         "caption": item.caption,
         "code": item.shown_code.split("\n"),
+        "startLine": start_line,
         "state": attempt.state,
         "confidence": attempt.confidence or None,
         "judged": None if attempt.judged_has_bug is None else ("bug" if attempt.judged_has_bug else "ok"),
     }
+    mark = (item.origin or {}).get("mark_line")
+    if item.quiz_type == "JUDGE" and mark:   # 判断题问的是“改成这样还对吗”：标出改动的那一行（找错题不标）
+        out["mark"] = [start_line + mark - 1]
     if attempt.state == "edit":
         order = list(range(len(item.choices or [])))
         random.Random(attempt.id).shuffle(order)
@@ -360,8 +373,8 @@ def view(s: Session, attempt: m.QuizAttempt) -> dict:
             # 没做对：指出错在哪一行，给出正确改法
             fix_lines = item.standard_fix.split("\n")
             fixed, _n = changed_lines(item.shown_code, item.standard_fix)
-            result["bugLine"] = item.bug_line
-            result["fix"] = {"lines": fix_lines, "mark": fixed}
+            result["bugLine"] = (start_line + item.bug_line - 1) if item.bug_line else None
+            result["fix"] = {"lines": fix_lines, "mark": [start_line + x - 1 for x in fixed], "start": start_line}
         if outcome == "wrong_fix" and runs:
             last_fail = next((r for r in reversed(runs) if r["kind"] == "fail"), None)
             if last_fail:

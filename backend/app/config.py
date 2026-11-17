@@ -147,6 +147,25 @@ MASTERY = {
     "secondary_skill_factor": 1.0,
 }
 
+# 学生端、智能体、复习安排用哪个版本：v1 是附件一第 8 节原样；v2 见 app/mastery.py 开头的说明
+MASTERY_MODEL = _env("MASTERY_MODEL", "v2")
+MASTERY_V2 = {
+    "prior_strength": 1.0,      # 图先验的强度（伪计数）
+    "half_life_base": 35.0,     # 证据半衰期的起点（天），和 v1 的 λ=0.98 差不多
+    "half_life_growth": 1.4,    # 每多一天间隔开的独立成功乘它；每次失败除以它
+    "half_life_min": 10.0,
+    "half_life_max": 240.0,
+    "min_raw": 0.5,             # 至少有这么多（不衰减的）证据才定档
+    "weak_below": 0.6,          # 有失败证据、而且估计低于它，才算待加强
+    "mastered_lower": 0.6,      # 80% 区间的下限不低于它，才算已掌握
+    "min_current_success": 0.3, # 只有成功证据时：衰减后还剩这么多，才算基本掌握；否则算还没练到（太久没练）
+    # 雷同：和班里更早的通过代码规范化后一样，这种写法少见（不到这个比例的人这样写），时间挨得近
+    "copy_rare_share": 0.3,
+    "copy_window_hours": 6.0,
+    "copy_min_tokens": 40,
+    "copy_reliability": 0.4,
+}
+
 # ---------------------------------------------------------------- 小题（附件一第 6 节）
 QUIZ = {
     "daily_limit": _env_int("QUIZ_DAILY_LIMIT", 3),  # 待定
@@ -159,6 +178,23 @@ QUIZ = {
     "pass_after_submissions": 5,
     "careless_same_choice_run": 10,
     "careless_min_ms": 1000,
+}
+
+# ---------------------------------------------------------------- 复习（回访），见 app/review.py
+REVIEW = {
+    "target_retention": 0.75,      # 预测的记忆保持降到这么多时到期
+    "initial_half_life": {          # 刚进来时的记忆半衰期（天）：第一次复习大约在 0.4 倍半衰期之后
+        "stuck": 2.5, "heavy_help": 2.5, "recurrence": 2.5, "quiz_wrong": 2.5, "lucky": 5.0,
+    },
+    "growth": {"很有把握": 2.5, "一半": 2.0, "没把握": 1.5, "second_try": 1.3,
+               "practice_first_try": 2.5, "practice_fixed": 1.5},
+    "min_half_life": 1.2,
+    "max_half_life": 120.0,
+    "min_gap_days": 0.75,           # 两次复习至少隔这么久
+    "spacing_hours": 12,            # 隔不到这么久的成功不算“间隔开的”，不加长半衰期
+    "graduate_streak": 3,
+    "graduate_half_life": 20.0,
+    "daily_limit": 2,
 }
 
 # ---------------------------------------------------------------- 对话（附件一第 5 节）

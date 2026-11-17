@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import accounts, catalog, db, llm, progress, quiz
+from .. import accounts, catalog, db, llm, progress, quiz, review
 from .. import models as m
 from ..chat import workflow
 from ..taxonomy import UI_EVENTS
@@ -294,12 +294,32 @@ def progress_page(user: m.User = Depends(student), s: Session = Depends(get_sess
     return progress.build(s, user.student_id)
 
 
-@router.post("/revisits/{revisit_id}/start")
-def revisit_start(revisit_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    msg = progress.start_revisit(s, user.student_id, revisit_id)
-    if msg is None:
-        raise HTTPException(status_code=409, detail="今天的小题已经做够了，明天再来。")
-    return {"thread": "general", "messageId": msg.id}
+# ------------------------------------------------------------ 复习
+@router.get("/review")
+def review_page(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    s.add(m.UiEvent(user_id=user.student_id, kind="open_review", target=""))
+    out = review.summary(s, user.student_id)
+    current = next((d for d in out["due"] if d["pending"]), None)
+    if current is not None:
+        item = s.get(m.ReviewItem, current["id"])
+        attempt = s.get(m.QuizAttempt, item.attempt_id) if item and item.attempt_id else None
+        if attempt is not None:
+            q = s.get(m.QuizItem, attempt.item_id)
+            out["current"] = {"itemId": item.id, "lead": review.lead_for(s, user.student_id, item, q),
+                              "quiz": quiz.view(s, attempt)}
+    return out
+
+
+@router.post("/review/{item_id}/start")
+def review_start(item_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    item, attempt = review.start(s, user.student_id, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="没有这个复习项。")
+    if attempt is None:
+        raise HTTPException(status_code=409, detail="这一项今天不用复习，或者今天的复习已经做够了。")
+    s.add(m.UiEvent(user_id=user.student_id, kind="review_start", target=str(item_id)))
+    q = s.get(m.QuizItem, attempt.item_id)
+    return {"itemId": item.id, "lead": review.lead_for(s, user.student_id, item, q), "quiz": quiz.view(s, attempt)}
 
 
 # ------------------------------------------------------------ 其他
@@ -332,6 +352,4 @@ def status(user: m.User = Depends(student), s: Session = Depends(get_session)) -
         if failures >= 3 or stale:
             worst["ok"] = False
             worst["dataTime"] = last_ok.isoformat() if last_ok else None
-    quizzes = s.scalars(select(m.RevisitItem).where(
-        m.RevisitItem.user_id == user.student_id, m.RevisitItem.status == "due", m.RevisitItem.due_at <= db.now())).all()
-    return {"xdoj": worst, "dueRevisits": len({q.skill_code for q in quizzes}), "llm": llm.available()}
+    return {"xdoj": worst, "dueReviews": len(review.due_items(s, user.student_id)), "llm": llm.available()}

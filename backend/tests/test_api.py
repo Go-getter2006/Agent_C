@@ -130,7 +130,7 @@ def test_chat_roundtrip_and_buttons(client, demo):
     assert client.post("/api/events", json={"kind": "whatever"}).status_code == 400
     with db.session_scope() as s:
         kinds = [e.kind for e in s.scalars(select(m.UiEvent)).all()]
-        assert kinds == ["help_think", "copy_code"]
+        assert kinds == ["login", "help_think", "copy_code"]
         assert s.scalars(select(m.Trigger).where(m.Trigger.kind == "student_active")).first() is not None
 
 
@@ -144,40 +144,55 @@ def test_ask_why_from_submission(client, demo):
     assert code["caption"].startswith("你的第 2 次提交") and out[-1]["actions"] == ["think", "hint", "tell"]
 
 
-def test_quiz_flow_over_api(client, demo):
+def test_review_flow_over_api(client, demo):
     login(client)
-    start = client.post("/api/revisits/1/start")
-    assert start.status_code == 200 and start.json()["thread"] == "general"
-    msgs = client.get("/api/threads/general").json()["messages"]
-    q = msgs[-1]["quiz"]
-    assert msgs[-1]["kind"] == "quiz" and "「阶乘求和」（输入 n，输出 1! 到 n! 的和）" in msgs[-1]["blocks"][0]["text"]
-    assert q["state"] == "confidence" and set(q) == {"attemptId", "stem", "caption", "code", "state", "confidence", "judged"}
+    page = client.get("/api/review").json()
+    assert [d["title"] for d in page["due"]] == ["整型与取值范围"] and page["due"][0]["dueNow"]
+    due = page["due"][0]
+    assert due["why"] == "卡住过" and due["origin"]["title"] == "阶乘求和" and 0 <= due["retention"] < 0.5
+    assert "C02" not in str(page) and "skill" not in str(page).lower()
+    up = [u["title"] for u in page["upcoming"]]
+    assert "最值、求和、统计" in up
+    r = client.post(f"/api/review/{due['id']}/start")
+    assert r.status_code == 200
+    body = r.json()
+    q = body["quiz"]
+    assert body["lead"] and q["state"] == "confidence"
+    assert set(q) >= {"attemptId", "stem", "caption", "code", "state", "startLine"}
+    assert client.post(f"/api/review/{due['id']}/start").json()["quiz"]["attemptId"] == q["attemptId"]  # 不重复出题
     aid = q["attemptId"]
     assert client.post(f"/api/quiz/{aid}/judge", json={"hasBug": True}).json()["state"] == "confidence"
     q = client.post(f"/api/quiz/{aid}/confidence", json={"value": "很有把握", "elapsedMs": 2100}).json()
     assert q["state"] == "judge"
     with db.session_scope() as s:
         item = s.get(m.QuizItem, s.get(m.QuizAttempt, aid).item_id)
-        has_bug, fix = item.has_bug, item.standard_fix
+        has_bug, fix, owner = item.has_bug, item.standard_fix, item.owner_user_id
+        assert owner in (UID, None) and item.verified   # 他没通过过用到这个技能的题：退回题库
     q = client.post(f"/api/quiz/{aid}/judge", json={"hasBug": has_bug}).json()
-    if has_bug:
-        assert q["state"] == "edit" and q["triesLeft"] == 2 and len(q["choices"]) == 4
+    if q["state"] == "edit":
         q = client.post(f"/api/quiz/{aid}/run", json={"code": fix}).json()
     assert q["state"] == "done" and q["result"]["outcome"] == "right"
-    again = client.post("/api/revisits/1/start")
-    assert again.status_code in (200, 409)
+    with db.session_scope() as s:
+        it = s.get(m.ReviewItem, due["id"])
+        assert it.streak == 1 and it.half_life > 2.5 and it.due_at > db.now() and it.attempt_id is None
+    page = client.get("/api/review").json()
+    assert all(d["id"] != due["id"] for d in page["due"])
+    assert client.post(f"/api/review/{due['id']}/start").status_code == 409   # 今天这一项已经做过了
 
 
 def test_progress_page(client):
     login(client)
     p = client.get("/api/progress").json()
-    assert set(p) == {"knowledge", "errors", "activity", "next"}
+    assert set(p) == {"summary", "knowledge", "errors", "activity", "next"}
     names = [i["name"] for g in p["knowledge"] for i in g["items"]]
-    assert "最值、求和、统计" in names and len(names) == len(set(names))
+    assert "最值、求和、统计" in names and len(names) == len(set(names)) and len(names) == 65
+    assert all(not n.startswith("D") for n in names) and "单链表" not in names   # 跨课程的内容学生看不到
     for g in p["knowledge"]:
         for i in g["items"]:
-            assert set(i) == {"name", "level", "segments", "basis", "practice"}
+            assert set(i) == {"name", "level", "segments", "basis", "practice", "covered"}
             assert i["level"] in ("已掌握", "基本掌握", "待加强", "还没练到")
+    covered = [i for g in p["knowledge"] for i in g["items"] if i["covered"]]
+    assert 15 < len(covered) < 65
     errs = {e["name"]: e for e in p["errors"]}
     assert 3 <= len(p["errors"]) <= 5
     assert errs["变量没给合适的初值就使用"]["status"] == "改正后又出现" and errs["变量没给合适的初值就使用"]["count"] == 3
@@ -185,8 +200,10 @@ def test_progress_page(client):
     assert errs["数组开小了"]["status"] == "还没解决"
     act = p["activity"]
     assert (act["tried"], act["passed"], act["firstTryPassed"], act["firstTryRate"]) == (12, 9, 3, 25)
-    assert [w["label"] for w in act["weeks"]] == ["本周", "上周", "两周前", "三周前"]
-    assert 2 <= len(p["next"]) <= 3 and p["next"][0]["kind"] == "quiz"
+    assert len(act["weeks"]) == 8 and act["weeks"][-1]["label"] == "本周"
+    summ = p["summary"]
+    assert (summ["passed"], summ["total"], summ["reviewDue"]) == (9, 14, 1)
+    assert 2 <= len(p["next"]) <= 3 and p["next"][0]["kind"] == "review"
     assert p["next"][1]["problem"]["title"] == "成绩最高分"
 
 
@@ -259,4 +276,4 @@ def test_student_api_never_leaks(client, demo):
 def test_status_reports_demo(client):
     login(client)
     st = client.get("/api/status").json()
-    assert st["xdoj"] == {"ok": True, "dataTime": None, "demo": True} and st["dueRevisits"] == 1
+    assert st["xdoj"] == {"ok": True, "dataTime": None, "demo": True} and st["dueReviews"] == 1

@@ -8,7 +8,7 @@ import time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, db, llm, mastery, quiz
+from .. import catalog, config, db, llm, mastery, quiz, quizgen, review
 from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
@@ -84,7 +84,7 @@ def after_pass(s: Session, sub: m.Submission, now: dt.datetime | None = None) ->
     skill = (rnd.skill_code if rnd is not None and rnd.skill_code else "") or (label.primary_skill if label else "")
     if not skill or not quiz.can_start(s, sub.user_id, skill, now):
         return None
-    item = quiz.choose_item(s, sub.user_id, skill)
+    item = quizgen.generate(s, sub.user_id, skill, "after_pass", origin=(sub.server_id, sub.problem_id))
     if item is None:
         return None
     if rnd is not None:
@@ -142,14 +142,10 @@ def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool 
         s.add(rs)
         s.flush()
         mastery.record_stuck(s, ctx.user_id, ctx.root_skill, nth, f"stuck:{rs.id}", now)
-        # 有卡点：几天后出回忆题；卡住两次及以上的技能由回访队列继续跟（答错了会再安排）
-        if True:
-            due = s.scalar(select(m.RevisitItem.id).where(
-                m.RevisitItem.user_id == ctx.user_id, m.RevisitItem.skill_code == ctx.root_skill,
-                m.RevisitItem.status == "due"))
-            if due is None:
-                s.add(m.RevisitItem(user_id=ctx.user_id, skill_code=ctx.root_skill, stage="recall",
-                                    due_at=now + dt.timedelta(days=3)))
+        # 有卡点就进复习：按记忆半衰期安排什么时候回忆（app/review.py）
+        review.enqueue(s, ctx.user_id, ctx.root_skill, "stuck",
+                       ctx.problem.server_id if ctx.problem else None,
+                       ctx.problem.problem_id if ctx.problem else None, now)
         if nth == 1:
             rs.resolution = "example_given"
             return "example", "H3", rs, None
@@ -343,7 +339,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         rnd.located = True
     quiz_msg = None
     if flow == "stubborn" and quiz.can_start(s, user_id, ctx.root_skill, now):
-        item = quiz.choose_item(s, user_id, ctx.root_skill)
+        item = quizgen.generate(s, user_id, ctx.root_skill, "revisit", origin=thread)
         if item is not None:
             quiz_msg = quiz.start(s, user_id, item, "revisit", "", thread[0] if thread else None,
                                   thread[1] if thread else None, rnd.id, now + dt.timedelta(milliseconds=2))

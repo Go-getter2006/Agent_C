@@ -71,6 +71,8 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
     if user.status != "active":
         raise HTTPException(status_code=403, detail="这个账号已经不在班级名单里了，请联系老师。")
     accounts.touch_login(s, user)
+    if user.role == "student" and user.student_id:
+        s.add(m.UiEvent(user_id=user.student_id, kind="login", target=""))
     set_login_cookie(response, user)
     return {"role": user.role, "name": user.display_name}
 

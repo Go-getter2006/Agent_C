@@ -566,8 +566,12 @@ class QuizItem(Base):
     choices: Mapped[list] = mapped_column(JSON, default=list)  # 手机上的改法选项
     explanation: Mapped[str] = mapped_column(String(160), default="")
     scene: Mapped[str] = mapped_column(String(24), default="")  # 场景，用来区分“换了场景的变式题”
-    source: Mapped[str] = mapped_column(String(16), default="bank")  # bank / own_code / peer
+    source: Mapped[str] = mapped_column(String(16), default="bank")  # bank / own_code / llm / template
     source_problem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)  # 专门给某个学生出的
+    start_line: Mapped[int] = mapped_column(Integer, default=1)  # 显示的代码从第几行开始（用他自己的代码出题时）
+    origin: Mapped[dict] = mapped_column(JSON, default=dict)  # 出题的方式和依据（内部用）
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[Dt] = _ts()
 
@@ -579,7 +583,8 @@ class QuizAttempt(Base):
     item_id: Mapped[int] = mapped_column(ForeignKey("quiz_items.id"))
     quiz_type: Mapped[str] = mapped_column(String(8))
     skill_code: Mapped[str] = mapped_column(String(16), default="")
-    reason: Mapped[str] = mapped_column(String(16), default="after_pass")  # after_pass / recall / revisit
+    reason: Mapped[str] = mapped_column(String(16), default="after_pass")  # after_pass / recall / revisit / review
+    review_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # confidence → judge → edit → done
     state: Mapped[str] = mapped_column(String(12), default="confidence")
     confidence: Mapped[str] = mapped_column(String(8), default="")
@@ -598,18 +603,73 @@ class QuizAttempt(Base):
     finished_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
 
 
-class RevisitItem(Base):
-    """回访队列：在某个技能上卡住两次及以上后，之后几天主动出题检验。"""
+class ReviewItem(Base):
+    """复习（回访）：一个学生的一个技能。按记忆半衰期安排下一次什么时候复习，见 app/review.py。"""
 
-    __tablename__ = "revisit_queue"
+    __tablename__ = "review_items"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     skill_code: Mapped[str] = mapped_column(String(16))
-    stage: Mapped[str] = mapped_column(String(8), default="recall")  # recall 回忆题 / variant 变式题
+    # 为什么进来：stuck 卡住 / recurrence 改正后又出现 / quiz_wrong 小题答错 / heavy_help 讲了原理或给了代码才过 / lucky 蒙对
+    origin: Mapped[str] = mapped_column(String(16), default="stuck")
+    origin_server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    origin_problem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    state: Mapped[str] = mapped_column(String(12), default="active")  # active / graduated / dropped
+    half_life: Mapped[float] = mapped_column(Float, default=1.5)  # 记忆半衰期（天）
+    last_success_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     due_at: Mapped[Dt] = _ts()
-    status: Mapped[str] = mapped_column(String(8), default="due")  # due / done / dropped
-    attempt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reps: Mapped[int] = mapped_column(Integer, default=0)       # 复习过几次（含独立做对新题）
+    lapses: Mapped[int] = mapped_column(Integer, default=0)     # 复习时没做对几次
+    streak: Mapped[int] = mapped_column(Integer, default=0)     # 连续做对几次
+    last_outcome: Mapped[str] = mapped_column(String(16), default="")
+    attempt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 正在做的那道小题
     created_at: Mapped[Dt] = _ts()
+    updated_at: Mapped[Dt] = _ts()
+    __table_args__ = (Index("ix_review_user_state", "user_id", "state", "due_at"),)
+
+
+class CodeFingerprint(Base):
+    """通过的代码规范化之后的指纹：去掉注释和空白，标识符按出现顺序换成统一的名字。用来发现雷同。"""
+
+    __tablename__ = "code_fingerprints"
+    server_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    submission_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(32))
+    problem_id: Mapped[int] = mapped_column(BigInteger)
+    submit_time: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
+    norm_hash: Mapped[str] = mapped_column(String(64), index=True)
+    tokens: Mapped[int] = mapped_column(Integer, default=0)
+    matched_submission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 雷同的那条更早的提交
+    matched_user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    share: Mapped[float | None] = mapped_column(Float, nullable=True)  # 这种写法在已通过的人里占多少
+    suspicious: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (Index("ix_fp_problem", "server_id", "problem_id"),)
+
+
+class LogRequest(Base):
+    """教师按需申请学生的行为日志。每次申请都留记录（谁、什么时候、要了谁的、什么时间段、哪些内容）。"""
+
+    __tablename__ = "log_requests"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    requester_id: Mapped[int] = mapped_column(Integer, index=True)
+    requester_name: Mapped[str] = mapped_column(String(64), default="")
+    requested_ids: Mapped[list] = mapped_column(JSON, default=list)   # 填的学号，原样记下
+    granted_ids: Mapped[list] = mapped_column(JSON, default=list)     # 核对后属于他班里的
+    denied_ids: Mapped[list] = mapped_column(JSON, default=list)      # 不在他班里的，没给
+    class_keys: Mapped[list] = mapped_column(JSON, default=list)
+    date_from: Mapped[Dt] = mapped_column(UTCDateTime)
+    date_to: Mapped[Dt] = mapped_column(UTCDateTime)
+    kinds: Mapped[list] = mapped_column(JSON, default=list)
+    include_text: Mapped[bool] = mapped_column(Boolean, default=False)
+    fmt: Mapped[str] = mapped_column(String(8), default="csv")
+    purpose: Mapped[str] = mapped_column(String(200), default="")
+    rows: Mapped[int] = mapped_column(Integer, default=0)
+    token: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(12), default="ready")  # ready / expired / revoked
+    downloads: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[Dt] = _ts()
+    expires_at: Mapped[Dt] = _ts()
+    last_download_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class UiEvent(Base):
@@ -636,6 +696,7 @@ class SkillEvidence(Base):
     ts: Mapped[Dt] = _ts()
     source_key: Mapped[str] = mapped_column(String(96))
     algo_version: Mapped[str] = mapped_column(String(24), default="")
+    reliability: Mapped[float] = mapped_column(Float, default=1.0)  # 证据可信度，只有 v2 用
     __table_args__ = (
         UniqueConstraint("source_key", "skill_code", "success"),
         Index("ix_evidence_user_skill", "user_id", "skill_code"),
@@ -665,6 +726,7 @@ class PredictionLog(Base):
     source_key: Mapped[str] = mapped_column(String(96), unique=True)  # 哪一次“新题的第一次提交”
     ts: Mapped[Dt] = _ts()
     outcome: Mapped[bool] = mapped_column(Boolean)  # 这次是不是一次就独立做对了
-    p_simple: Mapped[float] = mapped_column(Float)
+    p_simple: Mapped[float] = mapped_column(Float)   # v1
+    p_v2: Mapped[float] = mapped_column(Float, default=0.5)
     p_graph: Mapped[float] = mapped_column(Float)
     model_version: Mapped[str] = mapped_column(String(24), default="")

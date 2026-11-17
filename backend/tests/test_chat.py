@@ -122,7 +122,8 @@ def test_second_time_stuck_recall_then_blank(demo):
         assert texts(out[1]).startswith("对")
         rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406)).one()
         assert rnd.max_help_level == "H2" and rnd.recall_stage == "done"
-        assert s.scalars(select(m.RevisitItem).where(m.RevisitItem.skill_code == "C06.03.02")).all()
+        item = s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == UID, m.ReviewItem.skill_code == "C06.03.02")).one()
+        assert item.state == "active" and item.lapses >= 1   # 第二次卡住：在复习里记一次遗忘
 
 
 def test_recall_succeeds(demo):

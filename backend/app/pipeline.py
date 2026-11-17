@@ -9,7 +9,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import db, mastery
+from . import config, db, mastery, review, similarity
 from . import models as m
 from .labeling import labeler, problems
 from .taxonomy import HELP_ORDER
@@ -36,7 +36,10 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
     if sub is None or sub.detail_status != "done" or sub.judgement == "PENDING":
         return
     if sub.judgement != "AC":
-        labeler.label_submission(s, server_id, submission_id)
+        labels = labeler.label_submission(s, server_id, submission_id)
+        primary = next((lab for lab in labels if lab.role == "primary" and lab.confidence >= 0.5), None)
+        if primary is not None and primary.skill_code:
+            review.on_recurrence(s, sub, primary.error_code, primary.skill_code)   # 改正后又出现
         return
     earlier = s.scalars(select(m.Submission).where(
         m.Submission.server_id == server_id, m.Submission.user_id == sub.user_id,
@@ -46,9 +49,12 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
     label = labeler.current_problem_label(s, server_id, sub.problem_id)
     if label is None:
         label = problems.annotate_problem(s, server_id, sub.problem_id)  # 兜底：还没标的题立刻标
+    fp = similarity.check_pass(s, sub)
+    reliability = config.MASTERY_V2["copy_reliability"] if fp is not None and fp.suspicious else 1.0
     if label is not None:
         mastery.record_pass(s, sub.user_id, label, f"pass:{server_id}:{submission_id}", sub.submit_time or db.now(),
-                            len(earlier), help_before(s, sub))
+                            len(earlier), help_before(s, sub), reliability)
+        review.on_independent_practice(s, sub, label, len(earlier), help_before(s, sub), reliability)
     from .chat import workflow
 
     workflow.after_pass(s, sub, now)

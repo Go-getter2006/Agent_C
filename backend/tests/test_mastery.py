@@ -1,4 +1,4 @@
-"""掌握程度算法：用附件一 8.6 的例子逐行核对。"""
+"""掌握程度算法。v1：用附件一 8.6 的例子逐行核对；v2：四处改动各自的效果。"""
 from __future__ import annotations
 
 import datetime as dt
@@ -16,7 +16,7 @@ def label():
 
 
 def state(s, at):
-    return mastery.skill_states(s, UID, at=at, decay=False).get(SKILL, mastery.SkillState(SKILL))
+    return mastery.skill_states(s, UID, at=at, decay=False, model="v1").get(SKILL, mastery.SkillState(SKILL))
 
 
 def test_example_8_6(database):
@@ -72,7 +72,7 @@ def test_levels_and_adjustments(database):
                             confidence_reliable=False, ts=now)
         # 第二次才改对：会 0.5、不会 0.5
         mastery.record_quiz(s, UID, "C05.04.03", "right_second", "一半", "after_pass", "q:d", ts=now)
-        st = mastery.skill_states(s, UID, decay=False)
+        st = mastery.skill_states(s, UID, decay=False, model="v1")
         assert st["C03.01.01"].s == 0.5 and st["C03.03.01"].f == 1.5 and st["C05.05.01"].s == 1.0
         assert (st["C05.04.03"].s, st["C05.04.03"].f) == (0.5, 0.5)
         assert st["C03.01.01"].level == LEVEL_NONE  # 证据不到 1
@@ -83,18 +83,18 @@ def test_levels_and_adjustments(database):
         lab = m.ProblemLabel(server_id=1, problem_id=9, primary_skill="C04.01.01", secondary_skills=["C04.02.01"])
         for i in range(8):
             mastery.record_pass(s, UID, lab, f"p:{i}", now, 0, "NA")
-        st = mastery.skill_states(s, UID, decay=False)
+        st = mastery.skill_states(s, UID, decay=False, model="v1")
         assert st["C04.01.01"].level == LEVEL_MASTERED
         assert st["C04.02.01"].s == 8 * config.MASTERY["secondary_skill_factor"]  # 次技能按配置的比例折算
         mastery.record_pass(s, UID, lab, "p:h3", now + dt.timedelta(seconds=1), 3, "H3")
-        assert mastery.skill_states(s, UID, decay=False)["C04.01.01"].level == LEVEL_BASIC, "最近一次不是独立成功"
+        assert mastery.skill_states(s, UID, decay=False, model="v1")["C04.01.01"].level == LEVEL_BASIC, "最近一次不是独立成功"
 
 
 def test_decay_halves_in_about_35_days(database):
     now = db.now()
     with db.session_scope() as s:
         mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "old", now - dt.timedelta(days=35), True)
-        st = mastery.skill_states(s, UID, at=now)[SKILL]
+        st = mastery.skill_states(s, UID, at=now, model="v1")[SKILL]
         assert 0.47 < st.s < 0.52
         assert st.level != LEVEL_NONE, "练过的技能不会因为时间久了变回“还没练到”"
 
@@ -104,6 +104,77 @@ def test_kp_level_is_evidence_weighted(database):
     with db.session_scope() as s:
         mastery.add_evidence(s, UID, "C06.03.02", "stuck_first", False, 3.0, "a", now)
         mastery.add_evidence(s, UID, "C06.03.03", "pass_first_try", True, 1.0, "b", now, True)
-        kp = mastery.kp_states(s, UID)["C06.03"]
+        kp = mastery.kp_states(s, UID, model="v1")["C06.03"]
         p1, p2 = 1 / 5, 2 / 3
         assert abs(kp.p - (3 * p1 + 1 * p2) / 4) < 1e-9 and kp.level == LEVEL_WEAK
+
+
+# ------------------------------------------------------------ v2
+def test_v2_weak_needs_failure_evidence(database):
+    now = db.now()
+    with db.session_scope() as s:
+        # 只有一点成功证据：不会因为先验被拉着就定成“待加强”
+        mastery.add_evidence(s, UID, "C01.02.03", "pass_self_fixed", True, 0.5, "x", now, True)
+        st = mastery.skill_states(s, UID, model="v2")["C01.02.03"]
+        assert st.p < 0.6 and st.level == LEVEL_BASIC
+        # 有失败证据而且估计低：待加强
+        mastery.add_evidence(s, UID, SKILL, "stuck_first", False, 1.0, "y", now)
+        assert mastery.skill_states(s, UID, model="v2")[SKILL].level == LEVEL_WEAK
+        # 很久以前的一次成功：衰减后不够了，算“还没练到”（不是待加强）
+        mastery.add_evidence(s, UID, "C03.01.01", "pass_first_try", True, 1.0, "z", now - dt.timedelta(days=200), True)
+        assert mastery.skill_states(s, UID, model="v2")["C03.01.01"].level == LEVEL_NONE
+
+
+def test_v2_mastered_needs_narrow_interval(database):
+    now = db.now() - dt.timedelta(hours=1)
+    with db.session_scope() as s:
+        for i in range(3):
+            mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, f"p{i}", now, True)
+        st = mastery.skill_states(s, UID, at=now, model="v2")[SKILL]
+        assert st.level == LEVEL_BASIC and st.interval[0] < 0.6, "三次成功，区间下限还不够高"
+        assert mastery.skill_states(s, UID, at=now, model="v1")[SKILL].level == LEVEL_MASTERED   # v1 这时已经给了“已掌握”
+        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p3", now, True)
+        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p4", now, True)
+        assert mastery.skill_states(s, UID, at=now, model="v2")[SKILL].level == LEVEL_MASTERED
+
+
+def test_v2_half_life_grows_with_spaced_success(database):
+    base = db.now() - dt.timedelta(days=60)
+    with db.session_scope() as s:
+        massed = [mastery.add_evidence(s, "u1", SKILL, "pass_first_try", True, 1.0, f"m{i}",
+                                       base + dt.timedelta(minutes=i), True) for i in range(4)]
+        spaced = [mastery.add_evidence(s, "u2", SKILL, "pass_first_try", True, 1.0, f"s{i}",
+                                       base + dt.timedelta(days=7 * i), True) for i in range(4)]
+        assert all(massed) and all(spaced)
+        h1 = mastery.skill_states(s, "u1", model="v2")[SKILL].half_life
+        h2 = mastery.skill_states(s, "u2", model="v2")[SKILL].half_life
+        assert h1 == 35 and abs(h2 - 35 * 1.4 ** 3) < 1e-6, "同一天做四次只算一次；隔开的四天让半衰期变长"
+        mastery.add_evidence(s, "u2", SKILL, "stuck_first", False, 1.0, "f", base + dt.timedelta(days=30))
+        assert mastery.skill_states(s, "u2", model="v2")[SKILL].half_life < h2
+
+
+def test_v2_reliability_discounts_copied_pass(database):
+    now = db.now()
+    with db.session_scope() as s:
+        mastery.add_evidence(s, "u1", SKILL, "pass_first_try", True, 1.0, "a", now, True)
+        mastery.add_evidence(s, "u2", SKILL, "pass_first_try", True, 1.0, "b", now, True, reliability=0.4)
+        a = mastery.skill_states(s, "u1", model="v2")[SKILL]
+        b = mastery.skill_states(s, "u2", model="v2")[SKILL]
+        assert b.p < a.p and b.discounted == 1
+        assert abs(mastery.skill_states(s, "u2", at=now, model="v1")[SKILL].p
+                   - mastery.skill_states(s, "u1", at=now, model="v1")[SKILL].p) < 1e-12   # v1 不看可信度
+
+
+def test_v2_graph_prior_and_ds_readiness(database):
+    now = db.now()
+    with db.session_scope() as s:
+        # 指针、结构体指针、malloc 都卡住过：数据结构的“链表结点的定义与创建”准备度低
+        for i, code in enumerate(("C10.01.01", "C11.03.01", "C10.05.01")):
+            mastery.add_evidence(s, "weak", code, "stuck_first", False, 1.0, f"w{i}", now)
+            mastery.add_evidence(s, "strong", code, "pass_first_try", True, 1.0, f"s{i}", now, True)
+        weak = mastery.skill_states(s, "weak", model="v2", with_predicted=True)
+        strong = mastery.skill_states(s, "strong", model="v2", with_predicted=True)
+        assert weak["D02.02.01"].predicted and strong["D02.02.01"].predicted
+        assert weak["D02.02.01"].p < 0.45 < 0.55 < strong["D02.02.01"].p
+        assert weak["D02.02.01"].level == strong["D02.02.01"].level == "还没练到"   # 推出来的不定档
+        assert "D02.02.01" not in mastery.skill_states(s, "weak", model="v2")      # 默认不带推出来的

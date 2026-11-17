@@ -85,6 +85,10 @@ UI_EVENTS = (
     "open_diff",         # 打开差异视图
     "open_problem",      # 切到某道题
     "practice",          # 学情页点“去练一题”
+    "login",             # 登录
+    "open_review",       # 打开复习页
+    "review_start",      # 开始一道复习题
+    "open_problem_text", # 打开题目
 )
 
 # 进入掌握程度计算的事件

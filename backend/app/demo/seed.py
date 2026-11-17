@@ -220,8 +220,4 @@ def _run_timeline(server_id: int, now: dt.datetime, with_story: bool) -> None:
                 pipeline.process_submission(s, server_id, payload, now=at + dt.timedelta(seconds=30))
             else:
                 payload(s, at)
-    # 九天前那个卡点的回忆题：已经到期，学情页“接下来做什么”里会出现
-    with db.session_scope() as s:
-        for rv in s.scalars(select(m.RevisitItem).where(m.RevisitItem.user_id == uid)).all():
-            if rv.due_at > now and rv.skill_code != "C06.03.02":
-                rv.due_at = now - dt.timedelta(days=1)
+    # 九天前那个卡点进了复习，现在已经到期：复习页和学情页“接下来做什么”里会出现
