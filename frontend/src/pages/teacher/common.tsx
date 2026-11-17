@@ -129,7 +129,7 @@ export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide =
           {!loading && !error && withClass && !current && (
             <div className="card">
               <Empty icon={Users} title="你名下还没有同步到班级">
-                第一次登录后，系统会去 XDOJ 同步你的班级和名单，一般几分钟内完成；在“数据源”页可以看进度。
+                正在同步你名下的班级和名单，请稍候再刷新。
               </Empty>
             </div>
           )}

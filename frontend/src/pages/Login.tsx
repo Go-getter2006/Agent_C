@@ -1,13 +1,13 @@
 // 登录页：左边一块深色说明这个系统做什么（宽屏才有），右边是表单。
 import { useState, type FormEvent } from "react";
-import { Braces, Eye, EyeOff, GraduationCap, Lock, MessageSquare, RotateCcw, ShieldCheck, Users } from "lucide-react";
+import { Braces, Eye, EyeOff, GraduationCap, MessageSquare, RotateCcw, ShieldCheck, Users } from "lucide-react";
 import { api } from "../api";
 import { Segmented } from "../components/ui";
 import { useLoad } from "../lib/hooks";
 import { useSession } from "../session";
 
 const FACTS = [
-  { icon: ShieldCheck, title: "只读同步 XDOJ", text: "你在 XDOJ 上交题，几秒后这里就能看到结果。测试点只显示过没过。" },
+  { icon: ShieldCheck, title: "交了题马上能看到结果", text: "在 XDOJ 上交题，这里就能看到哪几组没过，接着问为什么。" },
   { icon: MessageSquare, title: "按你的节奏给帮助", text: "先问你几个问题；想自己想、要提示、还是直接讲，由你决定。" },
   { icon: RotateCcw, title: "快忘的时候提醒复习", text: "卡过的地方，过几天用一道小题帮你回忆，记住了间隔就拉长。" },
 ];
@@ -79,7 +79,7 @@ export default function Login() {
           </div>
           <div>
             <h1>登录</h1>
-            <p className="page-sub">{tab === "student" ? "用 XDOJ 的学号和密码登录。密码只拿去 XDOJ 核对一次，不会保存。" : "用你在 XDOJ 上的教师账号登录。第一次登录后会自动同步你名下的班级和学生名单。"}</p>
+            <p className="page-sub">{tab === "student" ? "用 XDOJ 的学号和密码登录。" : "用 XDOJ 的教师账号登录。"}</p>
           </div>
           <Segmented label="身份" value={tab} onChange={(v) => { setTab(v); setError(null); }}
             options={[
@@ -111,12 +111,6 @@ export default function Login() {
           </label>
           {error && <p className="error-text" role="alert">{error}</p>}
           <button type="submit" className="btn btn-primary btn-block" disabled={busy}>{busy ? "正在登录" : "登录"}</button>
-          {teacherXdoj && (
-            <p className="note login-note">
-              <Lock size={14} aria-hidden="true" />
-              系统会用这个账号去 XDOJ 试着登录一次，成功后只读地同步你名下班级的练习数据。同步要长期进行，所以密码会加密保存在服务器上。
-            </p>
-          )}
           {demo && (
             <p className="login-demo">
               现在装的是演示数据。{tab === "student" ? <>学号 <code>{info.data?.demoAccount}</code></> : <>教师账号 <code>demo-teacher</code></>}，
