@@ -125,6 +125,21 @@ ERRORS: dict[str, tuple[str, str, str]] = {
     "OT99": ("库里没有的错误", "", "必须附候选描述，进候选池"),
 }
 
+# 数据结构课的错误类型（第一版）并进同一个库：编码只增不改，C 语言的题照样只会用到上面那些
+from .ds import DS_ERROR_CATEGORIES, DS_ERRORS  # noqa: E402
+
+ERROR_CATEGORIES.update(DS_ERROR_CATEGORIES)
+ERRORS.update(DS_ERRORS)
+C_ERROR_CATEGORIES = ("CE", "IO", "TY", "BR", "LP", "AR", "ST", "FN", "PT", "SU", "AL", "OT")
+
+
+def errors_for_course(course: str) -> dict[str, tuple[str, str, str]]:
+    """标注时给大模型看的错误类型：C 语言的题只用 C 语言的类别；数据结构的题两类都用。"""
+    if course == "C":
+        return {c: v for c, v in ERRORS.items() if c[:2] in C_ERROR_CATEGORIES}
+    return dict(ERRORS)
+
+
 # 学生端显示用的短名称（不带编码）。没列出的直接用库里的名称。
 STUDENT_FACING_NAMES: dict[str, str] = {
     "TY09": "变量没给合适的初值就使用",

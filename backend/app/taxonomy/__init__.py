@@ -3,6 +3,6 @@
 编码只增不改不删；要合并时旧编码标“停用”并指向新编码。
 """
 from .enums import *  # noqa: F401,F403
-from .errors import ERRORS, error_name, is_error_code  # noqa: F401
-from .knowledge import KNOWLEDGE_POINTS, TOPICS, kp_name, kp_of_skill  # noqa: F401
-from .skills import SKILLS, is_skill_code, skill_name, skills_of_kp  # noqa: F401
+from .errors import ERRORS, error_name, errors_for_course, is_error_code  # noqa: F401
+from .knowledge import COURSE_NAMES, KNOWLEDGE_POINTS, TOPICS, course_of, kp_name, kp_of_skill  # noqa: F401
+from .skills import SKILLS, is_skill_code, skill_name, skills_for_course, skills_of_kp  # noqa: F401

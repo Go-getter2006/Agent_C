@@ -22,6 +22,9 @@ def create_app() -> FastAPI:
         config.secret_key()  # 生产环境没设 SECRET_KEY 就直接报错
         db.create_all()
         with db.session_scope() as s:
+            from ..servers import ensure_known
+
+            ensure_known(s)  # C 语言那台的地址写在代码里，教师登录页可以直接选
             if s.scalar(select(m.QuizItem.id).limit(1)) is None:
                 quiz.load_bank(s)
         yield

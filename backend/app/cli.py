@@ -29,10 +29,15 @@ def _contexts():
 @cli.command("init-db")
 def init_db() -> None:
     """建表，并把小题题库写进库。"""
+    from .servers import ensure_known
+
     db.create_all()
     with db.session_scope() as s:
         n = quiz.load_bank(s)
+        servers = ensure_known(s)
     typer.echo(f"表已就绪；新写入小题 {n} 道。数据库：{config.DATABASE_URL.split('@')[-1]}")
+    for code, server in servers.items():
+        typer.echo(f"服务器 {code}：{server.name}，{server.base_url or '地址还没有给出'}")
 
 
 @cli.command("demo-seed")
@@ -170,10 +175,16 @@ def graph_update() -> None:
 @cli.command("server-add")
 def server_add(code: str, name: str, base_url: str, course: str = "C") -> None:
     """登记一台 XDOJ 服务器（教师登录时可以选它）。例：server-add c "C 语言" http://地址/xdoj-ssm"""
+    from .servers import WrongServer
+
     db.create_all()
-    with db.session_scope() as s:
-        server = sources.ensure_server(s, code, name, base_url.rstrip("/"), course)
-        typer.echo(f"服务器 {server.id}：{name}")
+    try:
+        with db.session_scope() as s:
+            server = sources.ensure_server(s, code, name, base_url.rstrip("/"), course)
+            typer.echo(f"服务器 {server.id}：{name}")
+    except WrongServer as exc:
+        typer.echo(f"没有登记：{exc}")
+        raise typer.Exit(1)
 
 
 @cli.command("admin-add")

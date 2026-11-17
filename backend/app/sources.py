@@ -19,6 +19,9 @@ log = logging.getLogger("sources")
 
 
 def ensure_server(s: Session, code: str, name: str, base_url: str, course: str = "C") -> m.Server:
+    from .servers import check_course_url
+
+    check_course_url(course, base_url, code)
     server = s.scalar(select(m.Server).where(m.Server.code == code))
     if server is None:
         server = m.Server(code=code, name=name, base_url=base_url, course=course)
@@ -31,9 +34,17 @@ def ensure_server(s: Session, code: str, name: str, base_url: str, course: str =
 
 def ensure_env_source(s: Session) -> m.DataSource | None:
     """环境变量里配了 XDOJ 账号时，登记成一个数据源。密码不进库。"""
-    if not (config.XDOJ_BASE_URL and config.XDOJ_USER and config.XDOJ_PASS):
+    from .servers import KNOWN, ensure_known
+
+    ensure_known(s)
+    if not (config.XDOJ_USER and config.XDOJ_PASS):
         return None
-    server = ensure_server(s, config.XDOJ_SERVER_CODE, config.XDOJ_SERVER_NAME, config.XDOJ_BASE_URL)
+    known = KNOWN.get(config.XDOJ_SERVER_CODE)
+    base_url = config.XDOJ_BASE_URL or (known.base_url if known else "")
+    if not base_url:
+        return None
+    server = ensure_server(s, config.XDOJ_SERVER_CODE, known.name if known else config.XDOJ_SERVER_NAME, base_url,
+                           known.course if known else "C")
     source = s.scalar(select(m.DataSource).where(
         m.DataSource.server_id == server.id, m.DataSource.teacher_user_id == config.XDOJ_USER))
     if source is None:

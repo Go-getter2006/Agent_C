@@ -135,9 +135,11 @@ def test_teacher_login_by_xdoj_account(client, monkeypatch):
     fx = FakeXdoj(teacher_id="t-wang", password="xdoj-real-password")
     monkeypatch.setattr(teacher_api, "_test_transport", fx.transport())
     with db.session_scope() as s:
-        sources.ensure_server(s, "c", "C 语言", "http://fake.test/xdoj-ssm")
-    assert client.get("/api/teacher/servers").json() == {"servers": [{"code": "c", "name": "C 语言"}]}
-    body = {"server": "c", "userId": "t-wang", "password": "wrong"}
+        sources.ensure_server(s, "c-test", "C 语言（测试用的假服务器）", "http://fake.test/xdoj-ssm")
+    listed = client.get("/api/teacher/servers").json()["servers"]
+    assert {"code": "c", "name": "C 语言程序设计"} in listed      # 真实的 C 语言服务器写在代码里
+    assert all(x["code"] != "ds" for x in listed)                 # 数据结构那台还没有地址，不能选
+    body = {"server": "c-test", "userId": "t-wang", "password": "wrong"}
     assert client.post("/api/teacher/login", json=body).status_code == 401
     assert client.post("/api/teacher/login", json={**body, "server": "nope"}).status_code == 400
     assert client.post("/api/teacher/login", json={**body, "server": "demo"}).status_code == 400
@@ -149,7 +151,7 @@ def test_teacher_login_by_xdoj_account(client, monkeypatch):
         assert src.enabled and src.password_enc and "xdoj-real-password" not in src.password_enc
         assert crypto.decrypt_secret(src.password_enc) == "xdoj-real-password"
         assert sources.password_of(src) == "xdoj-real-password"
-        user = s.scalar(select(m.User).where(m.User.login_name == "c:t-wang"))
+        user = s.scalar(select(m.User).where(m.User.login_name == "c-test:t-wang"))
         assert user.role == "teacher" and user.data_source_id == src.id
         assert s.scalars(select(m.Trigger).where(m.Trigger.kind == "sync_meta")).first() is not None
         # 密码明文不在任何表里
@@ -159,6 +161,20 @@ def test_teacher_login_by_xdoj_account(client, monkeypatch):
     # 主循环能用这份加密保存的密码建立会话
     ctxs = sources.build_contexts()
     assert [c.source_id for c in ctxs] == [src.id]
+
+
+def test_known_servers_guard(database):
+    from app.servers import C_SERVER, WrongServer, ensure_known
+
+    with db.session_scope() as s:
+        known = ensure_known(s)
+        assert known["c"].base_url == "http://47.92.139.74/xdoj-ssm" and known["c"].course == "C"
+        assert known["ds"].base_url == "" and known["ds"].course == "D"
+        with pytest.raises(WrongServer):
+            sources.ensure_server(s, "ds", "数据结构", C_SERVER.base_url + "/", "D")   # 数据结构不能用 C 语言那台
+        with pytest.raises(WrongServer):
+            sources.ensure_server(s, "c", "C 语言", "http://1.2.3.4/xdoj-ssm", "C")   # C 语言那台的地址不能改
+        assert sources.ensure_server(s, "ds", "数据结构", "http://10.1.2.3/xdoj-ssm", "D").course == "D"
 
 
 def test_graph_model_directions(database):

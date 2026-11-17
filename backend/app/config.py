@@ -67,6 +67,7 @@ LLM_PRICE_IN = _env_float("LLM_PRICE_IN", 2.0)
 LLM_PRICE_OUT = _env_float("LLM_PRICE_OUT", 8.0)
 
 # XDOJ：试点阶段的数据源从环境变量读；以后由教师在系统里录入、加密保存。
+# 服务器地址见 app/servers.py；XDOJ_SERVER_CODE=c 时不填 XDOJ_BASE_URL 就用 C 语言那台。
 XDOJ_BASE_URL = _env("XDOJ_BASE_URL", "").rstrip("/")
 XDOJ_USER = _env("XDOJ_USER", "")
 XDOJ_PASS = _env("XDOJ_PASS", "")

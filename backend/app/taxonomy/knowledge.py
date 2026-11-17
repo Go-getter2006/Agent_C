@@ -85,6 +85,19 @@ KNOWLEDGE_POINTS: dict[str, str] = {
 }
 
 
+# 数据结构课的知识点并进同一张表；编码以 D 开头
+from .ds import DS_KNOWLEDGE_POINTS, DS_TOPICS  # noqa: E402
+
+TOPICS.update(DS_TOPICS)
+KNOWLEDGE_POINTS.update(DS_KNOWLEDGE_POINTS)
+COURSE_NAMES = {"C": "C 语言程序设计", "D": "数据结构"}
+
+
+def course_of(code: str) -> str:
+    """编码属于哪门课：C 或 D。"""
+    return "D" if code.startswith("D") else "C"
+
+
 def kp_of_skill(skill_code: str) -> str:
     """技能编码 C06.03.02 所属的知识点是 C06.03。"""
     return skill_code[:6]

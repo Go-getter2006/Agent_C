@@ -14,7 +14,7 @@ from .. import config, llm
 from .. import models as m
 from ..sandbox import run_program
 from ..sandbox.precheck import check_reference_solution
-from ..taxonomy import KNOWLEDGE_POINTS, SKILLS, is_skill_code
+from ..taxonomy import KNOWLEDGE_POINTS, is_skill_code, skills_for_course
 from ..xdoj.assemble import source_text
 from ..xdoj.util import decode_bytes, json_hash
 
@@ -169,7 +169,9 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
             raise ValueError("每个测试点都要标")
         return brief, primary, secondary, out
 
-    skill_table = "\n".join(f"{code} {item[0]}（{KNOWLEDGE_POINTS[code[:6]]}）" for code, item in SKILLS.items())
+    server = s.get(m.Server, server_id)
+    course_skills = skills_for_course(server.course if server else "C")
+    skill_table = "\n".join(f"{code} {item[0]}（{KNOWLEDGE_POINTS[code[:6]]}）" for code, item in course_skills.items())
     case_text = "\n\n".join(
         f"测试点 {c.testcase_id}\n输入：\n{(decode_bytes(c.input_bytes, c.input_encoding)[0] or '')[:300]}\n"
         f"输出：\n{(decode_bytes(c.output_bytes, c.output_encoding)[0] or '')[:300]}" for c in cases)

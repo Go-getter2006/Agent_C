@@ -151,6 +151,15 @@ SKILLS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+from .ds import DS_SKILLS  # noqa: E402
+
+SKILLS.update(DS_SKILLS)
+
+
+def skills_for_course(course: str) -> dict[str, tuple[str, tuple[str, ...]]]:
+    return {c: v for c, v in SKILLS.items() if (c[0] == "D") == (course == "D")}
+
+
 def is_skill_code(code: str) -> bool:
     return code in SKILLS
 

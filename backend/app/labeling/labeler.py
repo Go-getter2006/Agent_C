@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .. import config, llm
 from .. import models as m
-from ..taxonomy import ERRORS, SKILLS, is_error_code, is_skill_code
+from ..taxonomy import SKILLS, errors_for_course, is_error_code, is_skill_code
 from ..taxonomy.errors import error_kp
 from ..taxonomy.skills import skills_for_error
 from ..xdoj.assemble import assemble_submission
@@ -77,8 +77,8 @@ confidence 取 0 到 1。库里确实没有合适的，才用 OT99，并在 cand
 
 
 def _llm_prompt(evidence: dict, plabel: m.ProblemLabel | None, tlabels: dict[int, m.TestcaseLabel],
-                user_id: str, name: str) -> str:
-    lib = "\n".join(f"{code} {item[0]}（信号：{item[2]}）" for code, item in ERRORS.items())
+                user_id: str, name: str, course: str = "C") -> str:
+    lib = "\n".join(f"{code} {item[0]}（信号：{item[2]}）" for code, item in errors_for_course(course).items())
     skills = ([plabel.primary_skill] + list(plabel.secondary_skills or [])) if plabel else []
     skills += [t.skill_code for t in tlabels.values()]
     skill_lines = "\n".join(f"{c} {SKILLS[c][0]}" for c in dict.fromkeys(skills) if c in SKILLS) or "（这道题还没标技能）"
@@ -153,11 +153,13 @@ def label_submission(s: Session, server_id: int, submission_id: int, use_llm: bo
         drafts = [rule]
     elif use_llm and llm.available():
         student = s.get(m.Student, sub.user_id)
+        server = s.get(m.Server, server_id)
         n_lines = len((evidence.get("sourceCode") or "").splitlines())
         try:
             drafts, candidate = llm.call_json(
                 "label_submission", _SYSTEM,
-                _llm_prompt(evidence, plabel, tlabels, sub.user_id, student.name if student else ""),
+                _llm_prompt(evidence, plabel, tlabels, sub.user_id, student.name if student else "",
+                            server.course if server else "C"),
                 _validate(n_lines), retries=1)
         except llm.LLMUnavailable:
             # 重标一次仍不合法：记 OT99
