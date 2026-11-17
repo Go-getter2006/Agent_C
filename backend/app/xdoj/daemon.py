@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 import socket
@@ -48,24 +49,59 @@ def poll_tier(now: dt.datetime, last_new: dt.datetime | None, last_trigger: dt.d
 
 HEARTBEAT_KEY = "daemon_heartbeat"
 
+# 这个进程里主循环的状态：谁在跑、正在做什么。心跳把它写进库，“数据源”页显示出来。
+_state: dict = {"owner": None, "activity": "启动中", "last": 0.0}
+
+
+def set_activity(text: str) -> None:
+    _state["activity"] = text
+    touch()
+
+
+def touch() -> None:
+    """长步骤里每发一个 XDOJ 请求都会调到这里：隔 15 秒写一次心跳，免得一步做很久时被当成没在运行。"""
+    owner = _state["owner"]
+    if owner is None or time.monotonic() - _state["last"] < 15:
+        return
+    _state["last"] = time.monotonic()
+    try:
+        claim(owner)
+    except Exception:  # 心跳写不进去不影响同步
+        log.exception("写心跳失败")
+
+
+def _owner_of(value: str) -> str:
+    try:
+        return str(json.loads(value).get("owner", ""))
+    except (ValueError, AttributeError):
+        return value
+
 
 def claim(owner: str, stale_seconds: int = 60) -> bool:
     """占住“正在同步”的位置并写心跳。别的主循环一分钟内跳过心跳，就让给它，免得两个进程同时向 XDOJ 发请求。"""
     with db.session_scope() as s:
         row = s.get(m.SyncState, (0, HEARTBEAT_KEY))
         now = db.now()
+        value = json.dumps({"owner": owner, "activity": _state["activity"]}, ensure_ascii=False)
         if row is None:
-            s.add(m.SyncState(server_id=0, key=HEARTBEAT_KEY, value=owner, updated_at=now))
+            s.add(m.SyncState(server_id=0, key=HEARTBEAT_KEY, value=value, updated_at=now))
             return True
-        if row.value != owner and row.updated_at and (now - row.updated_at).total_seconds() < stale_seconds:
+        if _owner_of(row.value) != owner and row.updated_at and (now - row.updated_at).total_seconds() < stale_seconds:
             return False
-        row.value, row.updated_at = owner, now
+        row.value, row.updated_at = value, now
         return True
 
 
-def last_beat(s) -> dt.datetime | None:
+def last_beat(s) -> tuple[dt.datetime | None, str]:
+    """上次心跳的时间，和那时正在做什么。"""
     row = s.get(m.SyncState, (0, HEARTBEAT_KEY))
-    return row.updated_at if row is not None else None
+    if row is None:
+        return None, ""
+    try:
+        activity = str(json.loads(row.value).get("activity", ""))
+    except (ValueError, AttributeError):
+        activity = ""
+    return row.updated_at, activity
 
 
 def start_in_thread() -> threading.Thread:
@@ -84,6 +120,13 @@ def start_in_thread() -> threading.Thread:
     t = threading.Thread(target=run, name="xdoj-sync", daemon=True)
     t.start()
     return t
+
+
+ACTIVITY = {
+    "detail": "取提交的评测详情", "pending_judge": "等刚交的提交评测完", "recheck": "回读最近的提交，看有没有重判",
+    "problem_assets": "下载题库里其他题的测试点（不急，慢慢下载）", "label_problem": "标注题目",
+    "post_process": "分析提交、更新学情",
+}
 
 
 class Daemon:
@@ -193,8 +236,11 @@ class Daemon:
             if task is None:
                 return False
             task_id, kind, target, prio, attempts = task.id, task.kind, task.target_id, task.priority, task.attempts
+        _state["activity"] = ACTIVITY.get(kind, kind)
         try:
-            if kind == "detail":
+            if kind == "problem_assets":
+                sync_meta.sync_problem_assets(ctx, target, force_files=True, priority=3)
+            elif kind == "detail":
                 try:
                     sync_submissions.fetch_detail(ctx, target, source_first=(prio == 0))
                 except sync_submissions.NotJudgedYet:
@@ -238,6 +284,7 @@ class Daemon:
         return True
 
     def _run_meta(self, ctx: SyncContext) -> None:
+        _state["activity"] = "同步名单和作业"
         try:
             sync_meta.sync_metadata(ctx)
         except SessionError:
@@ -285,7 +332,7 @@ class Daemon:
             ("local", lambda c: self._run_task(c, store.LOCAL_KINDS, None)),
             ("p2", lambda c: self._run_task(c, ("detail",), 2)),
             ("periodic", self._periodic),
-            ("p3", lambda c: self._run_task(c, ("recheck", "detail"), 3)),
+            ("p3", lambda c: self._run_task(c, ("recheck", "detail", "problem_assets"), 3)),
         ]
         for name, fn in stages:
             for ctx in self.contexts:
@@ -306,6 +353,7 @@ class Daemon:
         last_reload = time.monotonic()
         last_beat = 0.0
         owner = f"{socket.gethostname()}:{os.getpid()}:{id(self)}"
+        _state["owner"] = owner
         while True:
             if time.monotonic() - last_beat >= 20:
                 last_beat = time.monotonic()
@@ -329,6 +377,7 @@ class Daemon:
                         ctx.client.close()
             did = self.step() if self.contexts else None
             if did is None:
+                _state["activity"] = "空闲，等新的提交" if self.contexts else "还没有数据源：等老师在网页上用 XDOJ 账号登录"
                 self._sleep(config.SYNC["idle_sleep_seconds"])
 
     def drain(self, max_steps: int = 100000) -> int:

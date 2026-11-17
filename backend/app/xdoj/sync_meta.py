@@ -24,7 +24,14 @@ log = logging.getLogger("xdoj.meta")
 FULL_ASSET_CHECK_DAYS = 7
 
 
+def _activity(text: str) -> None:
+    from .daemon import set_activity  # 告诉“数据源”页后台同步正在做什么
+
+    set_activity(text)
+
+
 def sync_classes_and_roster(ctx: SyncContext) -> None:
+    _activity("同步班级和学生名单")
     classes = ep.list_classes(ctx.client)
     with db.session_scope() as s:
         for c in classes:
@@ -55,6 +62,7 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
                 accounts.ensure_student_user(s, st.user_id, st.name)
                 _enroll(s, ctx, st.user_id, c.class_id)
         ctx.bump("students", len(students))
+    log.info("名单：%d 个班，%d 名学生", len(classes), len(seen))
 
     # 这台服务器、这个数据源的班级里，名单上已经没有的学生：标为“已移出”，不删数据
     class_ids = [c.class_id for c in classes]
@@ -90,6 +98,7 @@ def _enroll(s, ctx: SyncContext, user_id: str, class_id: int) -> None:
 
 
 def sync_contests(ctx: SyncContext) -> None:
+    _activity("同步作业")
     contests = ep.list_contests(ctx.client)
     for c in contests:
         problem_ids = c.problem_ids if c.problem_ids is not None else ep.contest_problem_ids(ctx.client, c.contest_id)
@@ -109,12 +118,28 @@ def sync_contests(ctx: SyncContext) -> None:
             for seq, pid in enumerate(dict.fromkeys(problem_ids), start=1):
                 s.add(m.ContestProblem(server_id=ctx.server_id, contest_id=c.contest_id, problem_id=pid, seq=seq))
     ctx.bump("contests", len(contests))
+    log.info("作业：%d 个", len(contests))
 
 
-def sync_problems(ctx: SyncContext, max_requests: int | None = None) -> list[int]:
-    """同步题目、标签、测试点和题面。返回新题或有改动的题号（已入队重新标注）。"""
+def _assigned(ctx: SyncContext) -> set[int]:
+    with db.session_scope() as s:
+        return set(s.scalars(select(m.ContestProblem.problem_id).where(
+            m.ContestProblem.server_id == ctx.server_id)).all())
+
+
+def sync_problems(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> list[int]:
+    """同步题目、标签、测试点和题面。返回新题或有改动的题号（已入队重新标注）。
+
+    题库有几百道题，每道题的测试点文件要一个一个下载，全部在这一步做完要一个小时左右，老师第一次登录后
+    要等很久。所以这里只下载作业里用到的题；题库里其他的题排进低优先级的队列（problem_assets），
+    主循环空下来时慢慢下载。inline_all=True 时全部在这一步做完（命令行用）。
+    """
     start_count = ctx.client.request_count
+    _activity("同步题库列表")
     problems = ep.list_problems(ctx.client)
+    assigned = _assigned(ctx)
+    n_assigned = sum(1 for p in problems if p.problem_id in assigned)
+    done_assigned, queued = 0, 0
     changed: list[int] = []
     with db.session_scope() as s:
         last_full = get_time(s, ctx.server_id, "last_full_asset_check_at")
@@ -144,19 +169,36 @@ def sync_problems(ctx: SyncContext, max_requests: int | None = None) -> list[int
             for tag in dict.fromkeys(p.tags):
                 s.add(m.ProblemTag(server_id=ctx.server_id, problem_id=p.problem_id, tag=tag[:64]))
             need_assets = is_new or meta_changed or not row.assets_fetched
-        tc_changed = _sync_testcases(ctx, p.problem_id, force_files=need_assets or full_check)
-        text_changed = _sync_problem_text(ctx, p.problem_id)
-        with db.session_scope() as s:
-            row = s.get(m.Problem, (ctx.server_id, p.problem_id))
-            row.assets_fetched = True
-            if is_new or tc_changed or text_changed:
+        if inline_all or p.problem_id in assigned:
+            done_assigned += 1
+            _activity(f"下载作业里题目的测试点和题面（第 {done_assigned} / {n_assigned} 题）")
+            if sync_problem_assets(ctx, p.problem_id, force_files=need_assets or full_check, is_new=is_new):
                 changed.append(p.problem_id)
-                enqueue(s, ctx.server_id, "label_problem", p.problem_id, 2)
+        elif need_assets or full_check:
+            with db.session_scope() as s:
+                enqueue(s, ctx.server_id, "problem_assets", p.problem_id, 3, when=ctx.now())
+            queued += 1
         ctx.bump("problems")
     if full_check:
         with db.session_scope() as s:
             set_time(s, ctx.server_id, "last_full_asset_check_at", ctx.now())
     ctx.bump("problems_changed", len(changed))
+    log.info("题库：%d 题；作业里的 %d 题已下载测试点和题面，其余 %d 题排队慢慢下载", len(problems), n_assigned, queued)
+    return changed
+
+
+def sync_problem_assets(ctx: SyncContext, problem_id: int, force_files: bool = True, is_new: bool = False,
+                        priority: int | None = None) -> bool:
+    """下载一道题的测试点和题面；有变化就入队重新标注。返回有没有变化。"""
+    tc_changed = _sync_testcases(ctx, problem_id, force_files=force_files)
+    text_changed = _sync_problem_text(ctx, problem_id)
+    with db.session_scope() as s:
+        row = s.get(m.Problem, (ctx.server_id, problem_id))
+        first = not row.assets_fetched
+        row.assets_fetched = True
+        changed = is_new or first or tc_changed or text_changed
+        if changed:
+            enqueue(s, ctx.server_id, "label_problem", problem_id, priority if priority is not None else 2)
     return changed
 
 
@@ -222,10 +264,10 @@ def _sync_problem_text(ctx: SyncContext, problem_id: int) -> bool:
         return changed
 
 
-def sync_metadata(ctx: SyncContext, max_requests: int | None = None) -> dict:
+def sync_metadata(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> dict:
     sync_classes_and_roster(ctx)
     sync_contests(ctx)
-    sync_problems(ctx, max_requests=max_requests)
+    sync_problems(ctx, max_requests=max_requests, inline_all=inline_all)
     with db.session_scope() as s:
         set_time(s, ctx.server_id, "last_meta_at", ctx.now())
     return dict(ctx.stats)
