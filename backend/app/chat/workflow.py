@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 import time
 
 from sqlalchemy import select
@@ -23,6 +24,8 @@ BUTTONS = {"think": "我想自己想想", "hint": "再给点提示", "tell": "�
 ASK_WHY_TEXT = "这次提交为什么错了？"
 # 这些步骤不调用大模型，一律用固定模板
 TEMPLATE_ONLY = {"ack", "ask_which", "passed", "pending", "blank", "reveal_line", "stubborn"}
+# 智能体刚指出问题，学生不同意（“没关系吧”“反正后面会比较”）：当成在回答，按没答对往上帮一级
+_PUSHBACK = re.compile(r"(没关系|不影响|没问题吧|不对吧|不是吧|反正|应该可以|不会错|没错啊|没错吧|有什么问题)")
 
 
 # ------------------------------------------------------------ 线程和回合
@@ -224,12 +227,20 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     last_agent = next((x for x in reversed(thread_messages(s, user_id, thread)) if x.role == "agent"), None)
     last_agent_text = message_text(last_agent) if last_agent is not None and last_agent.kind == "text" else ""
     awaiting = last_agent_text.rstrip().endswith(("？", "?"))
+    if awaiting and thread is not None and last_agent is not None:
+        newer = s.scalar(select(m.Submission.submission_id).where(
+            m.Submission.server_id == thread[0], m.Submission.problem_id == thread[1], m.Submission.user_id == user_id,
+            m.Submission.submit_time > last_agent.created_at))
+        if newer is not None:
+            awaiting = False  # 智能体问完以后他又交过一次：这条消息是在说新的提交，不是在回答那个问题
     since_reply = (now - last_agent.created_at).total_seconds() if last_agent is not None else None
 
     # 第 2 步 绑定 → 回合
     key, _sub, _by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now)
     rnd = _round_for(s, user_id, key, now)
     awaiting = awaiting or rnd.recall_stage in ("asked", "blanked")  # 让他回忆时也在等他回答
+    if not awaiting and not action and rnd.help_count > 0 and _PUSHBACK.search(prose or text):
+        awaiting = True
     blocks = [{"t": "p", "text": p} for p in prose.split("\n") if p.strip()]
     if pasted:
         blocks.append({"t": "code", "caption": "我贴的代码", "start": 1, "lines": pasted.split("\n"), "mark": []})
@@ -255,7 +266,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
                 if code in SKILLS:
                     options.append((code, SKILLS[code][0]))
         analysis = analyze(prose or text, bool(pasted), awaiting, last_agent_text,
-                           ctx.fill(hint.why) if awaiting else "", options)
+                           ctx.fill(hint.why) if awaiting else "", options, bound=ctx.problem is not None)
         if analysis.intent == "REPLY" and awaiting and analysis.answer_correct is None and not analysis.understood:
             analysis.answer_correct = bool(hints.answered(text, hint))  # 判不了按没答对处理：多帮一点比错夸要稳妥
     in_recall = rnd.recall_stage in ("asked", "blanked") and action is None \

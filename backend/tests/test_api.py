@@ -118,9 +118,16 @@ def test_chat_roundtrip_and_buttons(client, demo):
     login(client)
     sid = demo["server_id"]
     th = client.get(f"/api/threads/p{sid}-406").json()["messages"]
-    assert [x["role"] for x in th] == ["student", "agent", "student", "agent"]
-    assert th[1]["actions"] == [] and th[3]["actions"] == ["think", "hint", "tell"]   # 按钮只在最新一条回复下面
-    assert set(th[3]) == {"id", "role", "kind", "time", "blocks", "actions"}
+    # 第一条是智能体主动发的：第 3 次又犯了以前在「最大差值」里改正过的错，摘出当时改对的代码
+    assert [x["role"] for x in th] == ["agent", "student", "agent", "student", "agent"]
+    first = th[0]["blocks"]
+    assert "最大差值" in first[0]["text"]
+    code = next(b for b in first if b["t"] == "code")
+    assert code["caption"].startswith("你在「最大差值」里改对后的代码") and code["mark"]
+    assert any("a[0]" in line for line in code["lines"])
+    assert th[2]["actions"] == []   # 按钮只在最新一条回复下面
+    assert th[4]["actions"] == ["think", "hint", "tell"]
+    assert set(th[4]) == {"id", "role", "kind", "time", "blocks", "actions"}
     out = client.post(f"/api/threads/p{sid}-406/messages", json={"action": "think"}).json()["messages"]
     assert out[-2]["blocks"][0]["text"] == "我想自己想想" and out[-1]["actions"] == ["hint", "tell"]
     out = client.post(f"/api/threads/p{sid}-406/messages", json={"text": "那我把初值改成 a[0] 是不是就行了？\nint max = a[0];\nfor (i = 1; i < n; i++)\n    if (a[i] > max) max = a[i];"}).json()["messages"]

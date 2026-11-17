@@ -1,6 +1,7 @@
 """第 7 步的生成：按证据和策略写回复。
 
-有大模型时由大模型写（它只拿到“哪类情况”，拿不到测试点的原始数据）；
+有大模型时由大模型写。它能看到没通过的测试点的输入、期望输出和他程序的实际输出（用来判断错在哪、
+构造一个不一样的小例子），但被要求绝不原样说给学生；回复校验（validate._leaks）会再拦一道，漏了就重写或退回模板。
 没有大模型、或两次都没通过校验时，用这里的固定模板。
 """
 from __future__ import annotations
@@ -210,7 +211,9 @@ _SYSTEM = """你是大学 C 语言课程的答疑助手，在帮一名学生看�
 - code：只有这一级允许给新代码时才填，否则填 null。keyLine 是 code 里最关键的那一行的序号。
 - 提到变量名用反引号。提到行号必须是他代码里真实的行号。
 硬性规则：
-1. 学生看不到测试点。只能说“哪类情况”，绝不编造或猜测具体的测试数据。
+1. 学生看不到测试点。下面给你的测试点输入、期望输出、实际输出只用来帮你判断错在哪；
+   回复里绝不能出现这些数据（哪怕一部分），也不能说“第几组的输入是……”。需要举例时，自己构造一个不同的小例子，
+   只说“哪类情况”（比如“全是负数的时候”）。
 2. 提到当前这道题说“这题”；提到别的题必须用给出的“「题目名」（简述）”原样写法，不说题号。
 3. 一般不超过 150 字（代码不计）。
 4. 不出现任何内部用语（编码、级别、学情、标注之类），不用 emoji，不用感叹号堆砌，不说教。
@@ -263,8 +266,15 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         f"他以前卡过的那道题：{prior_ref}" if prior_ref else "",
     ]
     talk = "\n".join(f"{'学生' if who == 'student' else '助手'}：{what[:300]}" for who, what in history[-4:])
+    failed = [t for t in (ctx.evidence or {}).get("testCases", []) if t.get("passed") is False][:2]
+    cases = "\n\n".join(
+        f"输入：\n{(t.get('standardInput') or '')[:300]}\n期望输出：\n{(t.get('standardOutput') or '')[:300]}\n"
+        f"他的程序输出：\n{(t.get('programOutput') if t.get('programOutput') is not None else '（没取到）')[:300]}"
+        for t in failed) or "（没有，或者是编译错误）"
     user = ("【这次的任务】" + task + "\n\n【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) +
-            f"\n\n【他的代码】\n{numbered[:5000]}\n\n【最近的对话】\n{talk or '（无）'}\n\n"
+            f"\n\n【他的代码】\n{numbered[:5000]}\n\n"
+            f"【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n{cases}\n\n"
+            f"【最近的对话】\n{talk or '（无）'}\n\n"
             f"【学生这条消息】\n{llm.strip_identity(text, ctx.user_id, ctx.user_name)[:1500]}")
     if feedback:
         user += f"\n\n【上一次写的不合格】{feedback}。请改正后重新输出。"

@@ -33,9 +33,12 @@ _DEBUG = re.compile(r"(错|不对|为什么|过不了|没过|不过|运行错误
 _OWN_PROBLEM = re.compile(r"(这题|这道题|我的代码|我这|我写|我交|提交|一直错|测试点|那一组|有一组)")
 _ATTEMPT = re.compile(r"(我觉得|我想|我认为|我猜|是不是|应该是|因为|所以|我试|我改|我把|我用|我写|会不会是|感觉是|可能是)")
 _QUESTIONING = re.compile(r"(为什么|怎么回事|怎么会|怎么办)")
+# 消息里提到了代码：变量名、关键字、运算符
+_CODEISH = re.compile(r"(`|\b(max|min|sum|cnt|count|int|long|double|char|for|while|if|else|return|scanf|printf|"
+                      r"main|i|j|n|a)\b|\[[^\]]*\]|==|!=|<=|>=|\+\+|--|%[dfsc])")
 
 
-def analyze_rules(text: str, has_code: bool, awaiting_answer: bool) -> Analysis:
+def analyze_rules(text: str, has_code: bool, awaiting_answer: bool, bound: bool = False) -> Analysis:
     t = (text or "").strip()
     a = Analysis(has_code=has_code, source="rule")
     a.has_attempt = has_code or bool(_ATTEMPT.search(t))
@@ -55,6 +58,8 @@ def analyze_rules(text: str, has_code: bool, awaiting_answer: bool) -> Analysis:
         a.intent = "CONCEPT"
     elif has_code or _DEBUG.search(t) or _OWN_PROBLEM.search(t):
         a.intent = "DEBUG"
+    elif bound and (a.has_attempt or _CODEISH.search(t)):
+        a.intent = "DEBUG"  # 在一道题的对话里、说的是他的代码（比如“max 是 0 也没关系吧”）：不当成无关的话
     else:
         a.intent = "OTHER"
     if a.intent == "REPLY" and a.has_attempt:
@@ -80,8 +85,9 @@ understood：学生是否表示已经懂了或已经通过。"""
 
 
 def analyze(text: str, has_code: bool, awaiting_answer: bool, last_agent_text: str = "",
-            diagnosis_note: str = "", skill_options: list[tuple[str, str]] | None = None) -> Analysis:
-    fallback = analyze_rules(text, has_code, awaiting_answer)
+            diagnosis_note: str = "", skill_options: list[tuple[str, str]] | None = None,
+            bound: bool = False) -> Analysis:
+    fallback = analyze_rules(text, has_code, awaiting_answer, bound)
     if not llm.available():
         return fallback
     options = skill_options or []

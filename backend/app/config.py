@@ -202,6 +202,14 @@ REVIEW = {
 }
 
 # ---------------------------------------------------------------- 对话（附件一第 5 节）
+# 智能体主动发消息（app/chat/proactive.py）
+PROACTIVE = {
+    "recent_minutes": 120,   # 只对两小时内交的提交发；回填的旧提交不发
+    "quiet_minutes": 10,     # 他在这道题上和智能体说话不到 10 分钟：不插嘴
+    "daily_limit": 4,        # 每人每天最多几条
+    "stuck_attempts": 3,     # 同一道题第几次还没过、错在同一处，算卡住
+}
+
 CHAT = {
     "round_timeout_minutes": 30,
     "bind_recent_minutes": 30,
