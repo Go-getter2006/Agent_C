@@ -124,7 +124,8 @@ def start_in_thread() -> threading.Thread:
 
 ACTIVITY = {
     "detail": "取提交的评测详情", "pending_judge": "等刚交的提交评测完", "recheck": "回读最近的提交，看有没有重判",
-    "problem_assets": "下载题库里其他题的测试点（不急，慢慢下载）", "label_problem": "标注题目",
+    "problem_assets": "下载题目的测试点和题面（题库所有老师共用，每道题只下载一次）",
+    "problem_check": "核对作业里的题有没有改动", "label_problem": "标注题目",
     "post_process": "分析提交、更新学情",
 }
 
@@ -238,8 +239,9 @@ class Daemon:
             task_id, kind, target, prio, attempts = task.id, task.kind, task.target_id, task.priority, task.attempts
         _state["activity"] = ACTIVITY.get(kind, kind)
         try:
-            if kind == "problem_assets":
-                sync_meta.sync_problem_assets(ctx, target, force_files=True, priority=3)
+            if kind in ("problem_assets", "problem_check"):
+                # problem_check 只比对测试点列表和题面，变了才下载测试点文件
+                sync_meta.sync_problem_assets(ctx, target, force_files=(kind == "problem_assets"), priority=max(prio, 2))
             elif kind == "detail":
                 try:
                     sync_submissions.fetch_detail(ctx, target, source_first=(prio == 0))
@@ -328,11 +330,11 @@ class Daemon:
             ("p0", lambda c: self._run_task(c, ("detail", "pending_judge"), 0)),
             ("poll", lambda c: self._poll_due(c) and (self._poll(c) or True)),
             ("pending", lambda c: self._run_task(c, ("pending_judge",), None)),
-            ("p1", lambda c: self._run_task(c, ("detail",), 1)),
+            ("p1", lambda c: self._run_task(c, ("detail", "problem_assets"), 1)),
             ("local", lambda c: self._run_task(c, store.LOCAL_KINDS, None)),
-            ("p2", lambda c: self._run_task(c, ("detail",), 2)),
+            ("p2", lambda c: self._run_task(c, ("detail", "problem_assets"), 2)),
             ("periodic", self._periodic),
-            ("p3", lambda c: self._run_task(c, ("recheck", "detail", "problem_assets"), 3)),
+            ("p3", lambda c: self._run_task(c, ("recheck", "detail", "problem_assets", "problem_check"), 3)),
         ]
         for name, fn in stages:
             for ctx in self.contexts:

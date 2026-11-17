@@ -335,13 +335,8 @@ def test_changed_problem_detected_and_archived(ctx, fake, clock):
     fake.problem_files[408] = (b"new", "text/plain")
     fake.add_testcase(408, 1501, "1\n", "1\n")
     clock.advance(8 * 86400)  # 过了一周：测试点文件全部重新核对
-    changed = sync_meta.sync_problems(ctx)
-    # 作业里的题当场下载；新题 408 没布置进作业，排进低优先级的队列，主循环空下来再下载
-    assert sorted(changed) == [406, 407]
-    with db.session_scope() as s:
-        assert s.scalar(select(m.FetchTask).where(m.FetchTask.kind == "problem_assets",
-                                                  m.FetchTask.target_id == 408)).priority == 3
-    assert sync_meta.sync_problem_assets(ctx, 408, priority=3) is True
+    changed = sync_meta.sync_problems(ctx, inline_all=True)
+    assert sorted(changed) == [406, 407, 408]
     with db.session_scope() as s:
         kinds = {(a.kind, a.target_id) for a in s.scalars(select(m.Archive)).all()}
         assert ("problem_text", 406) in kinds and ("testcase", 1402) in kinds
@@ -373,8 +368,8 @@ def test_two_servers_do_not_collide(database, clock):
         assert store.get_state(s, 1, "max_submission_id") == store.get_state(s, 2, "max_submission_id") == "537104"
 
 
-def test_bank_problems_outside_homework_are_downloaded_later(ctx, fake):
-    """老师第一次登录：作业里的题马上下载；题库里其他的题排队，主循环空下来再下载，同时心跳记下在做什么。"""
+def test_bank_problems_are_queued_not_downloaded_inline(ctx, fake):
+    """老师第一次登录：只拉班级、名单、作业和题库列表；测试点排队（作业里的题优先），主循环接着下载。"""
     from app.xdoj import daemon as daemon_mod
 
     fake.problems.append({"id": 499, "title": "题库里的题", "categoryName": "循环", "tags": [], "difficulty": "易",
@@ -382,13 +377,32 @@ def test_bank_problems_outside_homework_are_downloaded_later(ctx, fake):
     fake.problem_files[499] = (b"bank", "text/plain")
     fake.add_testcase(499, 1901, "1\n", "1\n")
     sync_meta.sync_metadata(ctx)
+    assert not any("testcase" in p or "viewTextFile" in p for _m, p in fake.requests)
     with db.session_scope() as s:
-        assert not s.get(m.Problem, (1, 499)).assets_fetched
-        assert s.get(m.Problem, (1, 406)).assets_fetched
+        prio = {t.target_id: t.priority for t in s.scalars(select(m.FetchTask).where(m.FetchTask.kind == "problem_assets"))}
+        assert prio == {406: 1, 407: 1, 499: 3}   # 作业里的题排在前面
     Daemon([ctx]).drain()
     with db.session_scope() as s:
-        assert s.get(m.Problem, (1, 499)).assets_fetched
+        assert all(p.assets_fetched for p in s.scalars(select(m.Problem)).all())
         assert s.get(m.Testcase, (1, 1901)).input_bytes is not None
         assert daemon_mod.claim("test-owner")
         _when, activity = daemon_mod.last_beat(s)
     assert activity  # 心跳里带着“正在做什么”
+
+
+def test_bank_synced_once_per_server_per_day(ctx, fake, clock):
+    """所有老师共用一个题库：同一天第二次同步（另一位老师登录）不再拉题库，也不再下载测试点。"""
+    full_sync(ctx)
+    before = len(fake.requests)
+    sync_meta.sync_metadata(ctx)
+    paths = [p for _m, p in fake.requests[before:]]
+    assert "/problem/list.do" not in paths
+    assert not any("testcase" in p or "viewTextFile" in p for p in paths)
+    # 第二天：题库列表拉一次；作业里的题只轻量核对（测试点列表和题面），文件没变就不重新下载
+    clock.advance(86400)
+    before = len(fake.requests)
+    sync_meta.sync_metadata(ctx)
+    Daemon([ctx]).drain()
+    paths = [p for _m, p in fake.requests[before:]]
+    assert "/problem/list.do" in paths
+    assert not any("download" in p.lower() and "testcase" in p for p in paths)
