@@ -65,17 +65,23 @@ def test_seeded_story(demo):
     sid = demo["server_id"]
     with db.session_scope() as s:
         msgs = workflow.thread_messages(s, UID, (sid, 406))
-        assert [x.role for x in msgs] == ["student", "agent", "student", "agent"]
-        first, second = msgs[1], msgs[3]
+        assert [x.role for x in msgs] == ["agent", "student", "agent", "student", "agent"]
+        # 第 2 次提交又犯了在「最大差值」里改正过的错：智能体主动先说，摘出当时改对的代码
+        assert msgs[0].content["proactive"]["kind"] == "recurrence" and "最大差值" in texts(msgs[0])
+        old = codes(msgs[0])[0]
+        assert old["caption"].startswith("你在「最大差值」里改对后的代码") and any("a[0]" in x for x in old["lines"])
+        first, second = msgs[2], msgs[4]
         block = codes(first)[0]
         assert block["caption"] == "你的第 3 次提交，第 10 到 12 行" and block["start"] == 10 and block["mark"] == [10]
         assert block["lines"] == ["int max = 0;", "for (i = 0; i < n; i++)", "    if (a[i] > max) max = a[i];"]
-        assert texts(first).endswith("如果输入的数全是负数，`max` 一开始等于 0，会发生什么？")
+        # 提醒过以后又交了一次、错的还是同一处：往上帮一级，直接指出位置
+        assert "`max` 的初值" in texts(first)
         assert "有关系。假如输入是 `-5 -2 -8`" in texts(second) and "第 12 行一次都不会替换" in texts(second)
         assert second.content["actions"] == ["think", "hint", "tell"]
-        steps = s.scalars(select(m.ChatStep).where(m.ChatStep.problem_id == 406).order_by(m.ChatStep.id)).all()
+        steps = s.scalars(select(m.ChatStep).where(m.ChatStep.problem_id == 406, m.ChatStep.user_id == UID)
+                          .order_by(m.ChatStep.id)).all()
         assert [(x.intent, x.rule_id, x.help_level, x.reveal_level) for x in steps] == [
-            ("DEBUG", "R11", "H0", "甲"), ("REPLY", "R08", "H2", "乙")]
+            ("DEBUG", "R08", "H1", "甲"), ("REPLY", "R08", "H2", "乙")]
         st = steps[0]
         assert st.bind_by == "thread" and st.root_error_code == "TY09" and st.root_skill_code == "C06.03.02"
         assert st.willingness == "HIGH" and st.base_level == "基本掌握" and st.check_result["ok"]
@@ -120,7 +126,7 @@ def test_second_time_stuck_recall_then_blank(demo):
         # 补上了
         out = workflow.handle(s, UID, thread, "int max = a[0];")
         assert texts(out[1]).startswith("对")
-        rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406)).one()
+        rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406, m.ChatRound.user_id == UID)).one()
         assert rnd.max_help_level == "H2" and rnd.recall_stage == "done"
         item = s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == UID, m.ReviewItem.skill_code == "C06.03.02")).one()
         assert item.state == "active" and item.lapses >= 1   # 第二次卡住：在复习里记一次遗忘
@@ -144,7 +150,7 @@ def test_think_button_and_understood(demo):
         st = last_step(s)
         assert (st.help_level, st.willingness, st.analysis_source) == ("NA", "HIGH", "button")
         out = workflow.handle(s, UID, (sid, 406), "懂了，我去改")
-        rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406)).one()
+        rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406, m.ChatRound.user_id == UID)).one()
         assert (rnd.status, rnd.end_reason) == ("closed", "学生表示懂了") and out[1].content["actions"] == []
 
 
@@ -217,7 +223,7 @@ def test_pass_closes_round_and_triggers_quiz(demo):
                            detail_status="done"))
         s.flush()
         pipeline.process_submission(s, sid, new_id)
-        rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406)).one()
+        rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406, m.ChatRound.user_id == UID)).one()
         assert (rnd.status, rnd.end_reason, rnd.quiz_triggered) == ("closed", "通过", True)
         ev = s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.source_key == f"pass:{sid}:{new_id}")).all()
         assert {e.event_type for e in ev} == {"pass_after_h2"} and {e.weight for e in ev} == {0.2}
@@ -318,7 +324,7 @@ def test_llm_reply_is_validated_and_falls_back(demo):
         llm.set_backend(None)
 
 
-def test_llm_good_reply_used_and_never_sees_raw_tests(demo):
+def test_llm_good_reply_used_and_sees_failed_tests(demo):
     sid = demo["server_id"]
     seen = []
 
@@ -340,7 +346,26 @@ def test_llm_good_reply_used_and_never_sees_raw_tests(demo):
             assert (st.reply_source, st.retries, st.model_version) == ("llm", 0, config.DEEPSEEK_MODEL)
             assert texts(out[1]).startswith("循环没有问题") and out[1].content["actions"] == ["think", "hint", "tell"]
         everything = "\n".join(seen)
-        assert "-12 -7 -30" not in everything and UID not in everything and "林晓" not in everything
-        assert "全是负数" in everything   # 只告诉它是哪类情况
+        # 大模型能看到没通过的那组输入（用来判断错在哪），但看不到学号和姓名
+        assert "-12 -7 -30" in everything and "绝不能把这些数据告诉学生" in everything
+        assert UID not in everything and "林晓" not in everything
+        assert "全是负数" in everything
     finally:
         llm.set_backend(None)
+
+
+def test_proactive_message_rules(demo):
+    """主动消息：只对刚交的提交；这道题上已经说过话就不再插嘴；摘出的是改对的那几行。"""
+    import datetime as dt
+
+    from app.chat import proactive
+
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        sub = s.get(m.Submission, (sid, 537201))
+        assert proactive.on_failed_submission(s, sub) is None          # 之后已经在对话了
+        assert proactive.on_failed_submission(s, sub, now=sub.submit_time + dt.timedelta(hours=5)) is None  # 太旧
+    before = ["int max = 0;", "for (i = 0; i < n; i++)", "    if (a[i] > max) max = a[i];", "printf(\"%d\", max);"]
+    after = ["int max = a[0];", "for (i = 1; i < n; i++)", "    if (a[i] > max) max = a[i];", "printf(\"%d\", max);"]
+    start, lines, marks = proactive.fix_excerpt(before, after, hint_line=1)
+    assert start == 1 and lines[0] == "int max = a[0];" and marks == [1, 2]

@@ -40,6 +40,9 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
         primary = next((lab for lab in labels if lab.role == "primary" and lab.confidence >= 0.5), None)
         if primary is not None and primary.skill_code:
             review.on_recurrence(s, sub, primary.error_code, primary.skill_code)   # 改正后又出现
+        from .chat import proactive
+
+        proactive.on_failed_submission(s, sub, now)   # 卡住或重犯：智能体主动先说一句
         return
     earlier = s.scalars(select(m.Submission).where(
         m.Submission.server_id == server_id, m.Submission.user_id == sub.user_id,
