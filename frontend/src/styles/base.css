@@ -71,6 +71,18 @@ pre,
   font-family: var(--font-code);
 }
 
+/* 代码里的 <=、!= 要按原样显示，不要连字 */
+code,
+pre,
+.mono,
+.code-body,
+.diff-table,
+.cm-scroller,
+.composer textarea.has-code {
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
 /* 键盘焦点必须看得见 */
 :focus {
   outline: none;

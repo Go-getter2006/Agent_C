@@ -76,14 +76,18 @@ def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None) -> li
 
 def _homework_view(s: Session, user: m.User, c: m.Contest) -> dict:
     pids = [pid for pid in catalog.contest_problem_ids(s, c.server_id, c.contest_id)]
-    passed = 0
+    passed, last = 0, None
     for pid in pids:
-        if any(x.judgement == "AC" for x in catalog.user_submissions(s, user.student_id, c.server_id, pid)):
+        subs = catalog.user_submissions(s, user.student_id, c.server_id, pid)
+        if any(x.judgement == "AC" for x in subs):
             passed += 1
+        if subs and subs[-1].submit_time and (last is None or subs[-1].submit_time > last):
+            last = subs[-1].submit_time
     now = db.now()
     return {"key": catalog.homework_key(c.server_id, c.contest_id), "title": c.title, "passed": passed,
             "total": len(pids), "endTime": c.end_time.isoformat() if c.end_time else None,
-            "ended": bool(c.end_time and c.end_time < now)}
+            "ended": bool(c.end_time and c.end_time < now),
+            "lastSubmit": last.isoformat() if last else None}
 
 
 def _sorted_contests(s: Session, user: m.User) -> list[m.Contest]:

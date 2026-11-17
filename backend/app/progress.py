@@ -151,7 +151,7 @@ def activity_block(snap: Snapshot) -> dict:
             "key": catalog.homework_key(c.server_id, c.contest_id), "title": c.title,
             "passed": sum(1 for k in keys if snap.passed(k)), "total": len(keys),
             "endTime": c.end_time.isoformat() if c.end_time else None,
-            "ended": bool(c.end_time and c.end_time < snap.now)})
+            "ended": bool(c.end_time and c.end_time < snap.now), "lastSubmit": None})
     tried = [k for k in snap.info if snap.subs.get(k)]
     first = sum(1 for k in tried if snap.first_try(k))
     total_subs = sum(len(snap.subs[k]) for k in tried)

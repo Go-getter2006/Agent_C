@@ -1,0 +1,604 @@
+/* 小题、差异视图、提交页、学情页、登录页 */
+
+/* ---------- 小题 ---------- */
+.quiz {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+  max-width: 640px;
+}
+
+.quiz-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-8);
+}
+
+.quiz-label {
+  width: 32px;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+
+.quiz-editor {
+  max-width: 560px;
+}
+
+.editor .cm-editor {
+  max-height: 320px;
+}
+
+.quiz-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+}
+
+.quiz-choice {
+  justify-content: flex-start;
+  height: auto;
+  min-height: var(--control-h);
+  padding: var(--sp-8) var(--sp-12);
+  white-space: normal;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.quiz-choice.mono {
+  font-size: var(--fs-13);
+}
+
+.quiz-msg {
+  font-size: var(--fs-14);
+}
+
+
+.quiz-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+}
+
+.quiz-headline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  font-weight: 600;
+}
+
+.quiz-skip {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 560px;
+}
+
+.quiz-skip .btn-text {
+  min-height: 32px;
+  color: var(--ink-2);
+}
+
+/* ---------- 差异视图 ---------- */
+.diff {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--rail-w);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+}
+
+.diff-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-16);
+  min-height: 64px;
+  padding: var(--sp-8) var(--sp-8) var(--sp-8) var(--gutter);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.diff-head h1 {
+  font-size: var(--fs-17);
+  font-weight: 600;
+}
+
+.diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-20) var(--gutter) 40px;
+}
+
+.diff-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-16);
+  margin-bottom: var(--sp-12);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.diff-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-6);
+}
+
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--line);
+}
+
+.diff-table {
+  width: 100%;
+  min-width: 720px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  font-family: var(--font-code);
+  font-size: var(--code-fs);
+  line-height: var(--code-lh);
+  table-layout: fixed;
+}
+
+.diff-table th {
+  padding: 6px var(--sp-12);
+  background: var(--ground);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-ui);
+  font-size: var(--fs-12h);
+  font-weight: 400;
+  color: var(--ink-2);
+  text-align: left;
+}
+
+.diff-table th + th,
+.diff-table td.diff-right-no {
+  border-left: 1px solid var(--line);
+}
+
+.diff-table td {
+  padding: 0;
+  vertical-align: top;
+}
+
+.diff-no {
+  width: var(--lineno-w);
+  padding-right: var(--sp-12) !important;
+  text-align: right;
+  color: var(--ink-2);
+  user-select: none;
+}
+
+.diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: var(--sp-12) !important;
+}
+
+.diff-changed {
+  background: var(--mark);
+}
+
+.diff-removed {
+  background: var(--removed);
+}
+
+.diff-stack {
+  display: none;
+  flex-direction: column;
+  gap: var(--sp-16);
+}
+
+/* ---------- 提交页 ---------- */
+.subs-picker {
+  width: 340px;
+  max-width: 100%;
+}
+
+.subs-picker .picker {
+  padding: 0;
+  border: 0;
+}
+
+.subs-picker .picker-menu {
+  left: 0;
+  right: 0;
+  top: calc(19px + var(--sp-6) + var(--control-h) + 2px);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-14);
+}
+
+.table th {
+  padding: var(--sp-8) var(--sp-12) var(--sp-8) 0;
+  border-bottom: 1px solid var(--ink);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--ink-2);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: var(--sp-10) var(--sp-12) var(--sp-10) 0;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+
+.table tr.group-start td {
+  border-top: 1px solid var(--line);
+}
+
+.table .nowrap {
+  white-space: nowrap;
+}
+
+.table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.table th.num {
+  text-align: right;
+}
+
+.table th button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.table th[aria-sort] button {
+  color: var(--ink);
+}
+
+.sub-problem a {
+  display: inline-flex;
+  flex-direction: column;
+  text-decoration: none;
+  min-height: 32px;
+  justify-content: center;
+}
+
+.sub-problem a:hover strong {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sub-problem strong {
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.sub-problem small {
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.sub-ops {
+  display: flex;
+  gap: var(--sp-12);
+  flex-wrap: wrap;
+}
+
+.sub-ops .btn-text {
+  min-height: 32px;
+  padding: 0;
+}
+
+.sub-source td {
+  padding-top: 0;
+}
+
+.table-scroll {
+  overflow-x: auto; /* 宽表格在自己的容器里横向滚动 */
+}
+
+.sub-cards {
+  display: none;
+}
+
+/* ---------- 学情页 ---------- */
+.progress-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  min-width: 0;
+}
+
+.block + .block {
+  margin-top: 32px;
+}
+
+.block h2 {
+  padding-bottom: var(--sp-8);
+  border-bottom: 1px solid var(--ink);
+  font-size: var(--fs-15);
+  font-weight: 600;
+}
+
+.block h3 {
+  margin-top: var(--sp-8);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.rows > li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-10) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-12);
+  flex-wrap: wrap;
+}
+
+.row-title {
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+
+.row-sub {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-12);
+  flex-wrap: wrap;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.row-sub .btn-text,
+.row-main .btn-text {
+  min-height: 28px;
+  padding: 0;
+  font-size: var(--fs-13);
+}
+
+.kp-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 2px var(--sp-12);
+  align-items: center;
+  padding: var(--sp-8) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.kp-row .row-sub {
+  grid-column: 1 / -1;
+}
+
+.status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-6);
+  font-size: var(--fs-13);
+  white-space: nowrap;
+}
+
+.next-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-12) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.next-item .btn {
+  align-self: flex-start;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-6) var(--sp-16);
+  font-size: var(--fs-14);
+}
+
+.facts dt {
+  color: var(--ink-2);
+}
+
+.pcells {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+/* ---------- 登录页 ---------- */
+.login {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--ground);
+  padding: 12vh var(--sp-16) 40px;
+}
+
+.login-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-16);
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+  padding: var(--sp-24);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.login-box h1 {
+  font-size: var(--fs-17);
+  font-weight: 600;
+}
+
+.login-box label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.login-box .btn-primary {
+  height: var(--input-h);
+}
+
+.login-tabs {
+  display: flex;
+  gap: var(--sp-16);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.login-tabs button {
+  padding: 0 0 var(--sp-8);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font-size: var(--fs-14);
+  color: var(--ink-2);
+  min-height: 36px;
+}
+
+.login-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--ink);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 1023px) {
+  .progress-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+}
+
+@media (max-width: 767px) {
+  .diff {
+    left: 0;
+    border-left: 0;
+    z-index: 45;
+  }
+
+  .diff-head {
+    min-height: 56px;
+    background: var(--ground);
+    border-bottom-color: var(--line);
+  }
+
+  .diff-table {
+    display: none;
+  }
+
+  .diff-stack {
+    display: flex;
+  }
+
+  .quiz-row .btn {
+    flex: 1;
+    padding: 0 var(--sp-4);
+  }
+
+  .quiz-row .btn-primary {
+    flex: 0 0 auto;
+    padding: 0 var(--sp-16);
+  }
+
+  .quiz-editor,
+  .quiz-skip {
+    max-width: none;
+  }
+
+  .table-scroll {
+    display: none;
+  }
+
+  .sub-cards {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sub-card {
+    padding: var(--sp-12) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .sub-card-head {
+    display: flex;
+    flex-direction: column;
+    min-height: 44px;
+    justify-content: center;
+    text-decoration: none;
+  }
+
+  .sub-card-head strong {
+    font-size: var(--fs-15);
+    font-weight: 600;
+  }
+
+  .sub-card-head small {
+    font-size: var(--fs-13);
+    color: var(--ink-2);
+  }
+
+  .sub-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    padding: var(--sp-8) 0;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .sub-ops .btn-text {
+    min-height: 44px;
+  }
+
+  .subs-picker {
+    width: 100%;
+  }
+
+  .kp-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .login {
+    padding-top: 6vh;
+  }
+
+  .row-sub .btn-text,
+  .row-main .btn-text {
+    min-height: 44px;
+  }
+}
