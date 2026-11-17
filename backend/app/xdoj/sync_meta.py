@@ -54,7 +54,7 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
     seen: dict[str, int] = {}
     for c in classes:
         _activity(f"同步学生名单（{c.class_name or c.class_id}）")
-        students = ep.list_students(ctx.client, c.class_id, c.alt_id)
+        students = ep.list_students(ctx.client, c.class_id, c.alt_id, roster_filter_id=c.roster_filter_id)
         if not students:
             log.warning("班级 %s（%s）的名单是空的：按 class_id=%s%s 都没取到学生。请运行 python -m app.cli doctor 看一下",
                         c.class_id, c.class_name, c.class_id, f" 和 {c.alt_id}" if c.alt_id else "")

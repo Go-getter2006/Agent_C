@@ -56,18 +56,23 @@ class ClassRow:
     class_id: int
     class_name: str
     owner_id: str
-    alt_id: int | None = None  # 列表里 id 和 classId 都有、又不一样时，另一个（名单接口按哪个筛还没实测）
+    alt_id: int | None = None  # 兼容使用另一种数字班级编号的旧接口
+    roster_filter_id: str | None = None  # classId 可以是文本编号，名单筛选必须保留原值
 
 
 def list_classes(client: XdojClient) -> list[ClassRow]:
     out = []
     for r in _paged(client, "POST", "/class/list.do"):
-        cid = to_int(pick(r, "classId", "id"))
+        roster_id = r.get("classId")
+        cid = to_int(roster_id)
+        other = to_int(r.get("id"))
+        if cid is None:
+            cid = other
         if cid is None:
             continue
-        other = to_int(r.get("id"))
         out.append(ClassRow(cid, str(pick(r, "className", "name", default="")), str(pick(r, "ownerId", default="")),
-                            other if other is not None and other != cid else None))
+                            other if other is not None and other != cid else None,
+                            str(roster_id) if roster_id not in (None, "") else None))
     return out
 
 
@@ -85,18 +90,19 @@ def _language(value) -> str:
     return str(value or "").strip()[:32]
 
 
-def list_students(client: XdojClient, class_id: int, alt_id: int | None = None) -> list[StudentRow]:
+def list_students(client: XdojClient, class_id: int, alt_id: int | None = None,
+                  *, roster_filter_id: str | None = None) -> list[StudentRow]:
     """只取学号、姓名、班级。接口返回里的密码、令牌、登录 IP 在这里就丢掉，不往外传。
 
-    按 class_id 筛选。班级列表里 id 和 classId 不一样时不确定该用哪个：先用 classId，取不到人再用 id 试一次。
+    名单按原始 classId 筛选，写入本地关系时用数字 class_id。兼容旧版本按 id 筛选的接口。
     """
-    out = _students_by(client, class_id, class_id)
+    out = _students_by(client, roster_filter_id if roster_filter_id is not None else class_id, class_id)
     if not out and alt_id is not None:
         out = _students_by(client, alt_id, class_id)
     return out
 
 
-def _students_by(client: XdojClient, filter_id: int, class_id: int) -> list[StudentRow]:
+def _students_by(client: XdojClient, filter_id: int | str, class_id: int) -> list[StudentRow]:
     filters = json.dumps({"groupOp": "AND", "rules": [{"field": "class_id", "op": "eq", "data": str(filter_id)}]})
     out = []
     for raw in _paged(client, "POST", "/user/listStudents.do", {"search": "true", "filters": filters}, sidx="user_id"):

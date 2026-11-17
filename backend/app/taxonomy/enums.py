@@ -49,7 +49,7 @@ JUDGEMENTS = {
 }
 
 _JUDGEMENT_KEYWORDS = [
-    ("PENDING", ("等待", "评测中", "排队", "pending", "judging", "queue", "running", "waiting")),
+    ("PENDING", ("未评判", "等待", "评测中", "排队", "pending", "judging", "queue", "running", "waiting")),
     ("CE", ("编译", "compile")),
     ("TLE", ("超时", "时间超限", "time limit")),
     ("MLE", ("内存", "memory limit")),

@@ -421,6 +421,49 @@ def test_roster_filter_falls_back_to_other_class_id(ctx, fake):
         assert s.get(m.ContestClass, (1, 501, 31)) is not None
 
 
+@pytest.mark.parametrize("class_code", ["COURSE-2026", "000031"])
+def test_roster_keeps_original_class_filter(ctx, fake, class_code):
+    """文本班级编号和带前导零的编号都按原值查询，数据库继续使用数字主键。"""
+    from app.xdoj import endpoints as ep
+
+    fake.classes = [{"id": 9031, "classId": class_code, "className": "测试一班", "ownerId": fake.teacher_id}]
+    for student in fake.students:
+        student["classId"] = class_code
+    fake.contests[0]["classes"] = [{"id": 9031, "classId": class_code}]
+    with db.session_scope() as s:
+        source = m.DataSource(server_id=ctx.server_id, teacher_user_id=fake.teacher_id)
+        s.add(source)
+        s.flush()
+        ctx.source_id = source.id
+    rows = ep.list_classes(ctx.client)
+    assert len(rows) == 1
+    local_id = int(class_code) if class_code.isdigit() else 9031
+    assert rows[0].class_id == local_id
+    assert rows[0].roster_filter_id == class_code
+    sync_meta.sync_metadata(ctx)
+    sync_meta.sync_metadata(ctx)
+    with db.session_scope() as s:
+        assert s.get(m.XClass, (ctx.server_id, local_id)) is not None
+        assert s.get(m.ClassSource, (ctx.server_id, local_id, ctx.source_id)) is not None
+        enrollments = s.scalars(select(m.Enrollment).where(m.Enrollment.class_id == local_id)).all()
+        assert len(enrollments) == 3
+        assert all(row.status == "active" for row in enrollments)
+        assert s.get(m.ContestClass, (ctx.server_id, 501, local_id)) is not None
+        assert s.scalar(select(func.count()).select_from(m.User)) == 3
+
+
+def test_unjudged_submission_waits_for_judging(ctx, fake, caplog):
+    fake.submissions[537101].judges[-1].result = "未评判"
+    sync_submissions.poll_new_submissions(ctx)
+    with db.session_scope() as s:
+        submission = s.get(m.Submission, (ctx.server_id, 537101))
+        assert submission.judgement == "PENDING"
+        pending = s.scalar(select(m.FetchTask).where(
+            m.FetchTask.kind == "pending_judge", m.FetchTask.target_id == 537101))
+        assert pending is not None
+    assert not any("不认识的评测结果" in record.message for record in caplog.records)
+
+
 def test_real_response_shapes_numeric_results_and_language_object(ctx, fake):
     """真实接口：评测记录只给数字结果、语言是对象。正确的提交不能被详情同步改成“结果未知”，语言要取名字。"""
     fake.numeric_results = True
