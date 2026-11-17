@@ -1,0 +1,141 @@
+// 教师端共用：导航、班级选择、页面骨架、几个对照表。
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { CircleAlert, Database, FileDown, GitCompare, LayoutDashboard, Users, Waypoints } from "lucide-react";
+import { get } from "../../api";
+import { Shell, type NavItem } from "../../components/Shell";
+import { Empty, Loading, Problem } from "../../components/ui";
+import { useLoad } from "../../lib/hooks";
+
+export const NAV: NavItem[] = [
+  { to: "/teacher/class", label: "总览", icon: LayoutDashboard, section: "班级" },
+  { to: "/teacher/students", label: "学生", icon: Users, section: "班级" },
+  { to: "/teacher/stuck", label: "卡点", icon: CircleAlert, section: "班级" },
+  { to: "/teacher/map", label: "知识图谱", icon: Waypoints, section: "班级" },
+  { to: "/teacher/models", label: "模型对比", icon: GitCompare, section: "研究" },
+  { to: "/teacher/logs", label: "日志申请", icon: FileDown, section: "数据" },
+  { to: "/teacher/sources", label: "数据源", icon: Database, section: "数据" },
+];
+
+export interface ClassInfo {
+  key: string;
+  name: string;
+  server: string;
+  students: number;
+}
+
+export interface SkillRef {
+  code: string;
+  name: string;
+  kp: string;
+}
+
+export const RESOLUTION: Record<string, string> = {
+  pending: "还在处理", recalled: "自己回忆出来", blank_filled: "挖空补上", example_given: "给了示例代码", exercise: "小练习",
+};
+export const HELP: Record<string, string> = { NA: "没有求助", H0: "反问", H1: "指出位置", H2: "讲原理", H3: "给了示例代码" };
+export const OUTCOME: Record<string, string> = {
+  right: "改对了", right_judge: "判断对", right_second: "第二次改对", right_bypass: "绕开原错误改对",
+  wrong_fix: "两次没改对", wrong_judge: "判断错", skipped: "跳过", "": "没做完",
+};
+export const REASON: Record<string, string> = { after_pass: "通过后", recall: "回忆题", revisit: "回访题", review: "复习", stubborn: "顽固卡点" };
+export const endReason = (r: { status: string; endReason: string }) => (r.status === "open" ? "进行中" : r.endReason || "已结束");
+export const pct = (x: number | null | undefined) => (x === null || x === undefined ? "没有数据" : `${Math.round(x * 100)}%`);
+
+export const Code = ({ children }: { children: ReactNode }) => <span className="code-tag">{children}</span>;
+
+// ---------- 班级：几个页面共用同一个选择，记在本机 ----------
+const CLASS_KEY = "pda.teacher.class";
+
+interface ClassesValue {
+  classes: ClassInfo[];
+  current: ClassInfo | null;
+  pick: (key: string) => void;
+  loading: boolean;
+  error: string | null;
+  role: string;
+}
+
+const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher" });
+
+export function ClassesProvider({ children }: { children: ReactNode }) {
+  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string }>("/api/teacher/classes"), []);
+  const [picked, setPicked] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem(CLASS_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const classes = list.data?.classes ?? [];
+  const current = classes.find((c) => c.key === picked) ?? classes[0] ?? null;
+  const pick = useCallback((key: string) => {
+    setPicked(key);
+    try {
+      window.localStorage.setItem(CLASS_KEY, key);
+    } catch {
+      /* 存不了也不影响使用 */
+    }
+  }, []);
+  const value = useMemo(() => ({ classes, current, pick, loading: list.loading, error: list.error, role: list.data?.role ?? "teacher" }),
+    [classes, current, pick, list.loading, list.error, list.data?.role]);
+  return <ClassesContext.Provider value={value}>{children}</ClassesContext.Provider>;
+}
+
+export const useClasses = () => useContext(ClassesContext);
+
+export function ClassPicker() {
+  const { classes, current, pick } = useClasses();
+  if (classes.length === 0) return null;
+  return (
+    <label className="class-pick">
+      <span className="sr-only">班级</span>
+      <Users size={16} aria-hidden="true" />
+      <select className="field" value={current?.key ?? ""} onChange={(e) => pick(e.target.value)}>
+        {classes.map((c) => <option key={c.key} value={c.key}>{c.name}（{c.students} 人）</option>)}
+      </select>
+    </label>
+  );
+}
+
+interface PageProps {
+  title: string;
+  sub?: ReactNode;
+  withClass?: boolean;
+  tools?: ReactNode;
+  crumb?: ReactNode;
+  wide?: boolean;
+  children: (cls: ClassInfo | null) => ReactNode;
+}
+
+export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide = false, children }: PageProps) {
+  const { current, loading, error } = useClasses();
+  return (
+    <Shell nav={NAV} kind="teacher">
+      <main className="page">
+        <div className={wide ? "page-inner page-wide" : "page-inner"}>
+          {crumb}
+          <div className="page-head">
+            <div>
+              <h1>{title}</h1>
+              {sub && <p className="page-sub">{sub}</p>}
+            </div>
+            <div className="page-tools">
+              {tools}
+              {withClass && <ClassPicker />}
+            </div>
+          </div>
+          {loading && <div className="card card-body"><Loading /></div>}
+          {error && <Problem message={error} />}
+          {!loading && !error && withClass && !current && (
+            <div className="card">
+              <Empty icon={Users} title="你名下还没有同步到班级">
+                第一次登录后，系统会去 XDOJ 同步你的班级和名单，一般几分钟内完成；在“数据源”页可以看进度。
+              </Empty>
+            </div>
+          )}
+          {!loading && (!withClass || current) && children(current)}
+        </div>
+      </main>
+    </Shell>
+  );
+}

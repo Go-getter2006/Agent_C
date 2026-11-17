@@ -1,0 +1,75 @@
+# 校内服务器上的部署。HTTPS 由前面的反向代理（学校的网关或 nginx、caddy）负责，这里只在本机端口上提供服务。
+# 启动：docker compose up -d --build        看日志：docker compose logs -f daemon
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pda
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?在 .env 里设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: pda
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pda"]
+      interval: 5s
+      retries: 10
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_ENV: prod
+      DATABASE_URL: postgresql+psycopg://pda:${POSTGRES_PASSWORD}@db:5432/pda
+      SANDBOX_MODE: socket
+      SANDBOX_SOCKET: /run/sandbox/sandbox.sock
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - sandbox-socket:/run/sandbox
+
+  # 常驻主循环：同步 XDOJ、标注、学情证据、夜里更新图模型。只起一个。
+  daemon:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_ENV: prod
+      DATABASE_URL: postgresql+psycopg://pda:${POSTGRES_PASSWORD}@db:5432/pda
+      SANDBOX_MODE: socket
+      SANDBOX_SOCKET: /run/sandbox/sandbox.sock
+    command: ["python", "-m", "app.cli", "daemon"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - sandbox-socket:/run/sandbox
+
+  # 沙箱：只运行我们自己的小题代码和标注用的参考解。
+  # 没有网络、根文件系统只读、去掉全部特权、限制进程数和内存；只通过共享卷上的套接字收请求。
+  sandbox:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.sandbox.server"]
+    environment:
+      SANDBOX_MODE: local
+      SANDBOX_SOCKET: /run/sandbox/sandbox.sock
+    network_mode: none
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:size=64m,exec
+    volumes:
+      - sandbox-socket:/run/sandbox
+
+volumes:
+  pgdata:
+  sandbox-socket:
