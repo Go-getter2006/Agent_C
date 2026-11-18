@@ -14,7 +14,8 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* 底色上一层很淡的点阵，像方格本；卡片、对话区是实底，盖住点阵 */
+  background: radial-gradient(circle, var(--dot) 1px, transparent 1.4px) 0 0 / 22px 22px, var(--bg);
   color: var(--ink);
   font-family: var(--font-ui);
   font-size: var(--fs-14);
@@ -22,7 +23,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
   overflow: hidden; /* 页面主体永远不横向滚动；各栏自己滚动 */
-  font-feature-settings: "cv11", "ss01";
+  transition: background-color .6s ease;
 }
 
 h1,
@@ -149,13 +150,13 @@ pre,
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #000000;
-  border-color: #000000;
+  background: var(--ink-hover);
+  border-color: var(--ink-hover);
 }
 
 .btn-primary:disabled {
-  background: #6b717c;
-  border-color: #6b717c;
+  background: var(--ink-disabled);
+  border-color: var(--ink-disabled);
   color: var(--on-dark);
 }
 
@@ -395,7 +396,7 @@ select.field {
 .stat-label svg {
   width: 15px;
   height: 15px;
-  color: var(--ink-3);
+  color: var(--brand);
 }
 
 .stat-row {
@@ -656,7 +657,7 @@ select.field {
 
 .code-line.marked {
   background: var(--mark);
-  box-shadow: inset 3px 0 0 #f2b705;
+  box-shadow: inset 3px 0 0 var(--mark-edge);
 }
 
 .code-line.removed {
@@ -668,7 +669,7 @@ select.field {
   flex-shrink: 0;
   padding-right: var(--sp-12);
   text-align: right;
-  color: #636a77;
+  color: var(--lineno);
   user-select: none;
 }
 
@@ -737,7 +738,7 @@ li code,
 }
 
 .table tbody tr:hover td {
-  background: #fafbfc;
+  background: var(--row-hover);
 }
 
 .table .num,
@@ -923,7 +924,7 @@ li code,
   display: inline-flex;
   align-items: center;
   gap: var(--sp-6);
-  color: #c9ced6;
+  color: var(--on-dark-2);
 }
 
 /* ---------- 细横幅 ---------- */
@@ -954,7 +955,7 @@ li code,
   display: block;
   height: 14px;
   border-radius: 6px;
-  background: linear-gradient(90deg, #eef0f2 0%, #f6f7f8 50%, #eef0f2 100%);
+  background: linear-gradient(90deg, var(--surface-3) 0%, var(--surface-2) 50%, var(--surface-3) 100%);
   background-size: 200% 100%;
 }
 

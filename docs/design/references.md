@@ -2,7 +2,7 @@
 
 ## 登录首页（课程切换、立体场景）
 
-参考和取舍见 [首页课程切换与统一登录](../首页课程切换与统一登录.md)：Framer 的 RING、Orbit Hero、3D Scroll Cylinder 组件，一篇交互式 3D 首屏的文章，Awwwards 的首屏动画合集，VisuAlgo。都只看了搜索摘要，没有打开页面核对。
+参考和取舍见 [首页课程切换与统一登录](../首页课程切换与统一登录.md)：Framer 的 RING、Orbit Hero、3D Scroll Cylinder 组件，一篇交互式 3D 首屏的文章，Awwwards 的首屏动画合集，VisuAlgo。都只看了搜索摘要，没有打开页面核对。第二轮的字体出处（atelierAnchor、中文网字计划、googlefonts/atkinson-hyperlegible-next、subframe7536/maple-font、Fontsource）取自各字体包自带的说明和字体文件里的元数据。
 
 ## 界面重做那一轮用了哪些参考
 

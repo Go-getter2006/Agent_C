@@ -1,0 +1,20 @@
+/* 标题字体：得意黑（Smiley Sans）。放在最后引入，盖过各页面里标题的字重和字距。
+   得意黑只有一种粗细，本身就粗，不再加粗，也不让浏览器假加粗。正文、表格、按钮仍是正文字体。 */
+.page-head h1,
+.chat-head h1,
+.diff-head h1,
+.brand-name,
+.stat-value,
+.card-head h2,
+.homework-index-head h2,
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: 0;
+}
+
+.page-head h1 { font-size: 28px; line-height: 1.2; }
+.stat-value { letter-spacing: .01em; }
+.stat-value small { font-family: var(--font-ui); font-weight: 500; }
+.card-head h2 { font-size: 17px; }

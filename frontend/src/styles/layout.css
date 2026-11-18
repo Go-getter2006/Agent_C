@@ -42,10 +42,17 @@
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: 9px;
+  border-radius: 50%;
   background: var(--brand);
-  color: #14161a;
+  color: var(--on-brand);
   flex-shrink: 0;
+}
+
+.sidebar .brand-mark,
+.drawer-dark .brand-mark,
+.appbar .brand-mark {
+  background: var(--brand-on-dark);
+  color: var(--sidebar);
 }
 
 .brand-mark-sm {
@@ -108,7 +115,7 @@
 .nav-item.active:hover { background: var(--surface-2); color: var(--ink); }
 
 .nav-item:focus-visible {
-  outline-color: var(--brand);
+  outline-color: var(--brand-on-dark);
 }
 
 .nav-icon {
@@ -160,7 +167,7 @@
   gap: var(--sp-10);
   margin-top: var(--sp-16);
   padding: var(--sp-12) var(--sp-8) 0;
-  border-top: 1px solid #23262c;
+  border-top: 1px solid var(--sidebar-line);
 }
 
 .avatar {
@@ -178,7 +185,7 @@
 }
 
 .avatar-dark {
-  background: #2a2e35;
+  background: var(--sidebar-3);
   color: var(--on-dark);
 }
 
@@ -374,7 +381,7 @@
 }
 
 .drawer-dark .drawer-head {
-  border-bottom-color: #23262c;
+  border-bottom-color: var(--sidebar-line);
   color: var(--on-dark);
 }
 
@@ -821,7 +828,7 @@
 }
 
 .review-nudge small {
-  color: #c9ced6;
+  color: var(--on-dark-2);
   font-size: var(--fs-12);
 }
 
@@ -832,8 +839,8 @@
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: var(--brand);
-  color: #14161a;
+  background: var(--brand-on-dark);
+  color: var(--sidebar);
   flex: none;
 }
 
@@ -978,8 +985,19 @@
   border-radius: 13px;
 }
 
+.chat-empty-scene {
+  display: block;
+  width: 260px;
+  height: 190px;
+  margin-bottom: var(--sp-4);
+}
+
+
 .chat-empty strong {
-  font-size: var(--fs-16);
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-synthesis: none;
+  font-size: 22px;
   color: var(--ink);
 }
 
@@ -1438,7 +1456,7 @@
   width: var(--lineno-w);
   padding-right: var(--sp-12);
   text-align: right;
-  color: #636a77;
+  color: var(--lineno);
   user-select: none;
   vertical-align: top;
 }

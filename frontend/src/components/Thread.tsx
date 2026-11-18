@@ -6,11 +6,19 @@ import { api } from "../api";
 import type { Layout } from "../lib/hooks";
 import { dayLabel, sameDay } from "../lib/time";
 import type { HelpAction, Message, QuizView } from "../types";
+import { useSession } from "../session";
+import CourseScene from "./CourseScene";
 import Quiz from "./Quiz";
 import { CodeBlock, Inline, Loading, Problem } from "./ui";
 
 const ACTION_LABELS: Record<HelpAction, string> = { think: "我想自己想想", hint: "再给点提示", tell: "直接讲给我" };
 const ACTION_ICONS: Record<HelpAction, LucideIcon> = { think: Brain, hint: Lightbulb, tell: MessageCircle };
+
+// 对话空着的时候：首页那个环的小图（C 语言是内存格子围成的 C，数据结构是链表和树），跟着光标轻轻转
+function EmptyScene() {
+  const { me } = useSession();
+  return <CourseScene course={me?.course === "D" ? "D" : "C"} variant="mini" className="chat-empty-scene" />;
+}
 
 function AgentMark() {
   return <span className="brand-mark" aria-hidden="true"><Braces size={15} strokeWidth={2.4} /></span>;
@@ -194,7 +202,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
           <div className={stale ? "chat-list fade-swap is-stale" : "chat-list fade-swap"} aria-live="polite" aria-busy={stale}>
             {list.length === 0 && !shown && (
               <div className="chat-empty">
-                <AgentMark />
+                <EmptyScene />
                 <strong>{emptyTitle}</strong>
                 <span>{emptyText}</span>
               </div>

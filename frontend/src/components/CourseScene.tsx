@@ -1,5 +1,5 @@
 // 首页背景的立体场景：C 语言是一个“开口的环”（字母 C 本身就是开口的环），由一格格内存单元、指针箭头和 C 的记号组成；
-// 切到数据结构时，整个环绕竖轴转过来，合成深蓝色的“闭合的环”：循环链表、中间一棵二叉树、几条图的边。
+// 切到数据结构时，整个环绕竖轴转过来，合成深蓝色的“闭合的环”：循环链表、上面一棵二叉树、几条图的边（浅色冷纸上）。
 //
 // - 立体：每个内存单元是真正的立方体（8 个顶点做透视投影，按法线挑看得见的面、按深度画）；记号分前后几层，越远越淡。
 // - 跟着光标：整个场景朝光标轻微倾斜（左右 ±0.32、上下 ±0.2 弧度），离光标近的格子、节点亮起来并被轻轻吸过去。
@@ -100,8 +100,9 @@ type RGB = [number, number, number];
 const PAL: Record<Course, { ink: RGB; soft: RGB; accent: RGB; top: RGB; front: RGB; side: RGB; glow: RGB }> = {
   C: { ink: [30, 28, 24], soft: [120, 102, 84], accent: [214, 72, 28], top: [255, 252, 246], front: [240, 228, 211],
     side: [212, 193, 168], glow: [214, 72, 28] },
-  D: { ink: [222, 236, 255], soft: [112, 152, 214], accent: [126, 214, 255], top: [64, 126, 214], front: [38, 86, 170],
-    side: [24, 58, 126], glow: [126, 214, 255] },
+  // 数据结构：浅色冷纸上的深蓝图案（和登录以后的页面同一套颜色，tokens.css 里的 --brand、--sidebar）
+  D: { ink: [19, 40, 77], soft: [84, 108, 150], accent: [33, 96, 196], top: [236, 242, 252], front: [214, 227, 247],
+    side: [180, 200, 232], glow: [33, 96, 196] },
 };
 const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const rgba = (c: RGB, a: number) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a.toFixed(3)})`;
@@ -126,9 +127,13 @@ const FACES: { idx: number[]; n: V3; tone: "top" | "front" | "side" }[] = [
 
 interface Props {
   course: Course;
+  // hero：首页的整幅背景；mini：登录以后用的小图（对话空着的时候），只有环，没有浮动的记号和标签
+  variant?: "hero" | "mini";
+  className?: string;
 }
 
-export default function CourseScene({ course }: Props) {
+export default function CourseScene({ course, variant = "hero", className }: Props) {
+  const mini = variant === "mini";
   const canvas = useRef<HTMLCanvasElement>(null);
   const target = useRef(course === "D" ? 1 : 0);
 
@@ -162,8 +167,9 @@ export default function CourseScene({ course }: Props) {
       const r = el.getBoundingClientRect();
       pointer.x = e.clientX - r.left;
       pointer.y = e.clientY - r.top;
-      pointer.nx = Math.max(-1, Math.min(1, (pointer.x / Math.max(1, w)) * 2 - 1));
-      pointer.ny = Math.max(-1, Math.min(1, (pointer.y / Math.max(1, h)) * 2 - 1));
+      // 倾斜按整个窗口算：小图常常不在光标底下，按画布算会一直歪到底
+      pointer.nx = Math.max(-1, Math.min(1, (e.clientX / Math.max(1, window.innerWidth)) * 2 - 1));
+      pointer.ny = Math.max(-1, Math.min(1, (e.clientY / Math.max(1, window.innerHeight)) * 2 - 1));
       pointer.inside = pointer.x >= 0 && pointer.y >= 0 && pointer.x <= w && pointer.y <= h;
     };
     const onLeave = () => { pointer.inside = false; pointer.nx = 0; pointer.ny = 0; };
@@ -171,6 +177,8 @@ export default function CourseScene({ course }: Props) {
     const draw = () => {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
+      // 代码字体有连字（-> 会画成箭头）；画布上没有 CSS 的 font-variant-ligatures，加一点字距让浏览器不连字
+      if ("letterSpacing" in ctx) (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = "0.4px";
       const e = ease(k);
       const pal = {
         ink: mix(PAL.C.ink, PAL.D.ink, e), soft: mix(PAL.C.soft, PAL.D.soft, e), accent: mix(PAL.C.accent, PAL.D.accent, e),
@@ -181,9 +189,12 @@ export default function CourseScene({ course }: Props) {
       // 宽屏：环在左栏下半部分（上面是标题，右边是登录框）；窄屏：画布是页面顶上的一条，环在标题右边
       // （和 login.css 里 .login-bg 展开的圆心一致）
       const wide = w >= 1024;
-      const unit = wide ? Math.min(w * 0.6, h * 0.8) / 980 : Math.min(w * 0.72, h * 0.9) / 980;
-      const cx = wide ? w * 0.37 : w * 0.76, cy = wide ? h * 0.7 : h * 0.5;
+      const unit = mini ? Math.min(w, h * 1.3) / 700
+        : wide ? Math.min(w * 0.6, h * 0.8) / 980 : Math.min(w * 0.72, h * 0.9) / 980;
+      const cx = mini ? w * 0.5 : wide ? w * 0.37 : w * 0.76;
+      const cy = mini ? h * 0.5 + (target.current === 1 ? 18 : 0) * unit : wide ? h * 0.7 : h * 0.5;
       const tokenAlpha = wide ? 1 : 0.6;   // 窄屏上记号压在文字后面，再淡一些
+      const boost = mini ? 1.25 : 1;         // 小图里格子、节点相对大一些，不然只剩几个点
       const F = 1100;
       // 环转过来：C → 数据结构转半圈（数据结构的位置事先转了 -π，转过来正好摆正）；中途前后拉开一点，更有立体感
       const spin = Math.PI * e;
@@ -271,13 +282,14 @@ export default function CourseScene({ course }: Props) {
         const p = pts[i];
         const glow = near[i];
         const fog = Math.max(0.18, Math.min(1, 0.62 + p.z / 520));
+        if (mini && p.it.kind === "token") continue;
         if (p.it.kind === "cell") {
           // C：立方体的内存单元；数据结构：发光的节点。按进度交叉淡入淡出
           if (e < 0.98) drawCube(p.p3, (1 - e) * fog, glow);
           if (e > 0.02) drawNode(p.x, p.y, p.s, e * fog, glow);
           const label = e < 0.5 ? p.it.labelC : p.it.labelD;
           const show = (e < 0.5 ? p.it.showC : p.it.showD) || glow > 0.35;
-          if (label && show) {
+          if (label && show && !mini) {
             const a = Math.abs(e - 0.5) * 2 * fog * (glow > 0 ? 1 : 0.85);
             ctx.font = `${Math.round(11 * p.s * unit * 1.3)}px ${font}`;
             ctx.textAlign = "center";
@@ -297,7 +309,7 @@ export default function CourseScene({ course }: Props) {
       function drawCube(center: V3, alpha: number, glow: number) {
         if (alpha <= 0.01) return;
         // 每个格子自己斜着摆（露出顶面和侧面），看起来才是立方体
-        const half = 17 + glow * 4;
+        const half = (17 + glow * 4) * boost;
         const corners = CUBE.map((v) => {
           const o = rotate(v, CUBE_YAW, CUBE_PITCH);
           return project([center[0] + o[0] * half, center[1] + o[1] * half, center[2] + o[2] * half]);
@@ -319,9 +331,9 @@ export default function CourseScene({ course }: Props) {
         }
       }
       function drawNode(x: number, y: number, s: number, alpha: number, glow: number) {
-        const r = (9 + glow * 4) * s * unit * 1.25;
+        const r = (9 + glow * 4) * s * unit * 1.25 * boost;
         const g = ctx.createRadialGradient(x, y, 0, x, y, r * 3.2);
-        g.addColorStop(0, rgba(pal.glow, 0.35 * alpha));
+        g.addColorStop(0, rgba(pal.glow, (0.16 + glow * 0.2) * alpha));
         g.addColorStop(1, rgba(pal.glow, 0));
         ctx.fillStyle = g;
         ctx.beginPath();
@@ -378,5 +390,5 @@ export default function CourseScene({ course }: Props) {
     };
   }, []);
 
-  return <canvas ref={canvas} className="course-scene" aria-hidden="true" />;
+  return <canvas ref={canvas} className={className ?? "course-scene"} aria-hidden="true" />;
 }
