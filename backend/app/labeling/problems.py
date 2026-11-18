@@ -14,7 +14,7 @@ from .. import config, llm
 from .. import models as m
 from ..sandbox import run_program
 from ..sandbox.precheck import check_reference_solution
-from ..taxonomy import KNOWLEDGE_POINTS, is_skill_code, skills_for_course
+from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, is_skill_code, skills_for_course
 from ..xdoj.assemble import source_text
 from ..xdoj.util import decode_bytes, json_hash
 
@@ -178,7 +178,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
     user = (f"【技能表】\n{skill_table}\n\n【题目】{problem.title}\n【XDOJ 的类别和标签】{problem.category} {' '.join(tags)}\n"
             f"【题面】\n{text.extracted_text[:3000]}\n\n【正确代码】\n{(solution or '（暂无）')[:3000]}\n\n【测试点】\n{case_text}")
     try:
-        brief, primary, secondary, tcs = llm.call_json("label_problem", _SYSTEM, user, validate,
+        brief, primary, secondary, tcs = llm.call_json("label_problem", course_prompt(_SYSTEM, server.course if server else "C"), user, validate,
                                                        retries=1, max_tokens=1200)
     except llm.LLMUnavailable:
         llm.flush_records(s)

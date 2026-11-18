@@ -41,7 +41,7 @@ from .labeling.labeler import current_problem_label
 from .quizbank import PLACEHOLDER
 from .sandbox import run_program
 from .sandbox.precheck import check_editable_code, check_reference_solution
-from .taxonomy import LEVEL_NONE, LEVEL_WEAK, SKILLS, skill_name
+from .taxonomy import LEVEL_NONE, LEVEL_WEAK, SKILLS, course_of, course_prompt, skill_name
 from .xdoj.assemble import source_text
 from .xdoj.util import decode_bytes
 
@@ -486,7 +486,7 @@ def _relevant_ops(plan: Plan) -> list[str]:
 
 
 def _own_sources(s: Session, plan: Plan) -> list[tuple[int, int, int, str, catalog.ProblemInfo]]:
-    visible = catalog.visible_problems(s, plan.user_id)
+    visible = catalog.visible_problems(s, plan.user_id, course_of(plan.skill) if plan.skill else None)
     subs = s.scalars(select(m.Submission).where(
         m.Submission.user_id == plan.user_id, m.Submission.judgement == "AC", m.Submission.detail_status == "done"
     ).order_by(m.Submission.submission_id.desc())).all()
@@ -623,7 +623,7 @@ def _choices(lines: list[str], start: int, end: int, cut: int, mu: Mutation, inp
 
 
 # ============================================================ 大模型出题
-_SYSTEM = """你在给一名学 C 语言的大学生出一道很短的检验小题。只输出 JSON：
+_SYSTEM = """你在给一名学 C 语言课程的大学生出一道很短的检验小题。只输出 JSON：
 {"stem":"题干，不超过 40 字，只问一件事","caption":"代码块标题，如“这段代码想求最大值”",
  "code":"显示给学生的代码，3 到 10 行，不含头文件和读入输出","correct_code":"改对以后的代码；code 本来就对时和 code 一样",
  "template":"完整可编译的 C 程序：头文件、变量声明、读入、输出；显示的那段代码所在的位置写一行 /*<<CODE>>*/",
@@ -664,7 +664,8 @@ def from_llm(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | None:
             f"【题型】{'判断对错' if plan.quiz_type == 'JUDGE' else '判断对错，有错的话自己改'}\n"
             f"【他代码里的变量名】{json.dumps(names, ensure_ascii=False)}\n【场景】{scene or '自选一个和这个技能有关的日常场景'}")
     try:
-        d = llm.call_json("quizgen", _SYSTEM, user, validate, retries=1, max_tokens=1200)
+        d = llm.call_json("quizgen", course_prompt(_SYSTEM, course_of(plan.skill or "C")), user, validate,
+                          retries=1, max_tokens=1200)
     except llm.LLMUnavailable:
         return None
     correct = str(d["correct_code"]).strip("\n")

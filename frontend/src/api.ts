@@ -50,12 +50,11 @@ export const post = <T,>(path: string, body: unknown = {}) => request<T>("POST",
 export const api = {
   authInfo: () => get<AuthInfo>("/api/auth/info"),
   me: () => request<Me>("GET", "/api/auth/me", undefined, true),
-  login: (loginName: string, password: string) =>
-    request<{ role: Me["role"]; name: string }>("POST", "/api/auth/login", { loginName, password }, true),
+  login: (loginName: string, password: string, course: Me["course"]) =>
+    request<{ role: Me["role"]; name: string }>("POST", "/api/auth/login", { loginName, password, course }, true),
   teacherLogin: (server: string, userId: string, password: string) =>
     request<{ role: Me["role"]; name: string }>("POST", "/api/teacher/login", { server, userId, password }, true),
   logout: () => post<{ ok: boolean }>("/api/auth/logout"),
-  teacherServers: () => get<{ servers: { code: string; name: string }[] }>("/api/teacher/servers"),
 
   status: () => get<StatusInfo>("/api/status"),
   homeworks: () => get<{ homeworks: Homework[] }>("/api/homeworks"),

@@ -26,6 +26,7 @@ class Ctx:
     user_id: str
     user_name: str = ""
     thread: tuple[int, int] | None = None        # 消息所在的线程：某道题，或通用线程（None）
+    course: str = "C"                            # 这次登录的课程：只在这门课的题里绑定
     problem: catalog.ProblemInfo | None = None   # 绑定到的题
     bind_by: str = ""
     candidates: list[catalog.ProblemInfo] = field(default_factory=list)
@@ -117,9 +118,9 @@ class Ctx:
         return out.replace("``", "").strip()
 
 
-def _visible_infos(s: Session, user_id: str) -> dict[tuple[int, int], catalog.ProblemInfo]:
+def _visible_infos(s: Session, user_id: str, course: str = "C") -> dict[tuple[int, int], catalog.ProblemInfo]:
     out = {}
-    for (server_id, problem_id) in catalog.visible_problems(s, user_id):
+    for (server_id, problem_id) in catalog.visible_problems(s, user_id, course):
         info = catalog.problem_info(s, server_id, problem_id)
         if info is not None:
             out[(server_id, problem_id)] = info
@@ -127,9 +128,10 @@ def _visible_infos(s: Session, user_id: str) -> dict[tuple[int, int], catalog.Pr
 
 
 def bind(s: Session, user_id: str, thread: tuple[int, int] | None, submission_key: str | None,
-         text: str, pasted: str, now: dt.datetime) -> tuple[tuple[int, int] | None, m.Submission | None, str, list]:
-    """第 2 步：绑定到哪道题、哪次提交。只在这个学生可见的题里绑定。"""
-    visible = _visible_infos(s, user_id)
+         text: str, pasted: str, now: dt.datetime,
+         course: str = "C") -> tuple[tuple[int, int] | None, m.Submission | None, str, list]:
+    """第 2 步：绑定到哪道题、哪次提交。只在这个学生可见的、这门课的题里绑定。"""
+    visible = _visible_infos(s, user_id, course)
     if thread is not None:
         if thread not in visible:
             return None, None, "", []
@@ -168,11 +170,11 @@ def bind(s: Session, user_id: str, thread: tuple[int, int] | None, submission_ke
 
 
 def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_key: str | None,
-          text: str, pasted: str, rnd: m.ChatRound | None, now: dt.datetime | None = None) -> Ctx:
+          text: str, pasted: str, rnd: m.ChatRound | None, now: dt.datetime | None = None, course: str = "C") -> Ctx:
     now = now or db.now()
     student = s.get(m.Student, user_id)
-    ctx = Ctx(user_id=user_id, user_name=student.name if student else "", thread=thread)
-    key, sub, ctx.bind_by, ctx.candidates = bind(s, user_id, thread, submission_key, text, pasted, now)
+    ctx = Ctx(user_id=user_id, user_name=student.name if student else "", thread=thread, course=course)
+    key, sub, ctx.bind_by, ctx.candidates = bind(s, user_id, thread, submission_key, text, pasted, now, course)
     if key is not None:
         ctx.problem = catalog.problem_info(s, *key)
         ctx.plabel = labeler.current_problem_label(s, *key)

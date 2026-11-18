@@ -53,14 +53,15 @@ interface ClassesValue {
   loading: boolean;
   error: string | null;
   role: string;
+  course: "C" | "D"; // 这次登录的课程：两门课分开登录
   reload: () => void;
 }
 
-const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher", reload: () => undefined });
+const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher", course: "C", reload: () => undefined });
 
 export function ClassesProvider({ children }: { children: ReactNode }) {
   // 定时刷新：第一次登录后班级和名单是后台陆续同步进来的，页面要跟着出现
-  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string }>("/api/teacher/classes"), [], 15000);
+  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string; course: "C" | "D" }>("/api/teacher/classes"), [], 15000);
   const [picked, setPicked] = useState<string | null>(() => {
     try {
       return window.localStorage.getItem(CLASS_KEY);
@@ -79,7 +80,7 @@ export function ClassesProvider({ children }: { children: ReactNode }) {
     }
   }, []);
   const value = useMemo(() => ({ classes, current, pick, loading: list.loading && !list.data, error: list.error,
-    role: list.data?.role ?? "teacher", reload: list.reload }),
+    role: list.data?.role ?? "teacher", course: list.data?.course ?? "C", reload: list.reload }),
   [classes, current, pick, list.loading, list.data, list.error, list.reload]);
   return <ClassesContext.Provider value={value}>{children}</ClassesContext.Provider>;
 }
@@ -89,14 +90,13 @@ export const useClasses = () => useContext(ClassesContext);
 export function ClassPicker() {
   const { classes, current, pick } = useClasses();
   if (classes.length === 0) return null;
-  const multi = new Set(classes.map((c) => c.server)).size > 1; // 两门课的班级都在时，前面写上课程
   return (
     <label className="class-pick">
       <span className="sr-only">班级</span>
       <Users size={16} aria-hidden="true" />
       <select className="field" value={current?.key ?? ""} onChange={(e) => pick(e.target.value)}>
         {classes.map((c) => (
-          <option key={c.key} value={c.key}>{multi ? `${c.server} · ` : ""}{c.name}（{c.students} 人）</option>
+          <option key={c.key} value={c.key}>{c.name}（{c.students} 人）</option>
         ))}
       </select>
     </label>

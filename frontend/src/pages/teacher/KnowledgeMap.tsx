@@ -4,13 +4,13 @@ import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, BookOpen, CircleAlert, Link2, Network, Route, Search, Table2, X } from "lucide-react";
 import { get } from "../../api";
 import { StackedBar } from "../../components/charts";
-import KnowledgeGraph, { type KMEdge, type KMNode, type KMTopic } from "../../components/KnowledgeGraph";
+import KnowledgeGraph, { hasData, type KMEdge, type KMNode, type KMTopic } from "../../components/KnowledgeGraph";
 import { Card, LEVELS, Loading, Problem, Segmented, levelClass } from "../../components/ui";
 import { useEscape, useLayout, useLoad } from "../../lib/hooks";
 import { Code, type ClassInfo } from "./common";
 
 interface MapData {
-  class: { key: string; name: string; course: string };
+  class: { key: string; name: string; course: "C" | "D" };
   courses: { code: "C" | "D"; name: string }[];
   topics: KMTopic[];
   nodes: KMNode[];
@@ -21,7 +21,7 @@ interface MapData {
 }
 
 interface KpDetail {
-  code: string; name: string; course: string; topicName: string;
+  code: string; name: string; course: string; topicName: string; foundation: boolean;
   skills: { code: string; name: string; kp: string; dist: number[] }[];
   weak: { userId: string; name: string; level: string; p: number; predicted: boolean }[];
   errors: { code: string; name: string; count: number }[];
@@ -33,18 +33,19 @@ interface KpDetail {
 
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
 
-function Panel({ cls, node, studentName, chain, onChain, onSelect, onClose }: {
-  cls: ClassInfo; node: KMNode; studentName: string | null; chain: boolean; onChain: (v: boolean) => void;
+function Panel({ cls, node, home, studentName, chain, onChain, onSelect, onClose }: {
+  cls: ClassInfo; node: KMNode; home: "C" | "D"; studentName: string | null; chain: boolean; onChain: (v: boolean) => void;
   onSelect: (code: string) => void; onClose: () => void;
 }) {
   const detail = useLoad(() => get<KpDetail>(`/api/teacher/classes/${cls.key}/knowledge-map/${node.code}`), [cls.key, node.code]);
   const d = detail.data;
   const total = node.dist.reduce((a, b) => a + b, 0);
+  const foundation = node.course !== home;
   return (
     <aside className="kg-panel pop" aria-label={`知识点：${node.name}`}>
       <div className="kg-panel-head">
         <div>
-          <span className="eyebrow">{node.course === "C" ? "C 语言" : "数据结构"} · {node.topicName}</span>
+          <span className="eyebrow">{foundation ? "C 语言基础" : node.course === "C" ? "C 语言" : "数据结构"} · {node.topicName}</span>
           <h2>{node.name}</h2>
           <Code>{node.code}</Code> <span className="note">· {node.skills} 条技能</span>
         </div>
@@ -58,10 +59,9 @@ function Panel({ cls, node, studentName, chain, onChain, onSelect, onClose }: {
             <span className="num">{node.student.p.toFixed(2)}</span>
           </div>
         )}
-        {node.course === "C" ? (
-          node.covered ? (
+        {hasData(node) ? (
             <section>
-              <h3>全班分布</h3>
+              <h3>{foundation ? "在 C 语言里的掌握程度" : "全班分布"}</h3>
               <StackedBar counts={node.dist} colors={LEVEL_COLORS} names={LEVELS} total={total} />
               <div className="kg-dist-legend">
                 {LEVELS.map((l, i) => (
@@ -69,14 +69,14 @@ function Panel({ cls, node, studentName, chain, onChain, onSelect, onClose }: {
                 ))}
               </div>
               <p className="note">{node.withEvidence} 人有证据{node.mean !== null ? ` · 全班平均估计 ${node.mean.toFixed(2)}` : ""}</p>
+              {foundation && <p className="note">来自学生在 C 语言课上的练习，这里只看掌握程度，不列答题记录。</p>}
             </section>
-          ) : <p className="note">这个班的作业还没涉及这个知识点。</p>
-        ) : (
+        ) : node.course === "D" ? (
           <section>
             <h3>准备度</h3>
-            <p className="note">数据结构还没开课。全班平均准备度 {node.readiness === null ? "没有数据" : node.readiness.toFixed(2)}，是按 C 语言里的先修知识点推算的。</p>
+            <p className="note">还没有人有证据。全班平均准备度 {node.readiness === null ? "没有数据" : node.readiness.toFixed(2)}，是按 C 语言里的先修知识点推算的。</p>
           </section>
-        )}
+        ) : <p className="note">{foundation ? "学生在 C 语言里还没有这方面的证据。" : "这个班的作业还没涉及这个知识点。"}</p>}
 
         <section>
           <label className="check">
@@ -119,7 +119,7 @@ function Panel({ cls, node, studentName, chain, onChain, onSelect, onClose }: {
                 </ul>
               </section>
             )}
-            {node.course === "C" && (
+            {(hasData(node) || foundation) && (
               <section>
                 <h3>技能</h3>
                 <ul className="kg-skills">
@@ -164,7 +164,7 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   const [params, setParams] = useSearchParams();
   const student = params.get("student") ?? "";
   const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student]);
-  const [course, setCourse] = useState<"all" | "C" | "D">(() => (window.innerWidth < 768 ? "C" : "all"));
+  const [scope, setScope] = useState<"home" | "all">("home");
   const [view, setView] = useState<"graph" | "table">("graph");
   const [showCross, setShowCross] = useState(true);
   const [chain, setChain] = useState(false);
@@ -175,7 +175,9 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   useEffect(() => setChain(false), [selected]);
   useEscape(() => setSelected(null), selected !== null);
 
-  const courses = useMemo<("C" | "D")[]>(() => (course === "all" ? ["C", "D"] : [course]), [course]);
+  const home: "C" | "D" = d?.class.course === "D" ? "D" : "C";
+  const multi = (d?.courses.length ?? 0) > 1; // 数据结构的班：可以带上 C 语言基础
+  const courses = useMemo<("C" | "D")[]>(() => (multi && scope === "all" ? ["C", "D"] : [home]), [multi, scope, home]);
   const nodes = useMemo(() => (d ? d.nodes.filter((n) => courses.includes(n.course)) : []), [d, courses]);
   const courseNames = useMemo(() => Object.fromEntries((d?.courses ?? []).map((c) => [c.code, c.name])), [d]);
   const node = d?.nodes.find((n) => n.code === selected) ?? null;
@@ -195,8 +197,10 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   return (
     <div className="kg-page">
       <div className="kg-toolbar card">
-        <Segmented label="课程" value={course} onChange={(v) => { setCourse(v); setSelected(null); }}
-          options={[{ value: "all", label: "两门课" }, { value: "C", label: "C 语言" }, { value: "D", label: "数据结构" }]} />
+        {multi && (
+          <Segmented label="范围" value={scope} onChange={(v) => { setScope(v); setSelected(null); }}
+            options={[{ value: "home", label: "数据结构" }, { value: "all", label: "加上 C 语言基础" }]} />
+        )}
         <label className="kg-color">
           <span className="eyebrow">着色</span>
           <select className="field" value={student} onChange={(e) => setStudent(e.target.value)}>
@@ -215,10 +219,12 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
               }
             }} />
         </label>
-        <label className="check">
-          <input type="checkbox" checked={showCross} onChange={(e) => setShowCross(e.target.checked)} />
-          <Link2 size={15} aria-hidden="true" />跨课程联系
-        </label>
+        {multi && scope === "all" && (
+          <label className="check">
+            <input type="checkbox" checked={showCross} onChange={(e) => setShowCross(e.target.checked)} />
+            <Link2 size={15} aria-hidden="true" />跨课程联系
+          </label>
+        )}
         <Segmented label="显示方式" value={view} onChange={setView}
           options={[{ value: "graph", label: <><Network size={15} aria-hidden="true" />图</> }, { value: "table", label: <><Table2 size={15} aria-hidden="true" />表</> }]} />
       </div>
@@ -227,7 +233,7 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
         {student ? (
           <>
             {LEVELS.map((l) => <span key={l}><i className={`swatch sw-${levelClass(l).slice(3)}`} />{l}</span>)}
-            <span><i className="swatch kg-sw-ds" />虚线框：数据结构，底下的条是推算的准备度</span>
+            {home === "D" && <span><i className="swatch kg-sw-ds" />底下的细条：还没有证据时按 C 语言推算的准备度</span>}
           </>
         ) : (
           <>
@@ -237,19 +243,19 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
             <span><i className="swatch kg-sw-uncovered" />作业还没涉及</span>
           </>
         )}
-        <span><i className="kg-line kg-line-cross" />跨课程的先修</span>
+        {multi && scope === "all" && <span><i className="kg-line kg-line-cross" />跨课程的先修</span>}
         <span><i className="kg-line kg-line-in" />先修</span>
         <span><i className="kg-line kg-line-out" />后继</span>
-        <span className="kg-counts note num">{nodes.length} 个知识点 · {d.edges.length} 条先修，其中 {cross} 条跨课程 · 图：{d.status}</span>
+        <span className="kg-counts note num">{nodes.length} 个知识点 · {d.edges.length} 条先修{multi ? `，其中 ${cross} 条跨课程` : ""} · 图：{d.status}</span>
       </div>
 
       {view === "graph" ? (
         <div className="kg-stage card">
-          <KnowledgeGraph nodes={nodes} edges={d.edges} topics={d.topics} courses={courses} courseNames={courseNames}
+          <KnowledgeGraph nodes={nodes} edges={d.edges} topics={d.topics} courses={courses} courseNames={courseNames} home={home}
             showCross={showCross} chain={chain} selected={selected} search={search} mode={student ? "student" : "class"}
-            onSelect={setSelected} fitKey={`${course}-${layoutKind}`} />
+            onSelect={setSelected} fitKey={`${scope}-${layoutKind}`} />
           {node && courses.includes(node.course) && (
-            <Panel cls={cls} node={node} studentName={studentName} chain={chain} onChain={setChain}
+            <Panel cls={cls} node={node} home={home} studentName={studentName} chain={chain} onChain={setChain}
               onSelect={setSelected} onClose={() => setSelected(null)} />
           )}
           <p className="kg-hint note">拖动可以移动，Ctrl + 滚轮缩放。点一个知识点看详情。</p>
@@ -273,8 +279,8 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
                     <td className="muted nowrap">{n.topicName}</td>
                     {student ? (
                       <td>{n.student ? <span className={`lvpill ${levelClass(n.student.level)}`}><i />{n.student.predicted ? "推算" : n.student.level}</span> : "—"}</td>
-                    ) : n.dist.map((v, i) => <td key={i} className="num">{n.course === "D" ? "" : v}</td>)}
-                    <td className="num">{student ? (n.student ? n.student.p.toFixed(2) : "—") : n.course === "D" ? (n.readiness?.toFixed(2) ?? "—") : (n.mean?.toFixed(2) ?? "—")}</td>
+                    ) : n.dist.map((v, i) => <td key={i} className="num">{hasData(n) ? v : ""}</td>)}
+                    <td className="num">{student ? (n.student ? n.student.p.toFixed(2) : "—") : !hasData(n) && n.course === "D" ? (n.readiness?.toFixed(2) ?? "—") : (n.mean?.toFixed(2) ?? "—")}</td>
                     <td className="muted">{d.edges.filter((e) => e.to === n.code).map((e) => d.nodes.find((x) => x.code === e.from)?.name).join("、")}</td>
                   </tr>
                 ))}

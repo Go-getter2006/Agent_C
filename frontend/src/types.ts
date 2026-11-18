@@ -179,10 +179,14 @@ export interface ReviewPage {
   current?: ReviewCurrent;
 }
 
+export type CourseCode = "C" | "D";
+
 export interface Me {
   role: "student" | "teacher" | "admin";
   name: string;
   loginName: string;
+  course: CourseCode;
+  courseName: string;
 }
 
 export interface StatusInfo {
@@ -197,4 +201,6 @@ export interface AuthInfo {
   demo: boolean;
   demoAccount: string | null;
   teacherLogin: boolean;
+  // 可以登录的课程。只有一门时登录页不出现课程选择；server 是这门课的 XDOJ（演示数据时为空）
+  courses: { code: CourseCode; name: string; server: string | null }[];
 }

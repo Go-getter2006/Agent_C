@@ -338,6 +338,8 @@ class User(Base):
     status: Mapped[str] = mapped_column(String(16), default="active")  # active / removed
     created_at: Mapped[Dt] = _ts()
     last_login_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
+    # 这次登录的是哪门课（C / D）。不存库：来自登录凭证，由 web/deps.py 填上
+    course = "C"
 
 
 # ============================================================ 标注
@@ -450,6 +452,7 @@ class ChatRound(Base):
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     problem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 空：没有绑定到题
+    course: Mapped[str] = mapped_column(String(8), default="C")  # 两门课的对话分开
     submission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     skill_code: Mapped[str] = mapped_column(String(16), default="")
     error_code: Mapped[str] = mapped_column(String(8), default="")
@@ -476,6 +479,7 @@ class ChatMessage(Base):
     # 线程：某道题（server_id + problem_id），或不绑定题目的通用线程（都为空）
     server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     problem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    course: Mapped[str] = mapped_column(String(8), default="C")  # 两门课的对话分开（“综合”对话也各有一个）
     role: Mapped[str] = mapped_column(String(8))  # student / agent
     kind: Mapped[str] = mapped_column(String(8), default="text")  # text / quiz
     content: Mapped[dict] = mapped_column(JSON, default=dict)  # {"blocks": [...], "actions": [...]}
@@ -669,6 +673,7 @@ class LogRequest(Base):
     granted_ids: Mapped[list] = mapped_column(JSON, default=list)     # 核对后属于他班里的
     denied_ids: Mapped[list] = mapped_column(JSON, default=list)      # 不在他班里的，没给
     class_keys: Mapped[list] = mapped_column(JSON, default=list)
+    course: Mapped[str] = mapped_column(String(8), default="C")  # 申请时登录的课程：只导出这门课的记录
     date_from: Mapped[Dt] = mapped_column(UTCDateTime)
     date_to: Mapped[Dt] = mapped_column(UTCDateTime)
     kinds: Mapped[list] = mapped_column(JSON, default=list)
@@ -690,6 +695,7 @@ class UiEvent(Base):
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     kind: Mapped[str] = mapped_column(String(24))  # 固定枚举，见 taxonomy.enums.UI_EVENTS
     target: Mapped[str] = mapped_column(String(64), default="")
+    course: Mapped[str] = mapped_column(String(8), default="C")  # 在哪门课的页面上
     ts: Mapped[Dt] = _ts()
 
 

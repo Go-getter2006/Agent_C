@@ -1,4 +1,5 @@
-// 学生明细：知识点和技能（v2 带区间）、数据结构的准备度、复习、卡点、提交、求助、小题。
+// 学生明细：知识点和技能（v2 带区间）、复习、卡点、提交、求助、小题。只有登录的这门课；
+// 数据结构这边另有“C 语言基础”（只有掌握程度，不含 C 语言的答题记录）和还没有证据时的准备度。
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Copy, FileDown, Waypoints } from "lucide-react";
@@ -28,6 +29,8 @@ interface Detail {
   reviews: { code: string; name: string; kp: string; origin: string; state: string; halfLife: number; retention: number; reps: number; lapses: number; streak: number; due: string }[];
   copies: { problem: string; problemId: number; submissionId: number; matchedName: string; matchedUserId: string | null; share: number | null; time: string | null }[];
   readiness: { code: string; name: string; p: number }[];
+  course: "C" | "D";
+  foundation: { code: string; name: string; level: string; p: number | null; supports: { code: string; name: string }[] }[];
   graphUpdatedAt: string | null;
 }
 
@@ -92,8 +95,22 @@ export default function StudentDetail() {
                   </div>
                 </Card>
                 <div className="stack">
-                  <Card title="数据结构的准备度" sub="还没开课。按 C 语言里的先修知识点推算的，只作参考">
-                    {d.readiness.length === 0 ? <p className="note">还没有可以推算的。</p> : (
+                  {d.course === "D" && (
+                    <Card title="C 语言基础" sub="数据结构要用到的 C 语言知识点，在 C 语言课上掌握得怎么样。只有掌握程度，不含 C 语言的答题记录">
+                      {d.foundation.every((f) => f.p === null) ? <p className="note">在 C 语言里还没有这方面的证据。</p> : (
+                        <ul className="rv-list">
+                          {d.foundation.filter((f) => f.p !== null).sort((a, b) => (a.p ?? 0) - (b.p ?? 0)).slice(0, 10).map((f) => (
+                            <li key={f.code}>
+                              <div className="rv-top"><span>{f.name} <Code>{f.code}</Code></span><LevelPill level={f.level} /></div>
+                              <span className="note">支撑：{f.supports.map((x) => x.name).join("、")}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </Card>
+                  )}
+                  {d.course === "D" && d.readiness.length > 0 && (
+                    <Card title="还没有证据的知识点" sub="按 C 语言里的先修知识点推算的准备度，只作参考">
                       <ul className="ready-list">
                         {d.readiness.slice(0, 10).map((r) => (
                           <li key={r.code}>
@@ -103,8 +120,8 @@ export default function StudentDetail() {
                           </li>
                         ))}
                       </ul>
-                    )}
-                  </Card>
+                    </Card>
+                  )}
                   <Card title="复习" sub="间隔重复：记得牢的程度按半衰期算，降到 75% 时到期">
                     {d.reviews.length === 0 ? <p className="note">没有在复习的项。</p> : (
                       <ul className="rv-list">

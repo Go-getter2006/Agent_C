@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .. import config, llm
 from .. import models as m
-from ..taxonomy import SKILLS, errors_for_course, is_error_code, is_skill_code
+from ..taxonomy import SKILLS, course_prompt, errors_for_course, is_error_code, is_skill_code
 from ..taxonomy.errors import error_kp
 from ..taxonomy.skills import skills_for_error
 from ..xdoj.assemble import assemble_submission
@@ -157,7 +157,7 @@ def label_submission(s: Session, server_id: int, submission_id: int, use_llm: bo
         n_lines = len((evidence.get("sourceCode") or "").splitlines())
         try:
             drafts, candidate = llm.call_json(
-                "label_submission", _SYSTEM,
+                "label_submission", course_prompt(_SYSTEM, server.course if server else "C"),
                 _llm_prompt(evidence, plabel, tlabels, sub.user_id, student.name if student else "",
                             server.course if server else "C"),
                 _validate(n_lines), retries=1)

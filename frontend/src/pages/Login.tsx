@@ -1,7 +1,9 @@
 // 登录页：左边一块深色说明这个系统做什么（宽屏才有），右边是表单。
+// C 语言和数据结构分开登录：两门课都接上时先选课程；只有一门时不出现课程选择，也不提另一门课。
 import { useState, type FormEvent } from "react";
 import { Braces, Eye, EyeOff, GraduationCap, MessageSquare, RotateCcw, ShieldCheck, Users } from "lucide-react";
 import { api } from "../api";
+import type { CourseCode } from "../types";
 import { Segmented } from "../components/ui";
 import { useLoad } from "../lib/hooks";
 import { useSession } from "../session";
@@ -15,19 +17,21 @@ const FACTS = [
 export default function Login() {
   const { setMe } = useSession();
   const info = useLoad(() => api.authInfo(), []);
-  const servers = useLoad(() => api.teacherServers().then((r) => r.servers), []);
   const [tab, setTab] = useState<"student" | "teacher">("student");
+  const [course, setCourse] = useState<CourseCode>("C");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
-  const [server, setServer] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const demo = info.data?.demo ?? false;
+  const courses = info.data?.courses ?? [];
+  const chosen = courses.find((c) => c.code === course) ?? courses[0] ?? null;
   // 演示数据没有真实的 XDOJ 可以试登：演示教师、管理员用服务器上的口令登录
-  const useDevTeacher = (demo && name.trim() === "demo-teacher") || !(servers.data?.length);
-  const teacherXdoj = tab === "teacher" && !useDevTeacher && (servers.data?.length ?? 0) > 0;
+  const useDevTeacher = (demo && name.trim() === "demo-teacher") || !chosen?.server;
+  const teacherXdoj = tab === "teacher" && !useDevTeacher;
+  const pitch = courses.length > 1 ? "C 语言和数据结构的上机练习助手" : `${chosen?.name ?? "C 语言程序设计"}的上机练习助手`;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -35,8 +39,8 @@ export default function Login() {
     setBusy(true);
     setError(null);
     try {
-      if (teacherXdoj) await api.teacherLogin(server || servers.data![0].code, name.trim(), password);
-      else await api.login(name.trim(), password);
+      if (teacherXdoj) await api.teacherLogin(chosen!.server!, name.trim(), password);
+      else await api.login(name.trim(), password, chosen?.code ?? "C");
       setMe(await api.me());
     } catch (err) {
       setError((err as Error).message);
@@ -53,7 +57,7 @@ export default function Login() {
           <span className="brand-name">程序设计智能体</span>
         </div>
         <div className="login-pitch">
-          <h2>C 语言和数据结构的上机练习助手</h2>
+          <h2>{pitch}</h2>
           <p>接在学校的 XDOJ 上。学生问问题、做小题、复习；老师看全班卡在哪里。</p>
         </div>
         <ul className="login-facts">
@@ -79,23 +83,22 @@ export default function Login() {
           </div>
           <div>
             <h1>登录</h1>
-            <p className="page-sub">{tab === "student" ? "用 XDOJ 的学号和密码登录。" : "用 XDOJ 的教师账号登录。"}</p>
+            <p className="page-sub">
+              {courses.length > 1 ? `${chosen?.name ?? ""}：` : ""}
+              {tab === "student" ? "用 XDOJ 的学号和密码登录。" : "用这门课 XDOJ 的教师账号登录。"}
+            </p>
           </div>
+          {courses.length > 1 && (
+            <Segmented label="课程" value={chosen?.code ?? "C"} onChange={(v) => { setCourse(v); setError(null); }}
+              options={courses.map((c) => ({ value: c.code, label: c.name }))} />
+          )}
           <Segmented label="身份" value={tab} onChange={(v) => { setTab(v); setError(null); }}
             options={[
               { value: "student", label: <><GraduationCap size={16} aria-hidden="true" />学生</> },
               { value: "teacher", label: <><Users size={16} aria-hidden="true" />教师</> },
             ]} />
-          {teacherXdoj && servers.data!.length > 1 && (
-            <label className="label">
-              用哪门课的 XDOJ 账号
-              <select className="field" value={server || servers.data![0].code} onChange={(e) => setServer(e.target.value)}>
-                {servers.data!.map((sv) => <option key={sv.code} value={sv.code}>{sv.name}</option>)}
-              </select>
-            </label>
-          )}
-          {teacherXdoj && servers.data!.length > 1 && (
-            <p className="note">两门课都教的老师，用任意一门课的账号登录，再到“数据源”页关联另一门课的账号。</p>
+          {teacherXdoj && courses.length > 1 && (
+            <p className="note">两门课是两台 XDOJ，账号密码可能不一样。两门都教的老师，分别登录两门课。</p>
           )}
           <label className="label">
             {tab === "student" ? "学号" : "XDOJ 教师账号"}

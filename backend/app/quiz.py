@@ -12,11 +12,12 @@ import random
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import config, db, mastery
+from . import catalog, config, db, mastery
 from . import models as m
 from .quizbank import ITEMS, PLACEHOLDER
 from .sandbox import run_program
 from .sandbox.precheck import check_editable_code, compile_error_zh
+from .taxonomy import course_of
 
 DONE = "done"
 _rng = random.Random()  # 选题用的随机数；演示数据入库时会固定种子
@@ -207,8 +208,9 @@ def start(s: Session, user_id: str, item: m.QuizItem, reason: str, lead: str,
     """在对话里出一道小题：一条消息只放一道。"""
     at = at or db.now()
     attempt = new_attempt(s, user_id, item, reason, at)
+    course = catalog.server_course(s, server_id) if server_id is not None else course_of(item.skill_code or "C")
     msg = m.ChatMessage(user_id=user_id, round_id=round_id, server_id=server_id, problem_id=problem_id,
-                        role="agent", kind="quiz", quiz_attempt_id=attempt.id, created_at=at,
+                        course=course, role="agent", kind="quiz", quiz_attempt_id=attempt.id, created_at=at,
                         content={"blocks": [{"t": "p", "text": lead}] if lead else []})
     s.add(msg)
     s.flush()

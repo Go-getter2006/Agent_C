@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from .. import llm
-from ..taxonomy import HELP_ORDER
+from ..taxonomy import HELP_ORDER, course_prompt
 from . import hints
 from .context import Ctx
 from .policy import Decision
@@ -278,7 +278,7 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
             f"【学生这条消息】\n{llm.strip_identity(text, ctx.user_id, ctx.user_name)[:1500]}")
     if feedback:
         user += f"\n\n【上一次写的不合格】{feedback}。请改正后重新输出。"
-    draft = llm.call_json("reply", _SYSTEM, user, validate, retries=1, max_tokens=700)
+    draft = llm.call_json("reply", course_prompt(_SYSTEM, ctx.course), user, validate, retries=1, max_tokens=700)
     if HELP_ORDER.get(decision.help_level, -1) >= 0 and flow in ("help", "locate"):
         draft.actions = list(HELP_ACTIONS)
     return draft

@@ -25,10 +25,12 @@ def get_session() -> Iterator[Session]:
 
 
 def current_user(s: Session = Depends(get_session), token: str | None = Cookie(default=None, alias=COOKIE)) -> m.User:
-    uid = crypto.verify_session(token or "")
-    user = s.get(m.User, uid) if uid is not None else None
+    """当前登录的人。user.course 是这次登录的课程：C 语言和数据结构分开登录，各页面只看这门课。"""
+    found = crypto.verify_session(token or "")
+    user = s.get(m.User, found[0]) if found is not None else None
     if user is None or user.status != "active":
         raise HTTPException(status_code=401, detail="请先登录。")
+    user.course = found[1]
     return user
 
 

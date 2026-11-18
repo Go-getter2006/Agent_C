@@ -32,7 +32,7 @@ def test_login_required_and_wrong_password(client):
     assert login(client, password="nope").status_code == 401
     assert login(client, name="9999999999").status_code == 401
     r = login(client)
-    assert r.status_code == 200 and r.json() == {"role": "student", "name": "林晓"}
+    assert r.status_code == 200 and r.json() == {"role": "student", "name": "林晓", "course": "C"}
     assert "httponly" in r.headers["set-cookie"].lower()
     assert client.get("/api/auth/me").json()["loginName"] == UID
     info = client.get("/api/auth/info").json()

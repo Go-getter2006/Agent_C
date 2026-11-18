@@ -1,4 +1,5 @@
-// 知识图谱画布：C 语言一张图、数据结构一张图，中间连着跨课程的先修关系。
+// 知识图谱画布：登录的这门课一张图。数据结构的班还可以带上它要用到的 C 语言知识点（“基础”，只有掌握程度），
+// 中间连着跨课程的先修关系。
 // 排法：一章一行（从上到下是课本的顺序），同一章的知识点从左到右；C 语言在上，数据结构在下。
 // 交互：拖动平移，Ctrl + 滚轮或按钮缩放，滚轮上下移动；悬停一个点，它的先修和后继亮起来，其他变淡；点一下打开右边的详情。
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
@@ -16,8 +17,12 @@ export interface KMNode {
   mean: number | null;
   withEvidence: number;
   readiness: number | null;
+  foundation?: boolean; // 数据结构的班里带上的 C 语言知识点
   student?: { level: string; p: number; predicted: boolean };
 }
+
+/** 这个知识点在这个班有没有可以显示的分布：作业涉及了，或者有人有证据。 */
+export const hasData = (n: KMNode) => n.covered || n.withEvidence > 0;
 
 export interface KMEdge {
   from: string;
@@ -131,6 +136,7 @@ interface Props {
   topics: KMTopic[];
   courses: ("C" | "D")[];
   courseNames: Record<string, string>;
+  home: "C" | "D"; // 这个班是哪门课的
   showCross: boolean;
   chain: boolean;
   selected: string | null;
@@ -140,7 +146,7 @@ interface Props {
   fitKey: string; // 变了就重新适应宽度
 }
 
-export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNames, showCross, chain, selected, search, mode, onSelect, fitKey }: Props) {
+export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNames, home, showCross, chain, selected, search, mode, onSelect, fitKey }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const [hover, setHover] = useState<string | null>(null);
@@ -274,7 +280,7 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
           <div key={b.course} className={`kg-band kg-band-${b.course}`} style={{ top: b.y, height: b.height, width: L.width - PAD * 2, left: PAD }}>
             <div className="kg-band-head">
               <strong>{courseNames[b.course]}</strong>
-              <span>{b.count} 个知识点{b.course === "D" ? " · 还没开课，按 C 语言的先修推算准备度" : ""}</span>
+              <span>{b.count} 个知识点{b.course !== home ? " · 这门课要用到的基础，只有掌握程度" : ""}</span>
             </div>
           </div>
         ))}
@@ -307,22 +313,24 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
           const stu = mode === "student" ? n.student : undefined;
           const lvl = stu ? LEVEL_CLS[stu.level] ?? "none" : "";
           const weak = n.dist[2] ?? 0;
-          const ready = n.course === "D" ? (stu ? (stu.predicted ? stu.p : null) : n.readiness) : null;
+          const shown = hasData(n);
+          const foundation = n.course !== home;
+          // 数据结构的知识点还没有证据时：按 C 语言的先修推出来的准备度
+          const ready = n.course === "D" && !shown ? (stu ? (stu.predicted ? stu.p : null) : n.readiness) : null;
           const label = stu
             ? `${n.name}，${stu.level}${stu.predicted ? "（推算）" : ""}`
-            : n.course === "D"
-              ? `${n.name}，还没开课，准备度 ${ready === null ? "没有数据" : ready.toFixed(2)}`
-              : n.covered ? `${n.name}，${n.dist.map((v, i) => `${["已掌握", "基本掌握", "待加强", "还没练到"][i]} ${v} 人`).join("，")}` : `${n.name}，作业还没涉及`;
+            : shown ? `${n.name}，${n.dist.map((v, i) => `${["已掌握", "基本掌握", "待加强", "还没练到"][i]} ${v} 人`).join("，")}`
+              : ready !== null ? `${n.name}，还没有证据，推算的准备度 ${ready.toFixed(2)}` : `${n.name}，作业还没涉及`;
           return (
             <button key={n.code} type="button"
-              className={`kg-node${n.course === "D" ? " kg-node-ds" : ""}${!n.covered && n.course === "C" ? " kg-node-uncovered" : ""}${lvl ? ` kg-lv-${lvl}` : ""}${selected === n.code ? " kg-node-selected" : ""}${dim ? " kg-node-dim" : ""}${matches?.has(n.code) ? " kg-node-match" : ""}`}
+              className={`kg-node${foundation ? " kg-node-ds" : ""}${!shown && !foundation ? " kg-node-uncovered" : ""}${lvl ? ` kg-lv-${lvl}` : ""}${selected === n.code ? " kg-node-selected" : ""}${dim ? " kg-node-dim" : ""}${matches?.has(n.code) ? " kg-node-match" : ""}`}
               style={{ left: n.x, top: n.y, width: CHIP_W, height: CHIP_H }}
               aria-label={label} aria-pressed={selected === n.code}
               onMouseEnter={() => setHover(n.code)} onMouseLeave={() => setHover(null)}
               onFocus={() => setHover(n.code)} onBlur={() => setHover(null)}
               onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) onSelect(selected === n.code ? null : n.code); }}>
               <span className="kg-node-name">{n.name}</span>
-              {mode === "class" && n.course === "C" && n.covered && (
+              {mode === "class" && shown && (
                 <span className="kg-node-dist" aria-hidden="true">
                   {n.dist.map((v, i) => v > 0 && <span key={i} style={{ flexGrow: v / total, background: LEVEL_COLORS[i] }} />)}
                 </span>
@@ -344,9 +352,9 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
           <b>{hovered.name}</b>
           {mode === "student" && hovered.student ? (
             <div className="tip-row"><span>{hovered.student.predicted ? "推算的准备度" : hovered.student.level}</span><b className="num">{hovered.student.p.toFixed(2)}</b></div>
-          ) : hovered.course === "D" ? (
-            <div className="tip-row"><span>全班平均准备度</span><b className="num">{hovered.readiness === null ? "—" : hovered.readiness.toFixed(2)}</b></div>
-          ) : hovered.covered ? (
+          ) : !hasData(hovered) && hovered.course === "D" ? (
+            <div className="tip-row"><span>全班平均准备度（推算）</span><b className="num">{hovered.readiness === null ? "—" : hovered.readiness.toFixed(2)}</b></div>
+          ) : hasData(hovered) ? (
             ["已掌握", "基本掌握", "待加强", "还没练到"].map((l, i) => (
               <div key={l} className="tip-row"><span><i className="swatch" style={{ background: LEVEL_COLORS[i] }} />{l}</span><b className="num">{hovered.dist[i]} 人</b></div>
             ))

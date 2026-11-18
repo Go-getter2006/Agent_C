@@ -1,6 +1,6 @@
 """学生端的学情页：概况、接下来做什么、知识点地图、常见错误、做题情况。只统计这个学生可见的题。
 
-不返回：概率数值、技能（细）、内部编码、知识点之间的连线、跨课程的内容、班级排名。
+只看这次登录的课程。不返回：概率数值、技能（细）、内部编码、知识点之间的连线、另一门课的答题记录、班级排名。
 """
 from __future__ import annotations
 
@@ -23,9 +23,9 @@ def level_view(level: str) -> dict:
 class Snapshot:
     """把算学情页要用的东西一次取齐。"""
 
-    def __init__(self, s: Session, user_id: str, now: dt.datetime | None = None):
-        self.s, self.user_id, self.now = s, user_id, now or db.now()
-        self.visible = catalog.visible_problems(s, user_id)
+    def __init__(self, s: Session, user_id: str, now: dt.datetime | None = None, course: str = "C"):
+        self.s, self.user_id, self.now, self.course = s, user_id, now or db.now(), course
+        self.visible = catalog.visible_problems(s, user_id, course)
         self.info: dict[tuple[int, int], catalog.ProblemInfo] = {}
         self.skills: dict[tuple[int, int], list[str]] = {}
         self.subs: dict[tuple[int, int], list[m.Submission]] = {}
@@ -37,11 +37,9 @@ class Snapshot:
             label = current_problem_label(s, *key)
             self.skills[key] = ([label.primary_skill] + list(label.secondary_skills or [])) if label else []
             self.subs[key] = catalog.user_submissions(s, user_id, *key)
-        self.kp = mastery.kp_states(s, user_id)
-        courses = {s.get(m.Server, sid).course for sid, _ in self.visible if s.get(m.Server, sid) is not None}
-        self.course = "D" if courses == {"D"} else "C"
-        self.stuck = s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id == user_id)
-                               .order_by(m.StuckPoint.id)).all()
+        self.kp = {k: v for k, v in mastery.kp_states(s, user_id).items() if course_of(k) == course}
+        self.stuck = [p for p in s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id == user_id)
+                                           .order_by(m.StuckPoint.id)).all() if course_of(p.skill_code) == course]
 
     def passed(self, key) -> bool:
         return any(x.judgement == "AC" for x in self.subs.get(key, []))
@@ -152,7 +150,7 @@ def error_block(snap: Snapshot, days: int = 30, top: int = 5) -> list[dict]:
 def activity_block(snap: Snapshot) -> dict:
     """做题情况：每个作业的完成进度；首次提交通过率；平均每题提交几次；按周的变化。"""
     homeworks = []
-    for c in sorted(catalog.visible_contests(snap.s, snap.user_id),
+    for c in sorted(catalog.visible_contests(snap.s, snap.user_id, snap.course),
                     key=lambda c: (c.end_time is not None and c.end_time < snap.now, c.end_time or snap.now)):
         pids = catalog.contest_problem_ids(snap.s, c.server_id, c.contest_id)
         keys = [(c.server_id, pid) for pid in pids if (c.server_id, pid) in snap.info]
@@ -204,7 +202,7 @@ def next_block(snap: Snapshot, errors: list[dict]) -> list[dict]:
     for sp in [p for p in snap.stuck if p.stubborn]:
         kp = kp_of_skill(sp.skill_code)
         add_problem(snap.practice_for(kp, used), f"“{KNOWLEDGE_POINTS.get(kp, '')}”已经卡住好几次了，建议再练一题，也可以找老师当面讲一遍。")
-    for rv in review.due_items(snap.s, snap.user_id, snap.now):
+    for rv in review.due_items(snap.s, snap.user_id, snap.now, snap.course):
         if len(out) >= 3:
             break
         kp = KNOWLEDGE_POINTS.get(kp_of_skill(rv.skill_code), "")
@@ -224,8 +222,8 @@ def next_block(snap: Snapshot, errors: list[dict]) -> list[dict]:
     return out[:3]
 
 
-def build(s: Session, user_id: str) -> dict:
-    snap = Snapshot(s, user_id)
+def build(s: Session, user_id: str, course: str = "C") -> dict:
+    snap = Snapshot(s, user_id, course=course)
     errors = error_block(snap)
     nxt = next_block(snap, errors)
     for row in errors:
@@ -233,7 +231,7 @@ def build(s: Session, user_id: str) -> dict:
         row.pop("_key", None)
     activity = activity_block(snap)
     weeks = activity["weeks"]
-    rv = review.summary(s, user_id, snap.now)
+    rv = review.summary(s, user_id, snap.now, course)
     levels = [state.level for state in snap.kp.values()]
     return {
         "summary": {

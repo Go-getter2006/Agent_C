@@ -27,20 +27,22 @@ def decrypt_secret(token: str) -> str:
         raise ValueError("密文解不开：SECRET_KEY 可能换过") from exc
 
 
-def sign_session(user_id: int, hours: int | None = None) -> str:
+def sign_session(user_id: int, course: str = "C", hours: int | None = None) -> str:
+    """登录凭证：账号 + 这次登录的课程（C 语言、数据结构分开登录）+ 到期时间，带签名。"""
     exp = int(time.time()) + 3600 * (hours or config.SESSION_HOURS)
-    body = f"{user_id}.{exp}"
+    body = f"{user_id}.{course}.{exp}"
     sig = hmac.new(_derive("session"), body.encode("ascii"), hashlib.sha256).hexdigest()
     return f"{body}.{sig}"
 
 
-def verify_session(token: str) -> int | None:
+def verify_session(token: str) -> tuple[int, str] | None:
+    """返回 (账号, 课程)。签名不对、过期、旧格式的凭证都返回 None（重新登录一次就好）。"""
     try:
-        uid, exp, sig = token.split(".")
-        body = f"{uid}.{exp}"
+        uid, course, exp, sig = token.split(".")
+        body = f"{uid}.{course}.{exp}"
         good = hmac.new(_derive("session"), body.encode("ascii"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, good) or int(exp) < time.time():
+        if not hmac.compare_digest(sig, good) or int(exp) < time.time() or course not in ("C", "D"):
             return None
-        return int(uid)
+        return int(uid), course
     except (ValueError, AttributeError):
         return None
