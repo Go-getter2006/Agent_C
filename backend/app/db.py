@@ -117,3 +117,64 @@ def create_all() -> None:
     from . import models  # noqa: F401  注册全部表
 
     Base.metadata.create_all(engine())
+
+
+# 每个迁移版本在库里留下的痕迹（只用迁移才会加的列，或者那个版本新建的表）。
+# 以前的部署用 create_all 建表，没有记版本；create_all 只会建缺的表、不会给已有的表加列，
+# 所以按顺序找到第一个“痕迹不在”的版本，就知道库停在哪一版。
+_REVISION_MARKS: list[tuple[str, str, str | None]] = [
+    ("0002", "quiz_items", "origin"),
+    ("0003", "teacher_sources", None),
+    ("0004", "chat_messages", "course"),
+    ("0005", "chat_steps", "act"),
+    ("0006", "cross_links", None),
+]
+
+
+def _guess_revision(insp) -> str:
+    tables = set(insp.get_table_names())
+    rev = "0001"
+    for version, table, column in _REVISION_MARKS:
+        if table not in tables:
+            break
+        if column is not None and column not in {c["name"] for c in insp.get_columns(table)}:
+            break
+        rev = version
+    return rev
+
+
+def migrate() -> str:
+    """把库升到最新版本，返回做了什么。启动时调用（run.sh 的 init-db、网页进程启动）。
+
+    - 新库：建全部表，记为最新版本；
+    - 用 Alembic 管的库：升级到最新；
+    - 以前用 create_all 建的库（没有版本记录）：按 _REVISION_MARKS 认出停在哪一版，记上，再升级。
+      迁移里建表的地方都先看表在不在，所以 create_all 先建过的表不会冲突。
+    """
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect
+
+    from . import models  # noqa: F401
+
+    root = Path(__file__).resolve().parent.parent
+    cfg = Config(str(root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(root / "alembic"))
+    with engine().begin() as conn:
+        cfg.attributes["connection"] = conn
+        insp = inspect(conn)
+        tables = set(insp.get_table_names())
+        if "alembic_version" in tables:
+            command.upgrade(cfg, "head")
+            return "upgraded"
+        if not tables & set(Base.metadata.tables):
+            Base.metadata.create_all(conn)
+            command.stamp(cfg, "head")
+            return "created"
+        rev = _guess_revision(insp)
+        command.stamp(cfg, rev)
+        command.upgrade(cfg, "head")
+        Base.metadata.create_all(conn)   # 以防万一：模型里有、迁移里没有的表
+        return f"adopted:{rev}"

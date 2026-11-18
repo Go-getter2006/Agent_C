@@ -15,13 +15,21 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _configure(connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata,
+                      render_as_batch=connection.dialect.name == "sqlite", compare_type=True)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def run_migrations_online() -> None:
+    given = context.config.attributes.get("connection")
+    if given is not None:   # 程序里调用（db.migrate）：用应用自己的连接
+        _configure(given)
+        return
     engine = create_engine(config.DATABASE_URL)
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata,
-                          render_as_batch=config.DATABASE_URL.startswith("sqlite"), compare_type=True)
-        with context.begin_transaction():
-            context.run_migrations()
+        _configure(connection)
 
 
 if context.is_offline_mode():

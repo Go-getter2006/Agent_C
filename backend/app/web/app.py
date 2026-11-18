@@ -20,7 +20,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         config.secret_key()  # 生产环境没设 SECRET_KEY 就直接报错
-        db.create_all()
+        db.migrate()   # 新库建表；旧库按迁移补上新加的列和表
         with db.session_scope() as s:
             from ..servers import ensure_known
 

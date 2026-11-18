@@ -55,7 +55,7 @@ git clone https://github.com/Go-getter2006/Agent_C.git && cd Agent_C
 | `./run.sh` | 在后台启动（网页和同步在同一个进程里） |
 | `./run.sh stop` / `restart` / `status` | 停止、重启、看在不在跑 |
 | `./run.sh log` | 看运行日志（Ctrl+C 只是退出看日志，程序继续跑） |
-| `./run.sh update` | 拉最新代码、更新依赖、重启 |
+| `./run.sh update` | 拉最新代码、更新依赖、把数据库升到最新版本（新加的表和列自动补上，原有数据不动）、重启 |
 | `./run.sh service` | 装成开机自启的系统服务 |
 | `./run.sh demo` | 用演示数据启动（单独一个库） |
 
