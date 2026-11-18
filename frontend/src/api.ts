@@ -64,6 +64,7 @@ export const api = {
       `/api/homeworks/${key}/submissions`,
     ),
   problem: (key: string) => get<ProblemDetail>(`/api/problems/${key}`),
+  problemDocument: (key: string) => get<{ ready: boolean; pdf: boolean; url: string | null; text: string | null }>(`/api/problems/${key}/document`),
   diff: (problemKey: string, a: string, b: string) =>
     get<DiffView>(`/api/problems/${problemKey}/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
   source: (key: string) => get<{ key: string; lines: string[] }>(`/api/submissions/${key}/source`),

@@ -1,8 +1,8 @@
 // 提交页：一道题一张卡片，卡片里是这道题的每一次提交。
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronDown, ChevronUp, CircleCheck, Code2, Inbox, MessageCircle } from "lucide-react";
-import { api } from "../api";
+import { ApiError, api } from "../api";
 import DiffOverlay from "../components/Diff";
 import { ChangeNote, HomeworkPicker, homeworkSummary } from "../components/Lists";
 import { StudentShell } from "../components/Shell";
@@ -23,18 +23,30 @@ export default function Submissions() {
   const [open, setOpen] = useState<string | null>(null);
   const [source, setSource] = useState<{ key: string; lines?: string[]; error?: string } | null>(null);
 
-  const toggleSource = async (sub: SubmissionView) => {
+  const toggleSource = (sub: SubmissionView) => {
     if (open === sub.key) return setOpen(null);
     setOpen(sub.key);
-    setSource({ key: sub.key });
     void api.event("open_submission", sub.key);
-    try {
-      const r = await api.source(sub.key);
-      setSource({ key: sub.key, lines: r.lines });
-    } catch (err) {
-      setSource({ key: sub.key, error: (err as Error).message });
-    }
   };
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setSource({ key: open });
+    const load = async () => {
+      try {
+        const r = await api.source(open);
+        if (!cancelled) setSource({ key: open, lines: r.lines });
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 409) timer = setTimeout(load, 2500);
+        else setSource({ key: open, error: (err as Error).message });
+      }
+    };
+    void load();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [open]);
 
   const diff = search.get("diff")?.split("~") ?? null; // 题目~旧~新
   const openDiff = (problemKey: string, a: string, b: string) => {

@@ -6,7 +6,7 @@ import logging
 
 from sqlalchemy import select, update
 
-from .. import config, db
+from .. import config, db, pdftext
 from .. import models as m
 from ..taxonomy import normalize_judgement
 from . import endpoints as ep
@@ -38,8 +38,10 @@ def poll_new_submissions(ctx: SyncContext, backfill: bool = False, max_requests:
                 set_time(s, ctx.server_id, "last_new_submission_at", ctx.now())
             set_time(s, ctx.server_id, "last_poll_at", ctx.now())
         if len(batch) < rows_per_page:
+            ctx.stats["poll_has_more"] = False
             break
         if max_requests is not None and ctx.client.request_count - start_count >= max_requests:
+            ctx.stats["poll_has_more"] = True
             break
     ctx.bump("new_submissions", total_new)
     return total_new
@@ -114,6 +116,24 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
         log.warning("提交 %s 的源码没取到：%s", submission_id, exc)
         errors.append(exc)
 
+    if source_first:
+        with db.session_scope() as s:
+            doc = s.get(m.ProblemText, (ctx.server_id, problem_id))
+            missing_text = doc is None or not doc.file_bytes
+            if not missing_text and (pdftext.needs_redo(doc.extract_status, doc.file_bytes, doc.content_type)
+                                     or (doc.extract_status == "garbled" and "\uf0e8" in (doc.raw_text or ""))):
+                if pdftext.store(s, doc, doc.content_type, doc.file_bytes):
+                    enqueue(s, ctx.server_id, "label_problem", problem_id, 1, when=ctx.now())
+        if missing_text:
+            from .sync_meta import _sync_problem_text
+
+            try:
+                _sync_problem_text(ctx, problem_id)
+            except SessionError:
+                raise
+            except XdojError as exc:
+                errors.append(exc)
+
     judges = ep.list_judges(ctx.client, submission_id)
     if not judges:
         raise NotJudgedYet()
@@ -140,8 +160,8 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
     runs: list[ep.RunRow] = []
     if code != "CE":
         runs = ep.list_judge_runs(ctx.client, latest.judge_id)
-        if not runs and latest.compile_output:
-            code = "CE"  # 有编译输出且没有测试点运行：编译错误
+        if not runs:
+            raise NotJudgedYet()
     with db.session_scope() as s:
         for r in runs:
             row = s.get(m.JudgeRun, (ctx.server_id, r.run_id))
@@ -171,9 +191,10 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
             errors.append(exc)
             continue
         with db.session_scope() as s:
-            data = (out.program_output or "").encode("utf-8")
-            s.add(m.RunOutput(server_id=ctx.server_id, run_id=r.run_id, program_output_bytes=data,
-                              encoding="utf-8", truncated=False, fetched_at=ctx.now()))
+            if out.program_output is not None:
+                s.add(m.RunOutput(server_id=ctx.server_id, run_id=r.run_id,
+                                  program_output_bytes=out.program_output.encode("utf-8"),
+                                  encoding="utf-8", truncated=False, fetched_at=ctx.now()))
             _crosscheck_testcase(s, ctx, problem_id, r.testcase_id, out)
 
     if errors:
@@ -209,17 +230,17 @@ def _crosscheck_testcase(s, ctx: SyncContext, problem_id: int, testcase_id: int,
     if out.standard_input is None and out.standard_output is None:
         return
     t = s.get(m.Testcase, (ctx.server_id, testcase_id))
-    data_in = (out.standard_input or "").encode("utf-8")
-    data_out = (out.standard_output or "").encode("utf-8")
+    data_in = out.standard_input.encode("utf-8") if out.standard_input is not None else None
+    data_out = out.standard_output.encode("utf-8") if out.standard_output is not None else None
     if t is None:
         s.add(m.Testcase(server_id=ctx.server_id, testcase_id=testcase_id, problem_id=problem_id, seq=0,
                          input_bytes=data_in, input_encoding="utf-8", output_bytes=data_out,
                          output_encoding="utf-8", fetched_at=ctx.now()))
         return
-    if t.input_bytes is None:
+    if t.input_bytes is None and data_in is not None:
         t.input_bytes, t.input_encoding = data_in, "utf-8"
+    if t.output_bytes is None and data_out is not None:
         t.output_bytes, t.output_encoding = data_out, "utf-8"
-        return
 
     def same(stored: bytes | None, enc: str, fresh: str | None) -> bool:
         text, ok = decode_bytes(stored, enc)

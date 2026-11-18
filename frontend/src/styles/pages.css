@@ -1158,6 +1158,75 @@
   font-weight: 600;
 }
 
+.problem-document {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-16);
+  height: 100%;
+  min-height: 0;
+}
+
+.drawer:has(.problem-document) {
+  width: min(900px, 100vw);
+}
+
+.problem-document iframe {
+  width: 100%;
+  flex: 1;
+  min-height: 65vh;
+  border: 0;
+}
+
+.problem-document pre {
+  white-space: pre-wrap;
+  overflow-y: auto;
+}
+
+@media (min-width: 1024px) {
+  .progress-grid {
+    align-items: stretch;
+  }
+
+  .progress-grid > .stack {
+    min-height: 0;
+  }
+
+  .progress-grid > .stack:first-child {
+    contain: size;
+  }
+
+  .progress-grid > .stack > .card {
+    flex-shrink: 0;
+  }
+
+  .progress-grid .progress-scroll-card {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .progress-scroll-card > .card-head {
+    flex-shrink: 0;
+  }
+
+  .progress-scroll-card > .card-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .progress-grid > .stack:first-child .progress-scroll-card > .card-body {
+    height: 0;
+  }
+
+  .progress-grid > .stack:last-child .progress-scroll-card {
+    flex: 0 1 auto;
+    max-height: max(400px, 70dvh);
+  }
+}
+
 .kp-group + .kp-group {
   margin-top: var(--sp-20);
 }

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from sqlalchemy import select, update
@@ -84,21 +85,14 @@ def _llm_prompt(evidence: dict, plabel: m.ProblemLabel | None, tlabels: dict[int
     skill_lines = "\n".join(f"{c} {SKILLS[c][0]}" for c in dict.fromkeys(skills) if c in SKILLS) or "（这道题还没标技能）"
     source = llm.strip_identity(evidence.get("sourceCode") or "", user_id, name)
     numbered = "\n".join(f"{i + 1:>3}| {line}" for i, line in enumerate(source.splitlines()))
-    cases = []
-    for t in evidence.get("testCases", []):
-        if t.get("passed"):
-            continue
-        tl = tlabels.get(t["testcaseId"])
-        cases.append(
-            f"测试点 {t['testcaseId']}（{tl.situation if tl else '未标注'}，结果 {t.get('result')}）\n"
-            f"输入：\n{(t.get('standardInput') or '')[:400]}\n期望输出：\n{(t.get('standardOutput') or '')[:400]}\n"
-            f"实际输出：\n{(t.get('programOutput') or '')[:400]}")
-    passed = sum(1 for t in evidence.get("testCases", []) if t.get("passed"))
+    data = llm.evidence_for_model(evidence, user_id, name)
+    for case in data["testCases"]:
+        label = tlabels.get(case.get("testcaseId"))
+        if label is not None:
+            case["situation"] = label.situation
     return (
         f"【错误类型库】\n{lib}\n\n【这道题涉及的技能】\n{skill_lines}\n\n"
-        f"【题面】\n{(evidence.get('problemText') or '')[:1500]}\n\n【源码】\n{numbered[:6000]}\n\n"
-        f"【评测】{evidence.get('judgement')}，通过 {passed} 个测试点。\n"
-        f"【编译输出】\n{(evidence.get('compileOutput') or '无')[:800]}\n\n【没通过的测试点】\n" + "\n\n".join(cases[:4]))
+        f"【源码】\n{numbered}\n\n【题面与后台评测证据】\n{json.dumps(data, ensure_ascii=False)}")
 
 
 def _validate(n_lines: int):
@@ -141,7 +135,7 @@ def label_submission(s: Session, server_id: int, submission_id: int, use_llm: bo
     sub = s.get(m.Submission, (server_id, submission_id))
     if sub is None or sub.judgement in ("AC", "PENDING") or sub.detail_status != "done":
         return []
-    evidence = assemble_submission(s, server_id, submission_id, max_output_chars=2000)
+    evidence = assemble_submission(s, server_id, submission_id)
     plabel = current_problem_label(s, server_id, sub.problem_id)
     tlabels = testcase_labels(s, plabel)
     failed_ids = [t["testcaseId"] for t in evidence["testCases"] if t.get("passed") is False]

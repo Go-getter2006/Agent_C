@@ -370,3 +370,62 @@ def test_proactive_message_rules(demo):
     after = ["int max = a[0];", "for (i = 1; i < n; i++)", "    if (a[i] > max) max = a[i];", "printf(\"%d\", max);"]
     start, lines, marks = proactive.fix_excerpt(before, after, hint_line=1)
     assert start == 1 and lines[0] == "int max = a[0];" and marks == [1, 2]
+
+
+def test_model_evidence_keeps_long_outputs_and_missing_values():
+    expected = "prefix " * 500 + "EXPECTED_END"
+    actual = "prefix " * 500 + "ACTUAL_END"
+    evidence = {
+        "userId": UID, "userName": "测试生", "password": "unused-secret",
+        "problemText": "输入整数，输出其和。", "compileOutput": "main.c: warning: value unused",
+        "testCases": [{"testcaseId": i, "standardInput": f"INPUT_{i}", "standardOutput": expected,
+                       "programOutput": actual, "passed": False} for i in range(6)] + [
+                           {"testcaseId": 7, "programOutput": None},
+                           {"testcaseId": 8, "programOutput": ""}],
+    }
+    data = llm.evidence_for_model(evidence, UID, "测试生")
+    assert len(data["testCases"]) == 8
+    assert data["testCases"][5]["standardOutput"] == expected
+    assert data["testCases"][5]["programOutput"] == actual
+    assert data["testCases"][6]["programOutput"] is None
+    assert data["testCases"][7]["programOutput"] == ""
+    assert "userId" not in data and "password" not in data
+
+    from app.catalog import ProblemInfo
+    from app.chat import reply
+    from app.chat.policy import Decision
+
+    seen = []
+
+    def backend(messages, *_args):
+        seen.append(messages[1]["content"])
+        return json.dumps({"before": "先检查边界条件下的变量变化。"}, ensure_ascii=False), 0, 0
+
+    ctx = context.Ctx(user_id=UID, user_name="测试生", problem=ProblemInfo(1, 406, "测试题", ""),
+                      source="int value;\n" * 600 + "// FULL_SOURCE_END", evidence=evidence)
+    llm.set_backend(backend)
+    try:
+        reply.generate_llm(ctx, Decision("R11", "H1", "甲", "help"), "help", "为什么错了？", [])
+        assert all(marker in seen[-1] for marker in ("INPUT_5", "EXPECTED_END", "ACTUAL_END", "FULL_SOURCE_END"))
+        assert UID not in seen[-1] and "测试生" not in seen[-1]
+    finally:
+        llm.set_backend(None)
+
+
+def test_llm_test_data_leak_is_rejected(demo):
+    sid = demo["server_id"]
+
+    def backend(messages, json_mode, max_tokens, temperature):
+        if "分析" in messages[0]["content"][:20]:
+            return json.dumps({"intent": "DEBUG", "hasAttempt": True}), 20, 10
+        return json.dumps({"before": "测试输入是 -12 -7 -30，你照着算。", "code": None}, ensure_ascii=False), 30, 10
+
+    llm.set_backend(backend)
+    try:
+        with db.session_scope() as s:
+            workflow.close_round(s, workflow.open_round(s, UID), "换题", db.now())
+            out = workflow.handle(s, UID, (sid, 406), "为什么错了？")
+            assert "-12 -7 -30" not in texts(out[1])
+            assert last_step(s).reply_source == "template"
+    finally:
+        llm.set_backend(None)

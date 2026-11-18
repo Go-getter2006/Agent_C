@@ -94,6 +94,31 @@ def test_text_layer_and_figures():
     assert all(f["png"][:8] == b"\x89PNG\r\n\x1a\n" and f["width"] > 100 for f in figs)
 
 
+def test_private_arrow_is_repaired_only_for_known_font():
+    text = "字符转换：a\uf0e8d，B\uf0e8Z"
+    table = pdftext._symbol_translation([{"text": "\uf0e8", "fontname": "ABCDEE+Wingdings"}])
+    assert text.translate(table) == "字符转换：a→d，B→Z"
+    assert pdftext.garbled(text.translate(table)) is None
+    for font in ("OtherFont", "Wingdings2", "Wingdings3"):
+        assert not pdftext._symbol_translation([{"text": "\uf0e8", "fontname": font}])
+    assert not pdftext._symbol_translation([{"text": "\uf0e8", "fontname": "Wingdings"},
+                                          {"text": "\uf0e8", "fontname": "OtherFont"}])
+
+
+def test_cached_arrow_statement_is_repaired_without_network(ctx, monkeypatch):
+    old = "字符转换：a\uf0e8d，B\uf0e8Z"
+    fixed = old.replace("\uf0e8", "→")
+    with db.session_scope() as s:
+        s.add(m.ProblemText(server_id=ctx.server_id, problem_id=4242, content_type="application/pdf",
+                            file_bytes=make_pdf(LINES), raw_text=old, extracted_text="", extract_status="garbled",
+                            tidied_at=db.now()))
+    monkeypatch.setattr(pdftext, "read_pdf", lambda data: (fixed, []))
+    with db.session_scope() as s:
+        assert pdftext.redo_stored(s) == 1
+        assert pdftext.usable_text(s.get(m.ProblemText, (ctx.server_id, 4242))) == fixed
+        assert pdftext.redo_stored(s) == 0
+
+
 # ------------------------------------------------------------ 大模型整理：程序核对
 RAW = "Input two integers a and b (1 <= a, b <= 10 5).\n[图1]\nSample input\n3 5\nSample output\n8"
 GOOD = "题目描述\nInput two integers a and b (1 ≤ a, b ≤ 10^5).\n[图1]\n样例输入\n3 5\n样例输出\n8"

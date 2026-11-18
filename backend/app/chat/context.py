@@ -1,6 +1,6 @@
 """第 2~5 步：绑定、取证、诊断、状态。全部由程序完成。
 
-Ctx 里的 evidence（证据 JSON）含测试点原始数据，只在后台用：不发给学生，也不发给写回复的大模型。
+Ctx 里的 evidence（证据 JSON）供后台诊断和回复模型使用，学生可见回复单独校验。
 """
 from __future__ import annotations
 
@@ -196,7 +196,7 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
         subs = catalog.user_submissions(s, user_id, sub.server_id, sub.problem_id, until=now)
         ctx.attempt_no = [x.submission_id for x in subs].index(sub.submission_id) + 1
         if sub.detail_status == "done":
-            ctx.evidence = assemble_submission(s, sub.server_id, sub.submission_id, max_output_chars=2000)
+            ctx.evidence = assemble_submission(s, sub.server_id, sub.submission_id)
             ctx.source = ctx.evidence.get("sourceCode")
             ctx.source_kind = "submission"
             ctx.labels = labeler.label_submission(s, sub.server_id, sub.submission_id)  # 还没标的，立即标
@@ -283,12 +283,12 @@ def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
     if ctx.problem is not None:
         sid, pid = ctx.problem.server_id, ctx.problem.problem_id
         text = s.get(m.ProblemText, (sid, pid))
-        ctx.statement = pdftext.usable_text(text)[:1500]
+        ctx.statement = pdftext.usable_text(text)
         for tc in s.scalars(select(m.Testcase).where(m.Testcase.server_id == sid, m.Testcase.problem_id == pid)
-                            .order_by(m.Testcase.seq, m.Testcase.testcase_id).limit(8)).all():
-            inp = decode_bytes(tc.input_bytes, tc.input_encoding)[0] if tc.input_bytes is not None else ""
-            out = decode_bytes(tc.output_bytes, tc.output_encoding)[0] if tc.output_bytes is not None else ""
-            ctx.all_tests.append({"standardInput": inp or "", "standardOutput": out or ""})
+                            .order_by(m.Testcase.seq, m.Testcase.testcase_id)).all():
+            inp = decode_bytes(tc.input_bytes, tc.input_encoding)[0] if tc.input_bytes is not None else None
+            out = decode_bytes(tc.output_bytes, tc.output_encoding)[0] if tc.output_bytes is not None else None
+            ctx.all_tests.append({"standardInput": inp, "standardOutput": out})
         subs = catalog.user_submissions(s, ctx.user_id, sid, pid, until=now)
         prev_lines = None
         for i, sub in enumerate(subs[-8:], start=max(1, len(subs) - 7)):

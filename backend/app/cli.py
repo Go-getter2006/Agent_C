@@ -223,8 +223,7 @@ def _probe_fetch(c) -> None:
                     return None, "，".join(f"{k} {'有' if v is not None else '没有'}（{len(v or '')} 字）" for k, v in
                                           (("程序输出", o.program_output), ("标准输入", o.standard_input), ("标准输出", o.standard_output)))
                 step("程序输出 getRunOutput.do", output)
-    if c.grid_styles:
-        typer.echo("\n子表用的参数写法：" + "，".join(f"{p} 第 {i + 1} 种" for p, i in c.grid_styles.items()))
+    typer.echo("\n子表参数：_search=false、sidx=、sord=asc，带 page、rows、nd。")
 
 
 @cli.command("sync-meta")

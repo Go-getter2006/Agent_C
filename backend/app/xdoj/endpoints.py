@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Iterator
 
-from .client import ClientError, ResponseError, RetryExhausted, XdojClient
+from .client import XdojClient, XdojError
 from .util import parse_time, pick, scrub, to_float, to_int
 
 log = logging.getLogger("xdoj.endpoints")
@@ -50,40 +50,10 @@ def _nd() -> str:
     return str(int(time.time() * 1000))
 
 
-# 子表（GET）的几种参数写法。第一种和网页一样；服务器拒绝时依次试后面的，试通了就记住，下次直接用。
-GRID_STYLES: tuple[dict[str, str], ...] = (
-    {"_search": "false", "sidx": "id", "sord": "asc"},
-    {"_search": "false", "sidx": "", "sord": "asc"},
-    {"search": "false", "sidx": "id", "sord": "asc"},
-)
-
-
 def grid_json(client: XdojClient, path: str, params: dict):
-    """取一个子表（GET）。参数写法被拒绝（4xx、5xx、不是 JSON）时换下一种写法，每种只试一次；都不行才报错。"""
-    known = client.grid_styles.get(path)
-    order = list(range(len(GRID_STYLES)))
-    if known is not None:
-        order.remove(known)
-        order.insert(0, known)
-    tried: list[str] = []
-    last_status = 0
-    for i in order:
-        query = {**params, **GRID_STYLES[i], "nd": _nd()}
-        try:
-            # 已经试通的写法照常重试；还没试通的只发一次，不在错的写法上反复重试
-            body = client.get_json(path, query, retry=(i == known))
-        except (ClientError, ResponseError, RetryExhausted) as exc:
-            status = getattr(exc, "status", 0)
-            if isinstance(exc, RetryExhausted) and not status:
-                raise  # 网络不通，换写法没有用
-            tried.append(f"写法{i + 1}→{status or type(exc).__name__}")
-            last_status = status or last_status
-            continue
-        if known != i:
-            log.info("%s 用第 %d 种参数写法%s", path, i + 1, f"（之前试过：{'，'.join(tried)}）" if tried else "")
-            client.grid_styles[path] = i
-        return body
-    raise ResponseError(path, last_status, "几种参数写法都被拒绝：" + "，".join(tried))
+    """按已实测的 jqGrid 参数取子表；缺 sidx/sord 的评测请求会返回 500。"""
+    query = {"_search": "false", "sidx": "", "sord": "asc", **params, "nd": _nd()}
+    return client.get_json(path, query)
 
 
 def _paged(client: XdojClient, method: str, path: str, extra: dict | None = None, rows: int = 100,
@@ -355,9 +325,8 @@ class JudgeRow:
 
 def list_judges(client: XdojClient, submission_id: int) -> list[JudgeRow]:
     """评测记录是提交详情页里的子表（GET）：和网页一样带 _search、sidx、sord。以前只带了页码。"""
-    body = grid_json(client, "/submission/listJudge.do", {"submissionId": submission_id, "page": 1, "rows": 20})
     out = []
-    for r in _page(body).rows:
+    for r in _paged(client, "GET", "/submission/listJudge.do", {"submissionId": submission_id}, rows=20):
         jid = to_int(r.get("id"))
         if jid is None:
             continue
@@ -365,8 +334,8 @@ def list_judges(client: XdojClient, submission_id: int) -> list[JudgeRow]:
         # 真实接口：judgementText 是文字（“正确”“答案错误”…），judgement / result 是数字。先取文字
         result_text = str(pick(r, "judgementText", "judgementStr", "resultText", "resultStr", "result", "judgement",
                                default=""))
-        if result_text.strip() == "3":  # 已知：judgement=3 是编译错误
-            result_text = "编译错误"
+        result_text = {"0": "未评判", "1": "正确", "2": "结果错误", "3": "编译错误"}.get(
+            result_text.strip(), result_text)
         out.append(JudgeRow(
             judge_id=jid, result_text=result_text, points=to_float(pick(r, "points", "score")),
             start=parse_time(pick(r, "startTime", "judgeStart")), end=parse_time(pick(r, "endTime", "judgeEnd")),
@@ -392,7 +361,10 @@ def list_judge_runs(client: XdojClient, judge_id: int) -> list[RunRow]:
         rid, tid = to_int(r.get("id")), to_int(r.get("testcaseId"))
         if rid is None or tid is None:
             continue
-        out.append(RunRow(rid, tid, str(pick(r, "resultText", "judgementText", "resultStr", "result", default="")),
+        result = str(pick(r, "resultText", "judgementText", "resultStr", "result", default=""))
+        result = {"1": "正确", "2": "错误", "3": "输出超限", "4": "超时", "5": "运行时错误", "6": "格式错误"}.get(
+            result.strip(), result)
+        out.append(RunRow(rid, tid, result,
                           to_int(r.get("runTime")), to_int(r.get("memory"))))
     out.sort(key=lambda x: x.run_id)
     return out
@@ -410,7 +382,11 @@ def run_output(client: XdojClient, run_id: int) -> RunOutputRow:
     body = client.post_json("/submission/getRunOutput.do", {"id": run_id})
     if isinstance(body, dict) and isinstance(body.get("data"), dict):
         body = body["data"]
-    body = body if isinstance(body, dict) else {}
+    fields = ("standardInput", "standardOutput", "programOutput")
+    if not isinstance(body, dict) or any(key not in body for key in fields):
+        raise XdojError("/submission/getRunOutput.do 返回缺少输入输出字段")
+    if any(body[key] is not None and not isinstance(body[key], str) for key in fields):
+        raise XdojError("/submission/getRunOutput.do 的输入输出字段类型不正确")
     return RunOutputRow(body.get("standardInput"), body.get("standardOutput"), body.get("programOutput"))
 
 

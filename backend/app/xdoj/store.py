@@ -101,12 +101,14 @@ def enqueue(s: Session, server_id: int, kind: str, target_id: int, priority: int
 
 
 def pick_task(s: Session, server_id: int, kinds: tuple[str, ...], priority: int | None,
-              at: dt.datetime) -> m.FetchTask | None:
+              at: dt.datetime, target_id: int | None = None) -> m.FetchTask | None:
     q = select(m.FetchTask).where(
         m.FetchTask.server_id == server_id, m.FetchTask.kind.in_(kinds),
         m.FetchTask.status == "queued", m.FetchTask.next_try_at <= at)
     if priority is not None:
         q = q.where(m.FetchTask.priority == priority)
+    if target_id is not None:
+        q = q.where(m.FetchTask.target_id == target_id)
     return s.scalar(q.order_by(m.FetchTask.priority, m.FetchTask.id).limit(1))
 
 

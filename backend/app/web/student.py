@@ -10,6 +10,7 @@ from __future__ import annotations
 import difflib
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -188,6 +189,31 @@ def problem_page(key: str, n: int, user: m.User = Depends(student), s: Session =
 
 
 # ------------------------------------------------------------ 提交、源码、差异
+@router.get("/problems/{key}/document")
+def problem_document(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    info = _problem(s, user, key)
+    doc = s.get(m.ProblemText, (info.server_id, info.problem_id))
+    ready = bool(doc is not None and doc.file_bytes)
+    if not ready:
+        store.enqueue(s, info.server_id, "problem_assets", info.problem_id, 0)
+    return {"ready": ready, "pdf": bool(ready and doc.file_bytes.startswith(b"%PDF-")),
+            "url": f"/api/problems/{key}/document/file" if ready else None,
+            "text": pdftext.usable_text(doc) if ready else None}
+
+
+@router.get("/problems/{key}/document/file")
+def problem_document_file(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)):
+    info = _problem(s, user, key)
+    doc = s.get(m.ProblemText, (info.server_id, info.problem_id))
+    if doc is None or not doc.file_bytes:
+        store.enqueue(s, info.server_id, "problem_assets", info.problem_id, 0)
+        return JSONResponse(status_code=409, content={"error": "题面正在下载，请稍候。"})
+    is_pdf = doc.file_bytes.startswith(b"%PDF-")
+    return Response(content=doc.file_bytes, media_type="application/pdf" if is_pdf else "text/plain",
+                    headers={"Content-Disposition": 'inline; filename="problem.pdf"' if is_pdf else 'inline; filename="problem.txt"',
+                             "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/submissions/{key}/source")
 def submission_source(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     """学生自己这次提交的源码。"""
@@ -195,7 +221,7 @@ def submission_source(key: str, user: m.User = Depends(student), s: Session = De
     text = source_text(s, sub.server_id, sub.submission_id)
     if text is None:
         sync_api.request_priority(s, sub.server_id, sub.submission_id)
-        raise HTTPException(status_code=409, detail="这次提交的代码还在取，稍等几秒再看。")
+        return JSONResponse(status_code=409, content={"error": "这次提交的代码正在下载，会自动更新。"})
     return {"key": key, "lines": text.replace("\r\n", "\n").rstrip("\n").split("\n")}
 
 
@@ -231,7 +257,10 @@ def problem_diff(key: str, a: str, b: str, user: m.User = Depends(student), s: S
     text_a = source_text(s, sub_a.server_id, sub_a.submission_id)
     text_b = source_text(s, sub_b.server_id, sub_b.submission_id)
     if text_a is None or text_b is None:
-        raise HTTPException(status_code=409, detail="代码还在取，稍等几秒再看。")
+        for sub, text in ((sub_a, text_a), (sub_b, text_b)):
+            if text is None:
+                sync_api.request_priority(s, sub.server_id, sub.submission_id)
+        return JSONResponse(status_code=409, content={"error": "代码正在下载，请稍候再比较。"})
     split = lambda t: t.replace("\r\n", "\n").expandtabs(4).rstrip("\n").split("\n")  # noqa: E731
     rows = diff_rows(split(text_a), split(text_b))
     return {"problem": {"key": info.key, "title": info.title, "brief": info.brief},

@@ -15,7 +15,7 @@ from typing import Callable, TypeVar
 
 import httpx
 
-from . import config, db
+from . import config, db, pdftext
 from . import models as m
 
 log = logging.getLogger("llm")
@@ -105,6 +105,20 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
             time.sleep(0.5 * attempt)
     _record(prompt_id, False, retries + 1, started, tin, tout, last)
     raise LLMUnavailable(last)
+
+
+def evidence_for_model(evidence: dict, user_id: str = "", name: str = "") -> dict:
+    """保留诊断所需的题面和评测证据，姓名、学号等身份字段不进入模型上下文。源码由调用方单独编号。"""
+    fields = ("testcaseId", "runId", "result", "resultCode", "passed", "runTimeMs", "memoryKb",
+              "standardInput", "standardOutput", "programOutput", "outputTruncated", "firstDiffLine")
+    return {
+        "problemText": pdftext.for_llm(strip_identity(evidence.get("problemText") or "", user_id, name)),
+        "judgement": evidence.get("judgement"),
+        "judgementCode": evidence.get("judgementCode"),
+        "compileOutput": strip_identity(evidence.get("compileOutput") or "", user_id, name),
+        "testCases": [{key: row[key] for key in fields if key in row}
+                      for row in evidence.get("testCases", [])],
+    }
 
 
 # ------------------------------------------------------------ 去掉身份信息

@@ -287,3 +287,51 @@ def test_status_reports_demo(client):
     login(client)
     st = client.get("/api/status").json()
     assert st["xdoj"] == {"ok": True, "dataTime": None, "demo": True} and st["dueReviews"] == 1
+
+
+def test_source_download_notification_survives_pending_response(client, demo):
+    from sqlalchemy import delete
+
+    login(client)
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        sub_id = s.scalar(select(m.Submission.submission_id).where(m.Submission.user_id == UID))
+        s.execute(delete(m.SourceSnapshot).where(m.SourceSnapshot.server_id == sid,
+                                                m.SourceSnapshot.submission_id == sub_id))
+    response = client.get(f"/api/submissions/s{sid}-{sub_id}/source")
+    assert response.status_code == 409
+    with db.session_scope() as s:
+        assert s.scalar(select(m.Trigger.id).where(m.Trigger.kind == "submission_priority",
+                                                   m.Trigger.target_id == str(sub_id))) is not None
+
+
+def test_problem_document_is_authorized_and_serves_original_pdf(client, demo):
+    login(client)
+    sid = demo["server_id"]
+    key = f"p{sid}-406"
+    pdf = b"%PDF-1.4\nsynthetic-test-document\n%%EOF"
+    with db.session_scope() as s:
+        doc = s.get(m.ProblemText, (sid, 406))
+        doc.file_bytes, doc.content_type = pdf, "multipart/form-data"
+    meta = client.get(f"/api/problems/{key}/document").json()
+    assert meta["ready"] and meta["pdf"]
+    response = client.get(meta["url"])
+    assert response.content == pdf
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline")
+    assert client.get(f"/api/problems/p{sid}-601/document").status_code == 404
+    assert client.get(f"/api/problems/p{sid}-601/document/file").status_code == 404
+
+
+def test_missing_document_queues_priority_download(client, demo):
+    from sqlalchemy import delete
+
+    login(client)
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        s.execute(delete(m.ProblemText).where(m.ProblemText.server_id == sid, m.ProblemText.problem_id == 406))
+    assert client.get(f"/api/problems/p{sid}-406/document").json()["ready"] is False
+    with db.session_scope() as s:
+        task = s.scalar(select(m.FetchTask).where(m.FetchTask.kind == "problem_assets",
+                                                m.FetchTask.target_id == 406, m.FetchTask.status == "queued"))
+        assert task is not None and task.priority == 0

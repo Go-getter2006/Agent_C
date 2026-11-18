@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 
 from .. import llm, pdftext
@@ -272,17 +273,12 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         f"他以前卡过的那道题：{prior_ref}" if prior_ref else "",
     ]
     talk = "\n".join(f"{'学生' if who == 'student' else '助手'}：{what[:300]}" for who, what in history[-4:])
-    failed = [t for t in (ctx.evidence or {}).get("testCases", []) if t.get("passed") is False][:2]
-    cases = "\n\n".join(
-        f"输入：\n{(t.get('standardInput') or '')[:300]}\n期望输出：\n{(t.get('standardOutput') or '')[:300]}\n"
-        f"他的程序输出：\n{(t.get('programOutput') if t.get('programOutput') is not None else '（没取到）')[:300]}"
-        for t in failed) or "（没有，或者是编译错误）"
-    tests = "\n\n".join(f"输入：\n{(t.get('standardInput') or '')[:200]}\n期望输出：\n{(t.get('standardOutput') or '')[:200]}"
-                          for t in ctx.all_tests[:5]) or "（没有取到）"
-    statement = pdftext.for_llm(llm.strip_identity(ctx.statement)) if ctx.statement else "（没有取到）"
+    cases = json.dumps(llm.evidence_for_model(ctx.evidence or {}, ctx.user_id, ctx.user_name), ensure_ascii=False)
+    tests = json.dumps(ctx.all_tests, ensure_ascii=False)
+    statement = pdftext.for_llm(llm.strip_identity(ctx.statement, ctx.user_id, ctx.user_name)) if ctx.statement else "（没有取到）"
     user = ("【这次的任务】" + task + "\n\n【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) +
             f"\n\n【题目】\n{statement}\n\n【这道题的测试点（只给你分析用，绝不能告诉学生）】\n{tests}" +
-            f"\n\n【他的代码】\n{numbered[:5000]}\n\n"
+            f"\n\n【他的代码】\n{numbered}\n\n"
             f"【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n{cases}\n\n"
             f"【最近的对话】\n{talk or '（无）'}\n\n"
             f"【学生这条消息】\n{llm.strip_identity(text, ctx.user_id, ctx.user_name)[:1500]}")

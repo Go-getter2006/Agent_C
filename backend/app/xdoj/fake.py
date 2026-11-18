@@ -239,7 +239,7 @@ class FakeXdoj:
                      "startTime": j.start, "endTime": j.end, "compileOutputStr": j.compile_output,
                      **({"judgement": 9} if self.numeric_results else {"resultStr": j.result})}
                     for j in (sub.judges if sub else [])]
-            return self._json(self._page(rows, 1, 20))
+            return self._json(self._page(rows, page, size))
         if path == "/submission/listAllJudgeRun.do":
             jid = int(args.get("judgeId", 0))
             for sub in self.submissions.values():

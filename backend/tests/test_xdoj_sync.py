@@ -125,6 +125,84 @@ def test_program_output_null_vs_empty(ctx):
         assert s.get(m.RunOutput, (1, 2153401)) is None
 
 
+def test_missing_program_output_is_not_an_empty_output(ctx, fake):
+    fake.submissions[537101].judges[-1].runs[-1].program_output = None
+    full_sync(ctx)
+    with db.session_scope() as s:
+        evidence = assemble_submission(s, 1, 537101)
+        failed = next(row for row in evidence["testCases"] if not row["passed"])
+        assert failed["programOutput"] is None
+
+
+@pytest.mark.parametrize("value,expected", [(1, "正确"), (2, "错误"), (3, "输出超限"),
+                                           (4, "超时"), (5, "运行时错误"), (6, "格式错误")])
+def test_real_numeric_run_results(ctx, monkeypatch, value, expected):
+    from app.xdoj import endpoints as ep
+
+    monkeypatch.setattr(ctx.client, "post_json", lambda *args: {
+        "data": [{"id": 1, "testcaseId": 2, "result": value, "runTime": 3, "memory": 0}]})
+    assert ep.list_judge_runs(ctx.client, 10)[0].result_text == expected
+
+
+def test_priority_detail_repairs_cached_statement_before_reply(ctx, fake, monkeypatch):
+    from app import pdftext
+
+    sync_meta.sync_metadata(ctx)
+    sync_submissions.poll_new_submissions(ctx)
+    with db.session_scope() as s:
+        s.add(m.ProblemText(server_id=ctx.server_id, problem_id=406, content_type="application/pdf",
+                            file_bytes=b"%PDF-1.4\n", raw_text="字符转换：a\uf0e8d，B\uf0e8Z",
+                            extract_status="garbled", extracted_text="", tidied_at=ctx.now()))
+    monkeypatch.setattr(pdftext, "read_pdf", lambda data: ("字符转换：a→d，B→Z", []))
+    before = len(fake.requests)
+    sync_submissions.fetch_detail(ctx, 537101, source_first=True)
+    with db.session_scope() as s:
+        assert assemble_submission(s, ctx.server_id, 537101)["problemText"] == "字符转换：a→d，B→Z"
+    assert not any(path == "/problem/viewTextFile.do" for _, path in fake.requests[before:])
+
+
+def test_missing_standard_data_remains_unknown(ctx):
+    from app.xdoj import endpoints as ep
+
+    with db.session_scope() as s:
+        sync_submissions._crosscheck_testcase(s, ctx, 406, 999, ep.RunOutputRow(None, "", None))
+    with db.session_scope() as s:
+        testcase = s.get(m.Testcase, (ctx.server_id, 999))
+        assert testcase.input_bytes is None and testcase.output_bytes == b""
+        sync_submissions._crosscheck_testcase(s, ctx, 406, 999, ep.RunOutputRow("input", None, None))
+    with db.session_scope() as s:
+        testcase = s.get(m.Testcase, (ctx.server_id, 999))
+        assert testcase.input_bytes == b"input" and testcase.output_bytes == b""
+
+
+def test_run_output_rejects_incomplete_response(ctx, monkeypatch):
+    from app.xdoj import endpoints as ep
+    from app.xdoj.client import XdojError
+
+    monkeypatch.setattr(ctx.client, "post_json", lambda *args: {"error": "unavailable"})
+    with pytest.raises(XdojError, match="输入输出字段"):
+        ep.run_output(ctx.client, 1)
+
+
+def test_judge_request_uses_page_parameters_and_reads_all_pages(ctx, fake, monkeypatch):
+    from app.xdoj import endpoints as ep
+
+    judges = fake.submissions[537101].judges
+    judges.extend(FakeJudge(id=600000 + i, result="正确") for i in range(25))
+    original = ctx.client.get_json
+
+    def check_parameters(path, params):
+        if path == "/submission/listJudge.do":
+            assert params["sord"] == "asc"
+            assert "sidx" in params and params["_search"] == "false"
+        return original(path, params)
+
+    monkeypatch.setattr(ctx.client, "get_json", check_parameters)
+    parsed = ep.list_judges(ctx.client, 537101)
+    assert len(parsed) == 26
+    assert parsed[-1].judge_id == 600024
+
+
 def test_compile_error_assembles_without_runs(ctx):
     full_sync(ctx)
     with db.session_scope() as s:
@@ -238,6 +316,44 @@ def test_request_priority_for_unknown_submission(ctx, fake, clock):
     daemon.step()
     with db.session_scope() as s:
         assert s.get(m.Submission, (1, 537400)).detail_status == "done"
+
+
+def test_explicit_submission_precedes_other_student_history(ctx):
+    sync_meta.sync_metadata(ctx)
+    sync_submissions.poll_new_submissions(ctx)
+    with db.session_scope() as s:
+        api.notify_student_active(s, "2500000001")
+        api.request_priority(s, ctx.server_id, 537104)
+    assert Daemon([ctx]).step() == "trigger"
+    with db.session_scope() as s:
+        assert s.get(m.Submission, (ctx.server_id, 537104)).detail_status == "done"
+        assert s.get(m.Submission, (ctx.server_id, 537101)).detail_status != "done"
+
+
+def test_explicit_request_repairs_missing_source_of_completed_detail(ctx):
+    from sqlalchemy import delete
+
+    daemon = full_sync(ctx)
+    with db.session_scope() as s:
+        s.execute(delete(m.SourceSnapshot).where(m.SourceSnapshot.submission_id == 537101))
+        api.request_priority(s, ctx.server_id, 537101)
+    assert daemon.step() == "trigger"
+    with db.session_scope() as s:
+        assert s.get(m.SourceSnapshot, (ctx.server_id, 537101)) is not None
+
+
+def test_daemon_yields_between_submission_pages(ctx, monkeypatch):
+    monkeypatch.setitem(config.SYNC, "page_rows", 2)
+    daemon = Daemon([ctx])
+    daemon._poll(ctx)
+    assert count(m.Submission) == 2
+    assert daemon._poll_due(ctx)
+    with db.session_scope() as s:
+        api.request_priority(s, ctx.server_id, 537101)
+    daemon.step()
+    with db.session_scope() as s:
+        assert s.get(m.Submission, (ctx.server_id, 537101)).detail_status == "done"
+    assert count(m.Submission) == 2
 
 
 # ------------------------------------------------------------ 续跑与出错

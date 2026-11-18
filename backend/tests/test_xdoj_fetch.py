@@ -1,6 +1,6 @@
 """题面、测试点、源码、程序输出取不到的那次问题：
 
-- 子表（作业里的题、测试点、评测记录）要照网页发 _search、sidx、sord、nd；被拒绝时换写法；
+- 子表（作业里的题、测试点、评测记录）要照网页发 _search、sidx、sord、nd；
 - 某个接口拒绝请求（400 错误页、不是 JSON）只让这个任务失败、过一会儿重试，不能当成掉线、让整个同步停下来；
 - 题面和测试点、源码和评测记录互不依赖；
 - 失败的任务每天自动重新入队。
@@ -48,14 +48,16 @@ def test_old_style_request_is_what_the_server_rejects(ctx, fake):
     assert "400" in str(err.value)
 
 
-def test_grid_falls_back_to_another_parameter_style(ctx, fake):
-    fake.grid_reject_sidx["/submission/listJudge.do"] = "id"   # 比如联表以后 id 有歧义，按 id 排序报 500
+def test_grid_uses_verified_parameters_without_guessing(ctx, fake):
+    fake.grid_reject_sidx["/submission/listJudge.do"] = "id"
     judges = ep.list_judges(ctx.client, 537101)
     assert [j.judge_id for j in judges] == [537601]
-    assert ctx.client.grid_styles["/submission/listJudge.do"] == 1
+    assert fake.last_args["/submission/listJudge.do"]["sidx"] == ""
+    assert fake.last_args["/submission/listJudge.do"]["_search"] == "false"
+    assert "search" not in fake.last_args["/submission/listJudge.do"]
     n = len(fake.requests)
     ep.list_judges(ctx.client, 537101)
-    assert len(fake.requests) == n + 1                         # 记住了能用的写法，不再先试错的
+    assert len(fake.requests) == n + 1
 
 
 def test_rejected_endpoint_does_not_stop_the_sync(ctx, fake):

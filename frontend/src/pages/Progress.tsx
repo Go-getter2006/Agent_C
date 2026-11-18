@@ -93,7 +93,7 @@ export default function Progress() {
                 },
               ]} />
 
-              <div className="grid-main">
+              <div className="grid-main progress-grid">
                 <div className="stack">
                   <Card title="接下来做什么" sub="按要紧程度排，最多三件">
                     {p.next.length === 0 ? (
@@ -136,7 +136,7 @@ export default function Progress() {
                     </Card>
                   )}
 
-                  <Card title="知识点掌握" sub={`作业里涉及到的知识点。${all ? "" : uncovered ? `还有 ${uncovered} 个作业里没练到，先收起来了。` : ""}`}
+                  <Card className="progress-scroll-card" title="知识点掌握" sub={`作业里涉及到的知识点。${all ? "" : uncovered ? `还有 ${uncovered} 个作业里没练到，先收起来了。` : ""}`}
                     action={uncovered > 0 ? (
                       <button type="button" className="btn btn-sm" aria-pressed={all} onClick={() => setAll(!all)}>
                         {all ? "只看练过的" : "显示全部"}
@@ -194,7 +194,7 @@ export default function Progress() {
                     )}
                   </Card>
 
-                  <Card title="作业进度">
+                  <Card className="progress-scroll-card" title="作业进度">
                     <ul className="hw-list">
                       {p.activity.homeworks.map((hw) => (
                         <li key={hw.key}>

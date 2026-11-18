@@ -1,7 +1,7 @@
 """题面整理。XDOJ 的题面是 PDF（`/problem/viewTextFile.do`），都带文字层，不是扫描件。**不用 OCR。**
 
 直接复制 PDF 里的文字常常不对：多余的空格和断行、行的顺序乱、上标下标被拆开（10^5 变成“10 5”）、
-≤ ≥ × 这类符号丢了，个别字体还会出乱码。DeepSeek 处理 PDF 也是先抽文字（它的接口只收文字），这里同样：
+≤ ≥ × 这类符号丢了，个别字体还会出乱码。这里先用本地文字层，再交给模型整理：
 
 1. 抽文字：PDF 自带的文字层用两种办法各抽一遍（pdfplumber 按行、PDFium），挑乱码少的；
    编码错位（UTF-8 被当成 Latin-1 之类）程序能还原的先还原。
@@ -188,6 +188,17 @@ def _crop(rendered, box, scale: float = RENDER_SCALE) -> tuple[bytes, int, int]:
     return buf.getvalue(), img.width, img.height
 
 
+def _symbol_translation(chars: list[dict]) -> dict[int, str]:
+    """仅还原字体已确认的符号：Wingdings 0xE8 是向右箭头，不能当成整篇乱码。
+
+    真实题面使用 ABCDEE+Wingdings，将该字形抽成 U+F0E8。归一为通用箭头便于显示；
+    未知字体、Wingdings 2/3 的私用字符保持原样，继续走乱码检查。
+    """
+    fonts = {c.get("fontname", "").rsplit("+", 1)[-1].lower()
+             for c in chars if c.get("text") == "\uf0e8"}
+    return {0xF0E8: "→"} if fonts == {"wingdings"} else {}
+
+
 def read_pdf(data: bytes) -> tuple[str, list[dict]] | None:
     """抽 PDF：返回 (原文，带 [图N] 占位, 示意图 [{seq, page, png, width, height}])。打不开返回 None。
 
@@ -207,6 +218,7 @@ def read_pdf(data: bytes) -> tuple[str, list[dict]] | None:
         try:
             with pdfplumber.open(io.BytesIO(data)) as pdf:
                 for index, page in enumerate(pdf.pages[:MAX_PAGES]):
+                    symbols = _symbol_translation(page.chars)
                     boxes = _figure_boxes(page)[: max(0, MAX_FIGURES - len(figures))]
                     marks = []
                     if boxes:
@@ -221,10 +233,10 @@ def read_pdf(data: bytes) -> tuple[str, list[dict]] | None:
                         cx, cy = (line["x0"] + line["x1"]) / 2, (line["top"] + line["bottom"]) / 2
                         if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b, _m in marks):
                             continue   # 图里的标注字，图上已经有了
-                        items.append((float(line["top"]), line["text"]))
+                        items.append((float(line["top"]), line["text"].translate(symbols)))
                     items += [(b[1], mark) for b, mark in marks]
                     pages_lines.append("\n".join(t for _top, t in sorted(items, key=lambda x: x[0])))
-                    flat = doc[index].get_textpage().get_text_range() or ""
+                    flat = (doc[index].get_textpage().get_text_range() or "").translate(symbols)
                     pages_flat.append("\n".join([flat] + [mark for _b, mark in marks]))
         finally:
             doc.close()
@@ -449,7 +461,7 @@ def for_llm(text: str) -> str:
 def redo_stored(s, limit: int = 2) -> int:
     """后台空闲时自动做：以前的程序处理的 PDF 题面重新抽一遍（文件本身存着，不用再请求 XDOJ）；
     抽好了还没交给大模型整理的整理一遍。有变化就重新标注这道题。返回处理了几道。"""
-    from sqlalchemy import func, select
+    from sqlalchemy import and_, func, or_, select
 
     from . import llm
     from . import models as m
@@ -458,12 +470,13 @@ def redo_stored(s, limit: int = 2) -> int:
     T = m.ProblemText
     done = 0
     cands = s.execute(select(T.server_id, T.problem_id, T.extract_status, T.content_type, func.substr(T.file_bytes, 1, 5))
-                      .where(T.extract_status.not_in(sorted(_PDF_STATUS)))
+                      .where(or_(T.extract_status.not_in(sorted(_PDF_STATUS)),
+                                 and_(T.extract_status == "garbled", T.raw_text.contains("\uf0e8"))))
                       .order_by(T.server_id, T.problem_id)).all()
     for server_id, problem_id, status, ctype, head in cands:
         if done >= limit:
             return done
-        if not needs_redo(status, bytes(head or b""), ctype or ""):   # 只读了前 5 个字节，够判断是不是 PDF
+        if status != "garbled" and not needs_redo(status, bytes(head or b""), ctype or ""):
             continue
         row = s.get(T, (server_id, problem_id))
         store(s, row, row.content_type, row.file_bytes)

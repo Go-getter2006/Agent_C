@@ -153,6 +153,8 @@ class Daemon:
         return poll_tier(ctx.now(), last_new, last_trigger, self.poll_failures.get(ctx.server_id, 0))
 
     def _poll_due(self, ctx: SyncContext) -> bool:
+        if ctx.stats.get("poll_has_more"):
+            return True
         with db.session_scope() as s:
             last = store.get_time(s, ctx.server_id, "last_poll_at")
         if last is None:
@@ -162,7 +164,7 @@ class Daemon:
     # ------------------------------------------------------------ 各类工作
     def _poll(self, ctx: SyncContext) -> None:
         try:
-            sync_submissions.poll_new_submissions(ctx)
+            sync_submissions.poll_new_submissions(ctx, max_requests=1)
             self.poll_failures[ctx.server_id] = 0
             with db.session_scope() as s:
                 store.set_time(s, ctx.server_id, "last_ok_poll_at", ctx.now())
@@ -170,6 +172,7 @@ class Daemon:
         except SessionError:
             raise
         except XdojError as exc:
+            ctx.stats["poll_has_more"] = False
             self.poll_failures[ctx.server_id] = self.poll_failures.get(ctx.server_id, 0) + 1
             log.warning("查新提交失败（连续第 %d 次）：%s", self.poll_failures[ctx.server_id], exc)
             with db.session_scope() as s:
@@ -193,7 +196,8 @@ class Daemon:
                 polled.add(ctx.server_id)
                 self._poll(ctx)
 
-        for kind, target, server_id in todo:
+        # 先取学生明确点开的这一条，再处理“活跃”触发的批量轮询和其他历史提交。
+        for kind, target, server_id in sorted(todo, key=lambda t: t[0] != "submission_priority"):
             if kind == "student_active":
                 for ctx in self.contexts:
                     poll_once(ctx)
@@ -214,8 +218,9 @@ class Daemon:
                         poll_once(ctx)
                     with db.session_scope() as s:
                         sub = s.get(m.Submission, (ctx.server_id, sid))
-                        if sub is not None and sub.detail_status != "done":
+                        if sub is not None:
                             self._raise_to_p0(s, ctx, sid)
+                    self._run_task(ctx, ("detail", "pending_judge"), 0, target_id=sid)
             elif kind == "sync_meta":
                 for ctx in self.contexts:
                     if server_id is None or ctx.server_id == server_id:
@@ -229,13 +234,15 @@ class Daemon:
             m.FetchTask.target_id == submission_id, m.FetchTask.status == "queued"))
         if pending is not None:
             pending.priority = 0
+            pending.next_try_at = min(pending.next_try_at, ctx.now())
             return
         task = store.enqueue(s, ctx.server_id, "detail", submission_id, 0, when=ctx.now())
         task.next_try_at = min(task.next_try_at, ctx.now())
 
-    def _run_task(self, ctx: SyncContext, kinds: tuple[str, ...], priority: int | None) -> bool:
+    def _run_task(self, ctx: SyncContext, kinds: tuple[str, ...], priority: int | None,
+                  target_id: int | None = None) -> bool:
         with db.session_scope() as s:
-            task = store.pick_task(s, ctx.server_id, kinds, priority, ctx.now())
+            task = store.pick_task(s, ctx.server_id, kinds, priority, ctx.now(), target_id=target_id)
             if task is None:
                 return False
             task_id, kind, target, prio, attempts = task.id, task.kind, task.target_id, task.priority, task.attempts
@@ -349,7 +356,7 @@ class Daemon:
                 self._run_meta(ctx)
                 return "meta"
         stages: list[tuple[str, Callable[[SyncContext], bool]]] = [
-            ("p0", lambda c: self._run_task(c, ("detail", "pending_judge"), 0)),
+            ("p0", lambda c: self._run_task(c, ("detail", "pending_judge", "problem_assets"), 0)),
             ("poll", lambda c: self._poll_due(c) and (self._poll(c) or True)),
             ("pending", lambda c: self._run_task(c, ("pending_judge",), None)),
             ("p1", lambda c: self._run_task(c, ("detail", "problem_assets"), 1)),

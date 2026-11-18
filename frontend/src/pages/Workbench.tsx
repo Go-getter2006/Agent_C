@@ -1,16 +1,26 @@
 // 对话页（工作台）。题目在左边，对话在中间，这道题的情况在右边；窄了以后两边收进抽屉。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ChevronDown, CloudOff, List, PanelRight } from "lucide-react";
+import { ChevronDown, CloudOff, FileText, List, PanelRight } from "lucide-react";
 import { api } from "../api";
 import DiffOverlay from "../components/Diff";
 import { HomeworkPicker, ProblemList, SidePanel } from "../components/Lists";
 import { StudentShell } from "../components/Shell";
 import Thread from "../components/Thread";
-import { Cells, Drawer, ResultPill, gridLabel } from "../components/ui";
+import { Cells, Drawer, Loading, Problem, ResultPill, gridLabel } from "../components/ui";
 import { useLayout, useLoad } from "../lib/hooks";
 import { clock } from "../lib/time";
 import { useHomeworks, useStatus } from "../session";
+
+function ProblemDocument({ problemKey }: { problemKey: string }) {
+  const doc = useLoad(() => api.problemDocument(problemKey), [problemKey], 2500);
+  if (doc.error) return <Problem message={doc.error} onRetry={doc.reload} />;
+  if (!doc.data?.ready) return <Loading what="正在下载题面" />;
+  return <div className="problem-document">
+    <a className="link" href={doc.data.url!} target="_blank" rel="noreferrer">在新窗口打开题面</a>
+    {doc.data.pdf ? <iframe title="题目原始 PDF" src={doc.data.url!} /> : <pre>{doc.data.text}</pre>}
+  </div>;
+}
 
 export default function Workbench() {
   const { key } = useParams();
@@ -25,6 +35,7 @@ export default function Workbench() {
   const list = useLoad(() => (current ? api.homework(current.key) : Promise.resolve(null)), [current?.key], 15000, true);
   const detail = useLoad(() => (isProblem ? api.problem(key!) : Promise.resolve(null)), [key], 15000, true);
   const [drawer, setDrawer] = useState<"list" | "side" | null>(null);
+  const [showDocument, setShowDocument] = useState(false);
   const listOk = !!list.data && !!current && list.data.homework.key === current.key;   // 列表是不是当前作业的
   const detailOk = !!detail.data && detail.data.key === key;                          // 详情是不是当前这道题的
 
@@ -147,6 +158,9 @@ export default function Workbench() {
             </div>
           )}
           <header className="chat-head">
+            {isProblem && <button type="button" className="btn btn-sm" onClick={() => setShowDocument(true)}>
+              <FileText size={15} aria-hidden="true" />原始 PDF
+            </button>}
             {layout === "phone" ? (
               <button type="button" className="chat-head-title" onClick={() => setDrawer("list")} aria-label={`${title}，换一道题`}>
                 <span className="chat-head-main">
@@ -198,6 +212,9 @@ export default function Workbench() {
       {diff && diff.length === 2 && isProblem && (
         <DiffOverlay problemKey={key!} a={diff[0]} b={diff[1]} onClose={() => (window.history.length > 1 ? navigate(-1) : setParam("diff", null))} />
       )}
+      {showDocument && isProblem && <Drawer side="right" title="题目内容" onClose={() => setShowDocument(false)}>
+        <ProblemDocument problemKey={key!} />
+      </Drawer>}
     </StudentShell>
   );
 }

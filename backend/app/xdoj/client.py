@@ -156,7 +156,6 @@ class XdojClient:
         )
         self.logged_in = False
         self.user_type = None
-        self.grid_styles: dict[str, int] = {}  # 子表接口试通的参数写法（见 endpoints.grid_json）
         self.request_count = 0
         self.consecutive_failures = 0
 

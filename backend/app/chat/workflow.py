@@ -279,6 +279,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
 
     # 第 3~5 步 取证、诊断、状态
     ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course)
+    if ctx.submission is not None and ctx.submission.detail_status != "done" and picked is None:
+        sync_api.request_priority(s, ctx.submission.server_id, ctx.submission.submission_id)
     ctx._located = bool(rnd.located)
     hint = ctx.hint()
 
