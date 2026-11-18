@@ -30,14 +30,16 @@ def _contexts():
 
 @cli.command("init-db")
 def init_db() -> None:
-    """建表，并把小题题库写进库。"""
+    """建表或把库升到最新版本（以前用 create_all 建的库也能认出来再升级），并把小题题库写进库。"""
+    from .cross import ensure_seed
     from .servers import ensure_known
 
-    db.create_all()
+    how = db.migrate()
     with db.session_scope() as s:
         n = quiz.load_bank(s)
         servers = ensure_known(s)
-    typer.echo(f"表已就绪；新写入小题 {n} 道。数据库：{config.DATABASE_URL.split('@')[-1]}")
+        ensure_seed(s)
+    typer.echo(f"表已就绪（{how}）；新写入小题 {n} 道。数据库：{config.DATABASE_URL.split('@')[-1]}")
     for code, server in servers.items():
         typer.echo(f"服务器 {code}：{server.name}，{server.base_url or '地址还没有给出'}")
 

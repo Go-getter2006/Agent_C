@@ -10,6 +10,7 @@
 - 核对真实接口：`.venv/bin/python -m app.cli xdoj-probe`（`.env` 里要有 `XDOJ_USER`、`XDOJ_PASS`）。会打印各列表接口的字段名和类型、名单按 `classId` / `id` 筛的人数、评测结果的文字和数字对应、测试点运行记录的字段、`getRunOutput` 的字段名（只打印长度，不打印内容）。
 - 测试：`cd backend && .venv/bin/python -m pytest -q`，提交前全部要过。测试用的是 `app/xdoj/fake.py` 里的假 XDOJ；改了解析真实接口的代码，要让假 XDOJ 也能返回同样形状的数据，并加测试。
 - 改了前端：在有 Node 的机器上 `cd frontend && npm run build`，把 `frontend/dist` 一起提交（服务器上不装 Node）。
+- 改了表结构：写一个迁移（`backend/alembic/versions/`），并在 `app/db.py` 的 `_REVISION_MARKS` 里加上这一版的痕迹（新加的列或新表）。启动时 `db.migrate()` 自动升级；以前用 `create_all` 建的库也能认出停在哪一版。迁移里建表先看表在不在。
 
 ## 必须遵守
 
