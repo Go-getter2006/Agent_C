@@ -1,0 +1,27 @@
+[
+  {
+    "name": "weekday numbered samples with ordinary spaces",
+    "text": "输入示例1：\n2020 11 5\n输出示例 1：\nThursday\n输入示例2\n2021 6 2\n输出示例2\nWednesday",
+    "samples": ["2020 11 5", "Thursday", "2021 6 2", "Wednesday"]
+  },
+  {
+    "name": "PDF inter-character spaces and invisible characters",
+    "text": "输 入 示 例 １：\n2020 11 5\n输\u200b出 示\u2060例\u00a0１︰\nThursday\n样 例 说 明：\n这里是说明。",
+    "samples": ["2020 11 5", "Thursday"]
+  },
+  {
+    "name": "heading markdown and fullwidth sample payload remain distinct",
+    "text": "### **输入示例 1：**\nＡ  １\n**输出示例 1**：\nＢ\n示例说明\n全角字符不得自动转换。",
+    "samples": ["Ａ  １", "Ｂ"]
+  },
+  {
+    "name": "PDF line separators and detached heading colon",
+    "text": "输入示例 1\n：\n2020 11 5\u2028输出示例 1﹕Thursday\f样例说明：这是解释。",
+    "samples": ["2020 11 5", "Thursday"]
+  },
+  {
+    "name": "heading-like words in real sample data must not be split",
+    "text": "样例输入\n这一行包含输出示例1：但它是数据\n输出示例就是一个词\n样例输出\n  keep  indentation\n样例说明\n说明不属于样例。",
+    "samples": ["这一行包含输出示例1：但它是数据\n输出示例就是一个词", "  keep  indentation"]
+  }
+]

@@ -1,18 +1,12 @@
-// 登录页：左边一块深色说明这个系统做什么（宽屏才有），右边是表单。
+// 登录首页：暖色画布、原创大括号主视觉；登录后直接进入对话。
 // C 语言和数据结构分开登录：两门课都接上时先选课程；只有一门时不出现课程选择，也不提另一门课。
 import { useState, type FormEvent } from "react";
-import { Braces, Eye, EyeOff, GraduationCap, MessageSquare, RotateCcw, ShieldCheck, Users } from "lucide-react";
+import { ArrowUpRight, Braces, Eye, EyeOff, GraduationCap, Users } from "lucide-react";
 import { api } from "../api";
 import type { CourseCode } from "../types";
 import { Segmented } from "../components/ui";
 import { useLoad } from "../lib/hooks";
 import { useSession } from "../session";
-
-const FACTS = [
-  { icon: ShieldCheck, title: "从你的练习继续", text: "自动整理 XDOJ 的练习提交，把代码、题目和分析放在一起。" },
-  { icon: MessageSquare, title: "按你的节奏给帮助", text: "先问你几个问题；想自己想、要提示、还是直接讲，由你决定。" },
-  { icon: RotateCcw, title: "快忘的时候提醒复习", text: "卡过的地方，过几天用一道小题帮你回忆，记住了间隔就拉长。" },
-];
 
 export default function Login() {
   const { setMe } = useSession();
@@ -51,39 +45,36 @@ export default function Login() {
 
   return (
     <div className="login">
-      <aside className="login-aside" aria-hidden="true">
+      <aside className="login-aside">
         <div className="brand">
           <span className="brand-mark"><Braces size={18} strokeWidth={2.4} /></span>
           <span className="brand-name">程序设计智能体</span>
         </div>
         <div className="login-pitch">
           <span className="eyebrow">{pitch}</span>
-          <h2>从一次错误提交，<br />找到下一步怎么改。</h2>
-          <p>读懂题目，梳理思路，在合适的时候得到提示和代码示例。教师也能看到需要关注的问题。</p>
+          <h1>让每一次尝试，<br />都有下一步<span>。</span></h1>
+          <p>带上你的问题，从一段代码开始。<br />一起读懂题目，找到思路，把不懂的变成会的。</p>
         </div>
-        <ul className="login-facts">
-          {FACTS.map(({ icon: Icon, title, text }) => (
-            <li key={title}>
-              <span className="login-fact-icon"><Icon size={18} /></span>
-              <span><strong>{title}</strong>{text}</span>
-            </li>
-          ))}
-        </ul>
-        <div className="login-preview">
-          <div className="lp-row"><span className="cell cell-pass" /><span className="cell cell-pass" /><span className="cell cell-fail" /><span className="cell cell-pass" /><span className="cell cell-pass" /><span className="lp-text">第 3 次 · 5 组过 4 组</span></div>
-          <div className="lp-bubble">如果输入的数全是负数，<code>max</code> 一开始等于 0，会发生什么？</div>
-          <div className="lp-chips"><span>我想自己想想</span><span>再给点提示</span><span>直接讲给我</span></div>
+        <div className="login-art" aria-hidden="true">
+          <svg viewBox="0 0 760 390" fill="none">
+            <path d="M242 42h-25c-52 0-65 28-65 72v28c0 35-17 51-52 53 35 2 52 18 52 53v28c0 44 13 72 65 72h25" />
+            <path d="M518 42h25c52 0 65 28 65 72v28c0 35 17 51 52 53-35 2-52 18-52 53v28c0 44-13 72-65 72h-25" />
+            <path className="login-art-slash" d="m419 113-78 164" />
+          </svg>
+          <span className="login-art-note">想明白，再写下一行。</span>
         </div>
+        <div className="login-bottom"><span>从练习出发 · 在对话中进步</span><span className="login-bottom-code">return a_better_you;</span></div>
       </aside>
 
       <main className="login-main">
-        <form className="login-box" onSubmit={submit}>
+        <form className="login-box" onSubmit={submit} aria-labelledby="login-title">
           <div className="brand login-brand-sm">
             <span className="brand-mark"><Braces size={18} strokeWidth={2.4} /></span>
             <span className="brand-name">程序设计智能体</span>
           </div>
-          <div>
-            <h1>登录</h1>
+          <div className="login-form-heading">
+            <span className="login-form-kicker">开始这一段学习</span>
+            <h2 id="login-title">{tab === "student" ? "从这里，继续。" : "看见每一步成长。"}</h2>
             <p className="page-sub">
               {courses.length > 1 ? `${chosen?.name ?? ""}：` : ""}
               {tab === "student" ? "用 XDOJ 的学号和密码登录。" : "用这门课 XDOJ 的教师账号登录。"}
@@ -117,7 +108,9 @@ export default function Login() {
             </span>
           </label>
           {error && <p className="error-text" role="alert">{error}</p>}
-          <button type="submit" className="btn btn-primary btn-block" disabled={busy}>{busy ? "正在登录" : tab === "student" ? "进入学习" : "进入教师工作台"}</button>
+          <button type="submit" className="btn btn-primary btn-block login-submit" disabled={busy} aria-busy={busy}>
+            {busy ? "正在登录" : tab === "student" ? "进入学习" : "进入教师工作台"}<ArrowUpRight size={18} aria-hidden="true" />
+          </button>
           {demo && (
             <p className="login-demo">
               现在装的是演示数据。{tab === "student" ? <>学号 <code>{info.data?.demoAccount}</code></> : <>教师账号 <code>demo-teacher</code></>}，

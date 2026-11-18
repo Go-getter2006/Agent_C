@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from .. import accounts, catalog, changes, db, llm, pdftext, progress, quiz, review
 from .. import models as m
 from ..chat import workflow
+from ..chat.text import dedent, quote_range
 from ..taxonomy import UI_EVENTS, course_of
 from ..xdoj import api as sync_api
 from ..xdoj import store
@@ -55,10 +57,61 @@ def _own_submission(s: Session, user: m.User, key: str) -> m.Submission:
     return sub
 
 
+def _contextual_blocks(s: Session, msg: m.ChatMessage) -> list[dict]:
+    """兼容旧对话中的孤立引用：只用该回复当时的确切源码，不拿最新提交补旧代码。"""
+    blocks = (msg.content or {}).get("blocks", [])
+    small = [b for b in blocks if b.get("t") == "code" and 0 < len(b.get("lines", [])) < 3
+             and re.fullmatch(r"(?:你的第 \d+ 次提交|你贴的代码)，第 \d+(?: 到 \d+)? 行", b.get("caption", ""))]
+    if msg.role != "agent" or not msg.round_id or not small:
+        return blocks
+    step = s.scalars(select(m.ChatStep).where(
+        m.ChatStep.round_id == msg.round_id, m.ChatStep.user_id == msg.user_id,
+        m.ChatStep.course_id == msg.course, m.ChatStep.created_at < msg.created_at)
+        .order_by(m.ChatStep.created_at.desc(), m.ChatStep.id.desc()).limit(1)).first()
+    if step is None or (step.reply or {}).get("blocks") != blocks:
+        return blocks  # 没有确切来源，不猜测、不改写历史记录
+    source = ""
+    kind = (step.evidence_card or {}).get("sourceKind")
+    if kind == "submission" and step.server_id and step.submission_id:
+        sub = s.get(m.Submission, (step.server_id, step.submission_id))
+        server = s.get(m.Server, step.server_id)
+        if sub is not None and sub.user_id == msg.user_id and sub.problem_id == step.problem_id \
+                and server is not None and server.course == msg.course:
+            source = source_text(s, sub.server_id, sub.submission_id) or ""
+    elif kind == "pasted":
+        original = s.get(m.ChatMessage, step.message_id)
+        if original is not None and original.role == "student" and original.user_id == msg.user_id and original.course == msg.course:
+            source = "\n".join(line for b in (original.content or {}).get("blocks", [])
+                               if b.get("t") == "code" and b.get("caption") == "我贴的代码"
+                               for line in b.get("lines", []))
+    if not source:
+        return blocks
+    lines = source.replace("\r\n", "\n").split("\n")
+    out = []
+    for block in blocks:
+        if block not in small:
+            out.append(block)
+            continue
+        a = block.get("start", 0)
+        if not isinstance(a, int):
+            out.append(block)
+            continue
+        b = a + len(block["lines"]) - 1
+        # 再核对原引用的文字，避免关联记录损坏后展示另一版源码。
+        if not 1 <= a <= b <= len(lines) or dedent(lines[a - 1:b]) != dedent(block["lines"]):
+            out.append(block)
+            continue
+        start, end = quote_range(lines, a, b)
+        where = f"第 {start} 行" if start == end else f"第 {start} 到 {end} 行"
+        caption = re.sub(r"第 \d+(?: 到 \d+)? 行$", where, block["caption"])
+        out.append({**block, "caption": caption, "start": start, "lines": dedent(lines[start - 1:end])})
+    return out
+
+
 def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
     content = msg.content or {}
     out = {"id": msg.id, "role": msg.role, "kind": msg.kind, "time": msg.created_at.isoformat(),
-           "blocks": content.get("blocks", []), "actions": content.get("actions", []) if with_actions else []}
+           "blocks": _contextual_blocks(s, msg), "actions": content.get("actions", []) if with_actions else []}
     if msg.kind == "quiz" and msg.quiz_attempt_id:
         attempt = s.get(m.QuizAttempt, msg.quiz_attempt_id)
         if attempt is not None:

@@ -64,20 +64,24 @@ def line_assignment(line: str) -> tuple[str, str] | None:
     return (m.group(1), m.group(2).strip()) if m else None
 
 
-def excerpt_range(n_lines: int, line: int | None, lines: list[str], lo: int = 2, hi: int = 8) -> tuple[int, int] | None:
-    """围绕出问题的那一行选 2~8 行引用：从这一行开始，往下带上紧接着的语句。"""
-    if not n_lines or not line or not (1 <= line <= n_lines):
-        return None
-    start, end = line, line
-    while end < n_lines and end - start + 1 < 3:
-        end += 1
-    while end < n_lines and end - start + 1 < hi and lines[end].startswith((" ", "\t")) \
-            and len(lines[end]) - len(lines[end].lstrip()) > len(lines[line - 1]) - len(lines[line - 1].lstrip()):
-        end += 1  # 把缩进更深的后续行（循环体）带上
-    while end - start + 1 < lo and start > 1:
-        start -= 1
-    while end > start and not lines[end - 1].strip():
-        end -= 1
+def quote_range(lines: list[str], a: int, b: int, hi: int = 8) -> tuple[int, int]:
+    """在已校验的引用两边各补两行；不丢模型选中的行，最多 hi 行。"""
+    if not (1 <= a <= b <= len(lines)) or b - a + 1 > hi:
+        raise ValueError("引用范围不在源代码内，或超过行数上限")
+    start, end = a, b
+    for _ in range(2):
+        if start > 1 and end - start + 1 < hi:
+            start -= 1
+        if end < len(lines) and end - start + 1 < hi:
+            end += 1
+    target = min(len(lines), hi, 5)
+    while end - start + 1 < target:
+        if start > 1:
+            start -= 1
+        elif end < len(lines):
+            end += 1
+        else:
+            break
     return start, end
 
 

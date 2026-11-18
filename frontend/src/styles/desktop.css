@@ -7,6 +7,7 @@
 @media (min-width: 768px) {
   :root { --control-h: 40px; }
   .wb { min-height: 0; overflow: hidden; }
+  .wb-chat { container-type: inline-size; }
   .wb-list { overflow: hidden; }
   .wb-list > .picker { flex-shrink: 0; }
   .problem-list-content { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -26,17 +27,21 @@
   .overview-distribution { max-height: 360px; overflow-y: auto; scrollbar-gutter: stable; }
   .overview-desktop .hw-list { max-height: 350px; overflow-y: auto; scrollbar-gutter: stable; }
   .overview-desktop .attn-list { max-height: 370px; overflow-y: auto; }
-  .login-pitch h2 { font-size: 36px; line-height: 1.4; letter-spacing: -.03em; margin-top: 16px; }
-  .login-pitch > .eyebrow { color: #aab2bf; }
-  .login-pitch > p { max-width: 440px; font-size: 15px; }
-  .login-facts { gap: 16px; }
-  .login-aside { max-width: 48%; }
 }
 @media (min-width: 1280px) {
-  :root { --side-w: 504px; }
+  :root { --side-w: 605px; }
+  .chat-head-tools { display: none; }
   .shell-teacher .sidebar { --sidebar-w: 184px; padding-inline: 10px; }
   .shell-teacher .brand { padding-inline: 2px; gap: 7px; }
   .shell-teacher .brand-name { font-size: 13px; }
   .shell-teacher .nav-item { padding-inline: 10px; gap: 10px; }
   .shell-teacher .side-foot { padding-inline: 2px; gap: 6px; }
+}
+@container (max-width: 560px) {
+  .chat-head { flex-wrap: wrap; gap: 7px; padding-block: 12px; }
+  .chat-head-main { flex-basis: 100%; }
+  .chat-head-status { flex-wrap: wrap; gap: 8px; }
+}
+@media (min-width: 1280px) and (max-width: 1439px) {
+  :root { --list-w: 240px; }
 }

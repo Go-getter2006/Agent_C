@@ -6,7 +6,9 @@
 
 ## 界面
 
-最新的直接对话、主动复习、题面分段和事实问答修复见 [对话与主动复习修复](docs/对话与主动复习修复.md)。此前桌面与模型证据改动见 [桌面改进交付记录](docs/桌面改进交付记录.md)。教学指导可编辑 `backend/app/chat/prompts/tutoring.md`，或用 `CHAT_TEACHING_PROMPT_FILE` 指定自定义文件。贡献署名见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
+最新的暖色登录首页、605px 右栏、代码引用上下文和 PDF 样例边界修复见 [首页视觉与代码上下文修复](docs/首页视觉与代码上下文修复.md)。直接对话与主动复习见 [对话与主动复习修复](docs/对话与主动复习修复.md)。此前桌面与模型证据改动见 [桌面改进交付记录](docs/桌面改进交付记录.md)。教学指导可编辑 `backend/app/chat/prompts/tutoring.md`，或用 `CHAT_TEACHING_PROMPT_FILE` 指定自定义文件。贡献署名见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
+
+![登录首页，合成演示数据](docs/design/screenshots/登录首页-1440.png)
 
 | 学生：对话 | 教师：知识图谱 |
 |---|---|

@@ -312,7 +312,9 @@ def check_tidy(raw: str, out: str, raw_garbled: bool) -> str | None:
     raw_body, out_body = FIG_MARK.sub("", raw), FIG_MARK.sub("", out)
     if garbled(out_body) is not None:
         return "整理后还是乱码"
-    src_nums, out_nums = set(_NUM.findall(raw_body)), set(_NUM.findall(out_body))
+    # 全角样例编号被规范成半角仍是同一个数字；样例正文的改动已由上面的逐项检查拦住。
+    src_nums = {unicodedata.normalize("NFKC", n) for n in _NUM.findall(raw_body)}
+    out_nums = {unicodedata.normalize("NFKC", n) for n in _NUM.findall(out_body)}
     if out_nums - src_nums:
         return "出现了原文没有的数字：" + "、".join(sorted(out_nums - src_nums)[:5])
     if len(src_nums) >= 3 and len(src_nums & out_nums) < 0.9 * len(src_nums):

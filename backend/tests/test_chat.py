@@ -72,8 +72,8 @@ def test_seeded_story(demo):
         assert old["caption"].startswith("你在「最大差值」里改对后的代码") and any("a[0]" in x for x in old["lines"])
         first, second = msgs[2], msgs[4]
         block = codes(first)[0]
-        assert block["caption"] == "你的第 3 次提交，第 10 到 12 行" and block["start"] == 10 and block["mark"] == [10]
-        assert block["lines"] == ["int max = 0;", "for (i = 0; i < n; i++)", "    if (a[i] > max) max = a[i];"]
+        assert block["caption"] == "你的第 3 次提交，第 8 到 12 行" and block["start"] == 8 and block["mark"] == [10]
+        assert block["lines"][-3:] == ["int max = 0;", "for (i = 0; i < n; i++)", "    if (a[i] > max) max = a[i];"]
         # 提醒过以后又交了一次、错的还是同一处：往上帮一级，直接指出位置
         assert "`max` 的初值" in texts(first)
         assert "有关系。假如输入是 `-5 -2 -8`" in texts(second) and "第 12 行一次都不会替换" in texts(second)
@@ -318,7 +318,7 @@ def test_llm_reply_is_validated_and_falls_back(demo):
             assert st.analysis_source == "llm" and st.skill_code == "C06.03.02"
             assert (st.reply_source, st.retries) == ("template", 2) and st.check_result["ok"]
             assert "TY09" not in texts(out[1]) and "-12" not in texts(out[1])
-            assert codes(out[1])[0]["start"] == 10
+            assert codes(out[1])[0]["start"] == 8 and codes(out[1])[0]["mark"] == [10]
             sent = json.dumps([c for c in calls], ensure_ascii=False)
             assert len(calls) == 3 and sent
     finally:

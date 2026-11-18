@@ -14,7 +14,7 @@ from ..taxonomy import HELP_ORDER, course_prompt
 from . import hints
 from .context import Ctx
 from .policy import Decision
-from .text import dedent, excerpt_range
+from .text import dedent, quote_range
 from .validate import Draft
 from . import teaching
 
@@ -24,11 +24,11 @@ BLANK = "______"
 
 # ------------------------------------------------------------ 引用他自己的代码
 def default_quote(ctx: Ctx) -> tuple[int, int, list[int]] | None:
-    """围绕出问题的那一行，引用相关的 2~8 行，并标出那一行。"""
-    rng = excerpt_range(len(ctx.lines), ctx.diag_line, ctx.lines)
-    if rng is None:
+    """先标出问题行；生成展示块时统一补齐上下文。"""
+    if not ctx.lines or not ctx.diag_line or not 1 <= ctx.diag_line <= len(ctx.lines):
         return None
-    return rng[0], rng[1], [ctx.diag_line]
+    # to_blocks 统一补上下文，避免模板和模型各自扩一次。
+    return ctx.diag_line, ctx.diag_line, [ctx.diag_line]
 
 
 def quote_caption(ctx: Ctx, a: int, b: int) -> str:
@@ -44,6 +44,7 @@ def to_blocks(draft: Draft, ctx: Ctx) -> list[dict]:
         blocks.append({"t": "p", "text": para})
     if draft.quote is not None and ctx.lines:
         a, b, marks = draft.quote
+        a, b = quote_range(ctx.lines, a, b)
         blocks.append({"t": "code", "caption": quote_caption(ctx, a, b), "start": a,
                        "lines": dedent(ctx.lines[a - 1:b]), "mark": [x for x in marks if a <= x <= b]})
     if draft.code:
@@ -209,7 +210,7 @@ _FLOW_RULES = {
 }
 _SYSTEM = """你是大学 C 语言课程的答疑助手，在帮一名学生看他自己的作业。说话像一位认真的助教：平实、简短、直接。
 输出 JSON：{"before":"代码块前面的话","quote":{"from":10,"to":12,"mark":[10]},"code":null,"after":"代码块后面的话","keyLine":null}
-- quote：要引用他自己的代码时填行号范围（2 到 8 行）和要标出的行，由系统把那几行原样贴出来；不引用填 null。你不要自己抄他的代码。
+- quote：引用学生代码时，选出包含前置变量、条件和相关循环体的连续范围（最多 8 行），mark 只标问题行。不要只选孤立一行；系统还会尽量补充前后文。不引用填 null。你不要自己抄他的代码。
 - code：只有这一级允许给新代码时才填，否则填 null。keyLine 是 code 里最关键的那一行的序号。
 - 提到变量名用反引号。提到行号必须是他代码里真实的行号。
 硬性规则：
