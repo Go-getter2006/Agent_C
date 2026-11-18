@@ -18,7 +18,9 @@ Leitner 盒子；半衰期回归（Settles 和 Meeder 2016）。
 4. 独立做对一道用到这个技能的新题，也算一次成功的回忆：不用再专门出题，直接把下一次往后排。
    讲了原理或给了代码才做出来的，算一次遗忘。
 5. 毕业：连续做对 graduate_streak 次，而且 h 已经超过 graduate_half_life 天。毕业后再出问题会重新进来。
-6. 不打扰：不弹窗，不往正在分析具体题目的对话里插题。综合对话空闲时主动出一道，复习页只查看安排；
+6. 不打扰：不弹窗，不往对话里插题。小题在“复习提升”里做（界面改造方案第 4 节）：后台空闲时给最近来过的学生
+   提前备好一道（prepare_active），进栏目就见题；没备好就当场出一道，出不了就退避，稍后自动再试；
+   侧边栏的数字只数已经备好的题（ready_count）。中途离开的，回来接着做同一道。
    每天最多 daily_limit 道，同一个技能一天最多一道；到期的里面先做记得最不牢的。
 7. 出什么题：第一次复习用他自己当时那道题的代码回忆；之后换一个场景（迁移）；刚答错过就降一级，出判断题。
 8. 两门课分开：复习项按技能编码属于哪门课，C 语言登录只看 C 语言的，数据结构只看数据结构的；每天的上限也各算各的。
@@ -412,3 +414,78 @@ def teacher_stats(s: Session, user_ids: list[str], at: dt.datetime | None = None
     return {"active": len(active), "due": sum(1 for r in active if r.due_at <= at),
             "graduated": sum(1 for r in rows if r.state == GRADUATED), "lapses": sum(r.lapses for r in rows),
             "students": len({r.user_id for r in active})}
+
+
+# ------------------------------------------------------------ 复习提升：提前备题
+def _pending(s: Session, user_id: str, course: str) -> m.QuizAttempt | None:
+    return s.scalars(select(m.QuizAttempt).where(
+        m.QuizAttempt.user_id == user_id, m.QuizAttempt.reason == "review", m.QuizAttempt.state != "done",
+        m.QuizAttempt.skill_code.like(course + "%")).order_by(m.QuizAttempt.id)).first()
+
+
+def ready_count(s: Session, user_id: str, course: str) -> int:
+    """侧边栏上的数字：已经备好、还没做完的复习题（题目可用了才加，到期数和已完成数另外算）。"""
+    return int(s.scalar(select(func.count(m.QuizAttempt.id)).where(
+        m.QuizAttempt.user_id == user_id, m.QuizAttempt.reason == "review", m.QuizAttempt.state != "done",
+        m.QuizAttempt.skill_code.like(course + "%"))) or 0)
+
+
+def prepare(s: Session, user_id: str, course: str, at: dt.datetime | None = None) -> str:
+    """有到期的复习、还没有备好的题：备一道（出题器会先在沙箱里验证）。返回 ready / waiting / idle。
+
+    出题失败退避 5 分钟（记一条 review_wait），已经备好的题先给。
+    """
+    at = at or db.now()
+    seed_missing(s, user_id, course, at)
+    if _pending(s, user_id, course) is not None:
+        return "ready"
+    waiting = s.scalar(select(m.UiEvent.id).where(
+        m.UiEvent.user_id == user_id, m.UiEvent.course == course, m.UiEvent.kind == "review_wait",
+        m.UiEvent.ts > at - dt.timedelta(minutes=5)).limit(1))
+    if waiting:
+        return "waiting"
+    due = due_items(s, user_id, at, course)
+    if not due:
+        return "idle"
+    # 按顺序试：某个技能这会儿出不了题（比如没有题库题、大模型也用不了），换下一项，不让一项卡住全部
+    for item in due[:3]:
+        _item, attempt = start(s, user_id, item.id, at, course)
+        if attempt is not None:
+            return "ready"
+    s.add(m.UiEvent(user_id=user_id, course=course, kind="review_wait", target="", ts=at))
+    return "waiting"
+
+
+def prepare_active(limit: int = 3, at: dt.datetime | None = None) -> int:
+    """后台空闲时：给最近一周来过的学生提前备好复习题。每次最多 limit 个学生（出题可能调用大模型）。"""
+    at = at or db.now()
+    done = 0
+    with db.session_scope() as s:
+        rows = s.execute(select(m.UiEvent.user_id, m.UiEvent.course).where(
+            m.UiEvent.kind.in_(("login", "open_review", "open_problem", "open_knowledge")),
+            m.UiEvent.ts > at - dt.timedelta(days=7)).group_by(m.UiEvent.user_id, m.UiEvent.course)).all()
+    for user_id, course in rows:
+        if done >= limit:
+            break
+        with db.session_scope() as s:
+            if _pending(s, user_id, course) is not None or not due_items(s, user_id, at, course):
+                continue
+            if prepare(s, user_id, course, at) == "ready":
+                done += 1
+    return done
+
+
+def last_feedback(s: Session, user_id: str, course: str) -> dict | None:
+    """最近做完的一道复习题：今天没有可做的题时给他看。"""
+    from . import quiz
+
+    a = s.scalars(select(m.QuizAttempt).where(
+        m.QuizAttempt.user_id == user_id, m.QuizAttempt.reason == "review", m.QuizAttempt.state == "done",
+        m.QuizAttempt.skipped.is_(False), m.QuizAttempt.skill_code.like(course + "%"))
+        .order_by(m.QuizAttempt.finished_at.desc(), m.QuizAttempt.id.desc())).first()
+    if a is None:
+        return None
+    result = quiz.view(s, a).get("result") or {}
+    return {"title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), ""),
+            "time": (a.finished_at or a.created_at).isoformat(),
+            "headline": result.get("headline", ""), "summary": result.get("summary", [])}

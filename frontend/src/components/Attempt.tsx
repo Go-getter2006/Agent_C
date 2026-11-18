@@ -1,0 +1,247 @@
+// 独立作答（界面改造方案第 4 节）：先判断 → 再选位置/依据 → 判断有问题的修改 → 反馈。
+// - 第一步“满足要求”“存在问题”同样分量，确认前可以改选；确认以后锁定。把握可选，放在确认按钮旁边；
+// - 第二步学生自己点行号选（一行或连续几行），选中的行才变黄；判断有问题叫“确认位置”，判断满足要求叫“确认依据”；
+// - 判断有问题的再修改：可以运行公开样例、看提示，也可以原样提交；
+// - 反馈之前界面上不出现对错、错在哪、标准改法；反馈后开放“回看相关作业”。
+// 用在复习提升（整页，题干、代码、作答在一条阅读轴线上）和对话里通过后出的小题（compact）。
+import { lazy, Suspense, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { Link } from "react-router-dom";
+import { BarChart3, CircleCheck, CircleX, FileCode2, Lightbulb, NotebookPen, Play, SkipForward } from "lucide-react";
+import { api } from "../api";
+import type { QuizView } from "../types";
+import { CodeBlock, Loading } from "./ui";
+
+const CodeEditor = lazy(() => import("./CodeEditor"));
+const LEVELS = ["没把握", "一半", "很有把握"];
+
+interface Props {
+  quiz: QuizView;
+  onChange: (next: QuizView) => void;
+  compact?: boolean;
+  onNext?: () => void;          // 复习提升：做完以后“下一题”
+  nextLabel?: string;
+}
+
+function where(lines: number[]): string {
+  if (!lines.length) return "";
+  return lines.length === 1 ? `第 ${lines[0]} 行` : `第 ${lines[0]}～${lines[lines.length - 1]} 行`;
+}
+
+/** 可以点行号选行的代码：一行或连续几行。Shift 点另一行选一段；键盘上 Tab 到行号，回车或空格选。 */
+function SelectableCode({ caption, lines, start, selected, onSelect, disabled }: {
+  caption: string; lines: string[]; start: number; selected: number[]; onSelect: (next: number[]) => void; disabled: boolean;
+}) {
+  const anchor = useRef<number | null>(null);
+  const pick = (no: number, extend: boolean) => {
+    if (disabled) return;
+    if (extend && anchor.current !== null) {
+      const [a, b] = [Math.min(anchor.current, no), Math.max(anchor.current, no)];
+      onSelect(Array.from({ length: b - a + 1 }, (_, i) => a + i));
+      return;
+    }
+    if (selected.length === 1 && selected[0] === no) {
+      anchor.current = null;
+      onSelect([]);
+      return;
+    }
+    anchor.current = no;
+    onSelect([no]);
+  };
+  return (
+    <div className="code code-pick">
+      <div className="code-cap"><span><FileCode2 aria-hidden="true" />{caption}</span></div>
+      <div className="code-body" role="group" aria-label={`${caption}，点行号选行`}>
+        <div className="code-lines">
+          {lines.map((text, i) => {
+            const no = start + i;
+            const on = selected.includes(no);
+            return (
+              <div key={i} className={on ? "code-line picked" : "code-line"}>
+                <button type="button" className="code-no code-no-btn" aria-pressed={on} disabled={disabled}
+                  aria-label={`第 ${no} 行${on ? "，已选" : ""}`}
+                  onClick={(e: MouseEvent) => pick(no, e.shiftKey)}
+                  onKeyDown={(e: KeyboardEvent) => { if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); pick(no, true); } }}>
+                  {no}
+                </button>
+                <span className="code-text">{text || " "}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Attempt({ quiz, onChange, compact = false, onNext, nextLabel = "下一题" }: Props) {
+  const shownAt = useRef(Date.now());
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [says, setSays] = useState<"ok" | "bug" | null>(quiz.judged);
+  const [confidence, setConfidence] = useState<string | null>(quiz.confidence);
+  const [picked, setPicked] = useState<number[]>(quiz.lines ?? []);
+  const [draft, setDraft] = useState(quiz.draft ?? quiz.code.join("\n"));
+  const start = quiz.startLine ?? 1;
+  const state = quiz.state;
+  const result = quiz.result;
+
+  const call = async (name: string, fn: () => Promise<QuizView>) => {
+    setBusy(name);
+    setError(null);
+    try {
+      const next = await fn();
+      onChange(next);
+      if (next.draft !== undefined && name !== "sample" && name !== "submit") setDraft(next.draft);
+    } catch (err) {
+      setError((err as Error).message);   // 失败后选择和改好的代码都留着
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const steps = quiz.judged === "ok" || says === "ok"
+    ? [["judge", "判断"], ["locate", "依据"], ["done", "完成"]]
+    : [["judge", "判断"], ["locate", "位置"], ["edit", "修改"], ["done", "完成"]];
+  const order = steps.map((s) => s[0]);
+  const at = order.indexOf(state);
+
+  return (
+    <div className={compact ? "attempt attempt-compact" : "attempt"}>
+      <ol className="attempt-steps" aria-label="作答步骤">
+        {steps.map(([key, label], i) => (
+          <li key={key} className={i === at ? "current" : i < at ? "done" : undefined} aria-current={i === at ? "step" : undefined}>
+            {i < at ? `${label}已记录` : label}
+          </li>
+        ))}
+      </ol>
+
+      {state === "done" && result ? (
+        <h2 className="attempt-title">{result.headline}</h2>
+      ) : (
+        <h2 className="attempt-title attempt-stem">{quiz.stem}</h2>
+      )}
+      {state === "done" && <p className="attempt-sub">{quiz.stem}</p>}
+
+      {state === "locate" ? (
+        <SelectableCode caption={quiz.caption} lines={quiz.code} start={start} selected={picked} onSelect={setPicked} disabled={busy !== null} />
+      ) : state === "edit" ? (
+        <div className="code quiz-editor">
+          <div className="code-cap"><span><FileCode2 aria-hidden="true" />{quiz.caption} · 修改稿</span></div>
+          <Suspense fallback={<div className="card-body"><Loading what="正在打开编辑器" lines={3} /></div>}>
+            <CodeEditor value={draft} onChange={setDraft} label={`${quiz.caption}，可以编辑`} disabled={busy !== null} start={start} />
+          </Suspense>
+        </div>
+      ) : state === "done" && result ? (
+        <CodeBlock caption={result.finalCode ? "你改好的代码" : "你提交时的代码"} lines={result.finalCode ?? quiz.code} start={start}
+          mark={result.lines ?? []} copyable={false} />
+      ) : (
+        <CodeBlock caption={quiz.caption} lines={quiz.code} start={start} mark={quiz.mark ?? []} copyable={false} />
+      )}
+
+      {state === "judge" && (
+        <div className="attempt-ask">
+          <h3>这段代码满足题目要求吗？</h3>
+          <div className="attempt-choices" role="radiogroup" aria-label="你的判断">
+            {(["ok", "bug"] as const).map((v) => (
+              <button key={v} type="button" role="radio" aria-checked={says === v} className="attempt-choice"
+                disabled={busy !== null} onClick={() => setSays(v)}>
+                {v === "ok" ? "满足要求" : "存在问题"}
+              </button>
+            ))}
+          </div>
+          <div className="attempt-confirm">
+            <button type="button" className="btn btn-primary" disabled={!says || busy !== null}
+              onClick={() => call("judge", () => api.quizJudge(quiz.attemptId, says === "bug", confidence, Date.now() - shownAt.current))}>
+              {busy === "judge" ? "正在保存" : "确认判断"}
+            </button>
+            <span className="attempt-confidence" role="group" aria-label="把握（可选）">
+              <span className="note">把握（可选）</span>
+              {LEVELS.map((l) => (
+                <button key={l} type="button" className="chip-sm" aria-pressed={confidence === l} disabled={busy !== null}
+                  onClick={() => setConfidence(confidence === l ? null : l)}>{l}</button>
+              ))}
+            </span>
+          </div>
+          {!says && <p className="note">先选一项，再确认。确认以后不能改。</p>}
+        </div>
+      )}
+
+      {state === "locate" && (
+        <div className="attempt-ask">
+          <h3>{quiz.judged === "bug" ? "问题在哪几行？" : "哪些行支持你的判断？"}</h3>
+          <p className={picked.length ? "attempt-picked" : "attempt-picked empty"} role="status">
+            {picked.length ? `已选${where(picked)}` : "点行号选一行；按住 Shift 再点一行，选连续的几行"}
+          </p>
+          <div className="attempt-confirm">
+            <button type="button" className="btn btn-primary" disabled={!picked.length || busy !== null}
+              onClick={() => call("locate", () => api.quizLocate(quiz.attemptId, picked))}>
+              {busy === "locate" ? "正在保存" : quiz.judged === "bug" ? "确认位置" : "确认依据"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {state === "edit" && (
+        <div className="attempt-ask">
+          <h3>修改代码，让它满足题目要求。</h3>
+          {quiz.hints && quiz.hints.length > 0 && (
+            <ul className="attempt-hints">{quiz.hints.map((h, i) => <li key={i}><Lightbulb size={15} aria-hidden="true" />{h}</li>)}</ul>
+          )}
+          {quiz.message && (
+            <p className={quiz.message.kind === "fail" ? "quiz-msg quiz-msg-fail" : "quiz-msg"} role="status">
+              {quiz.message.text}{quiz.message.kind === "fail" && quiz.triesLeft === 1 ? "还可以再试一次。" : ""}
+            </p>
+          )}
+          <div className="attempt-confirm">
+            {quiz.hasSample && (
+              <button type="button" className="btn" disabled={busy !== null} onClick={() => call("sample", () => api.quizSample(quiz.attemptId, draft))}>
+                <Play size={15} aria-hidden="true" />{busy === "sample" ? "正在运行" : "运行公开样例"}
+              </button>
+            )}
+            <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={() => call("submit", () => api.quizSubmit(quiz.attemptId, draft))}>
+              {busy === "submit" ? "正在判分" : "提交修改"}
+            </button>
+            {quiz.moreHints && (
+              <button type="button" className="link" disabled={busy !== null} onClick={() => call("hint", () => api.quizHint(quiz.attemptId))}>
+                <Lightbulb size={15} aria-hidden="true" />看提示
+              </button>
+            )}
+          </div>
+          <p className="note">运行公开样例、看提示都会记下来；觉得原来就没问题，可以原样提交。</p>
+        </div>
+      )}
+
+      {state === "done" && result && result.outcome !== "skipped" && (
+        <div className="attempt-feedback">
+          <p className={result.outcome === "right" ? "attempt-verdict ok" : "attempt-verdict bad"}>
+            {result.outcome === "right" ? <CircleCheck size={18} aria-hidden="true" /> : <CircleX size={18} aria-hidden="true" />}
+            {quiz.judged === "ok" ? "你选了「满足要求」" : "你选了「存在问题」"}{result.lines?.length ? `，并指出${where(result.lines)}` : ""}。
+            {result.explanation ? ` ${result.explanation}` : ""}
+          </p>
+          <dl className="attempt-summary">
+            {(result.summary ?? []).map((x) => <div key={x.label}><dt>{x.label}</dt><dd>{x.text}</dd></div>)}
+          </dl>
+          {result.fix && (
+            <CodeBlock caption={result.bugLines?.length ? `问题在${where(result.bugLines)}，可以这样改` : "可以这样改"}
+              lines={result.fix.lines} mark={result.fix.mark} start={result.fix.start ?? start} copyable={false} />
+          )}
+          <div className="attempt-confirm">
+            {result.origin && <Link className="btn" to={`/homework/${result.origin.key}`}><NotebookPen size={15} aria-hidden="true" />回看相关作业</Link>}
+            {!compact && <Link className="btn" to="/progress"><BarChart3 size={15} aria-hidden="true" />查看我的学情</Link>}
+            {onNext && <button type="button" className="btn btn-primary" onClick={onNext}>{nextLabel}</button>}
+          </div>
+        </div>
+      )}
+      {state === "done" && result?.outcome === "skipped" && <p className="note">这道先跳过了。</p>}
+
+      {error && <p className="error-text" role="alert">{error}</p>}
+      {state !== "done" && (
+        <div className="quiz-skip">
+          <button type="button" className="link link-muted" disabled={busy !== null} onClick={() => call("skip", () => api.quizSkip(quiz.attemptId))}>
+            <SkipForward size={14} aria-hidden="true" />先跳过
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

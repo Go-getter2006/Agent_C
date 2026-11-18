@@ -452,6 +452,16 @@ class ConfidenceBody(BaseModel):
 
 class JudgeBody(BaseModel):
     hasBug: bool
+    confidence: str | None = None   # 独立作答：把握可选，放在确认判断旁边
+    elapsedMs: int | None = None
+
+
+class LocateBody(BaseModel):
+    lines: list[int] = Field(default_factory=list, max_length=40)
+
+
+class CodeBody(BaseModel):
+    code: str = Field(default="", max_length=4000)
 
 
 class RunBody(BaseModel):
@@ -478,7 +488,44 @@ def quiz_confidence(attempt_id: int, body: ConfidenceBody, user: m.User = Depend
 def quiz_judge(attempt_id: int, body: JudgeBody, user: m.User = Depends(student),
                s: Session = Depends(get_session)) -> dict:
     attempt = _attempt(s, user, attempt_id)
-    quiz.judge(s, attempt, body.hasBug)
+    if attempt.protocol == 2:
+        quiz.judge2(s, attempt, body.hasBug, body.confidence, body.elapsedMs)
+    else:
+        quiz.judge(s, attempt, body.hasBug)
+    return quiz.view(s, attempt)
+
+
+@router.post("/quiz/{attempt_id}/locate")
+def quiz_locate(attempt_id: int, body: LocateBody, user: m.User = Depends(student),
+                s: Session = Depends(get_session)) -> dict:
+    """独立作答第二步：选位置（判断有问题）或依据（判断满足要求）。确认以后锁定。"""
+    attempt = _attempt(s, user, attempt_id)
+    problem = quiz.locate(s, attempt, body.lines)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    return quiz.view(s, attempt)
+
+
+@router.post("/quiz/{attempt_id}/sample")
+def quiz_sample(attempt_id: int, body: CodeBody, user: m.User = Depends(student),
+                s: Session = Depends(get_session)) -> dict:
+    attempt = _attempt(s, user, attempt_id)
+    quiz.run_sample(s, attempt, body.code)
+    return quiz.view(s, attempt)
+
+
+@router.post("/quiz/{attempt_id}/hint")
+def quiz_hint(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    attempt = _attempt(s, user, attempt_id)
+    quiz.hint(s, attempt)
+    return quiz.view(s, attempt)
+
+
+@router.post("/quiz/{attempt_id}/submit")
+def quiz_submit(attempt_id: int, body: CodeBody, user: m.User = Depends(student),
+                s: Session = Depends(get_session)) -> dict:
+    attempt = _attempt(s, user, attempt_id)
+    quiz.submit_fix(s, attempt, body.code)
     return quiz.view(s, attempt)
 
 
@@ -506,8 +553,12 @@ def progress_page(user: m.User = Depends(student), s: Session = Depends(get_sess
 # ------------------------------------------------------------ 复习
 @router.get("/review")
 def review_page(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    """复习提升：进来就是一道备好的题（后台提前备好；没备好就现在出一道，出不了就退避，稍后自动再试）。
+    中途离开的，回来接着做同一道。今天没有可做的题时，给最近一次的反馈和下一次的安排。"""
     s.add(m.UiEvent(user_id=user.student_id, kind="open_review", target="", course=user.course))
+    review.prepare(s, user.student_id, user.course)
     out = review.summary(s, user.student_id, course=user.course)
+    out["last"] = review.last_feedback(s, user.student_id, user.course)
     current = next((d for d in out["due"] if d["pending"]), None)
     if current is not None:
         item = s.get(m.ReviewItem, current["id"])
@@ -564,5 +615,5 @@ def status(user: m.User = Depends(student), s: Session = Depends(get_session)) -
         if failures >= 3 or stale:
             worst["ok"] = False
             worst["dataTime"] = last_ok.isoformat() if last_ok else None
-    return {"xdoj": worst, "dueReviews": len(review.due_items(s, user.student_id, course=user.course)),
+    return {"xdoj": worst, "dueReviews": review.ready_count(s, user.student_id, user.course),
             "llm": llm.available(), "course": user.course}

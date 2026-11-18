@@ -77,6 +77,11 @@ export interface QuizResult {
   bugLine?: number | null;
   fix?: { lines: string[]; mark: number[]; start?: number };
   lastRun?: string;
+  // 独立作答的反馈：判断、依据或定位、修改各一句
+  summary?: { label: string; text: string }[];
+  lines?: number[];
+  bugLines?: number[];
+  origin?: { key: string; title: string } | null;
 }
 
 export interface QuizView {
@@ -86,9 +91,14 @@ export interface QuizView {
   code: string[];
   startLine?: number;
   mark?: number[];
-  state: "confidence" | "judge" | "edit" | "done";
+  state: "confidence" | "judge" | "locate" | "edit" | "done";
   confidence: string | null;
   judged: "bug" | "ok" | null;
+  protocol?: number;          // 2：独立作答（先判断 → 再选位置/依据 → 判断有问题的修改）
+  lines?: number[];           // 学生首次选的行
+  hints?: string[];
+  moreHints?: boolean;
+  hasSample?: boolean;
   triesLeft?: number;
   choices?: { index: number; label: string }[];
   draft?: string;
@@ -199,6 +209,7 @@ export interface ReviewPage {
   dailyLimit: number;
   active: number;
   current?: ReviewCurrent;
+  last?: { title: string; time: string; headline: string; summary: { label: string; text: string }[] } | null;
 }
 
 export type CourseCode = "C" | "D";

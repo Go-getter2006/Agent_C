@@ -26,8 +26,11 @@ def item_of(s, code):
 
 
 def new_attempt(s, code, reason="after_pass"):
+    """以前的作答协议（把握 → 判断 → 改）：旧记录照旧能做完。新出的题见 test_independent.py。"""
     msg = quiz.start(s, UID, item_of(s, code), reason, "顺手问一道：")
-    return s.get(m.QuizAttempt, msg.quiz_attempt_id)
+    a = s.get(m.QuizAttempt, msg.quiz_attempt_id)
+    a.protocol, a.state, a.events = 1, "confidence", []
+    return a
 
 
 def test_whole_bank_verifies(bank):
