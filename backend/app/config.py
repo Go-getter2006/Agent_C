@@ -235,6 +235,21 @@ PROFILE = {
     "review_hours": 1,           # 同一个学生同一门课，评语至少隔这么久才重写（画像变了也一样）
 }
 
+# 跨课程（app/cross.py）。数据结构的技能的先验 = 先修（含 C 语言那头）估计的加权平均，
+# 先验的分量 n0 相当于几次作答：数据结构这头的证据越多，C 语言那头的影响越小（η = n0 / (n0 + n)）。
+CROSS = {
+    "n0": 2.0,
+    "relation": {"prerequisite": ("先修", 1.0), "used_for": ("被用于", 0.8), "part_of": ("是其中一部分", 0.6),
+                 "similar": ("相似、可以类比", 0.4)},
+    "reliability": {"supported": 1.0, "unknown": 0.7, "unsupported": 0.3},   # 数据检验的结论
+    "mastered": 0.6,          # C 那头估计到这么多算掌握了
+    "min_n": 10,              # 两组合起来至少这么多次新题才下结论
+    "min_group": 3,           # 每组至少这么多次
+    "support_prob": 0.9,      # “掌握了的更容易一次做对”的后验概率到这么多算数据支持
+    "weak": 0.45,             # C 基础预警：估计低于这个算薄弱
+    "max_proposals": 8,       # 智能体一次最多提几条
+}
+
 CHAT = {
     "round_timeout_minutes": 30,
     "bind_recent_minutes": 30,

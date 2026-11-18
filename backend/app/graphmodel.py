@@ -149,7 +149,7 @@ def nightly(user_ids: list[str] | None = None) -> dict:
 
     先补预测、后学权重：当天记下的融合预测用的是学之前的权重，评比才公平（不拿答案学了再考）。
     """
-    from . import assess, profile
+    from . import assess, cross, profile
 
     assessed = assess.run_pending(limit=500)
     with db.session_scope() as s:
@@ -161,7 +161,9 @@ def nightly(user_ids: list[str] | None = None) -> dict:
             n_pred += log_predictions(s, uid)
     with db.session_scope() as s:
         weights = profile.refit(s)
-    return {"students": len(ids), "predictions": n_pred, "assessed": assessed, "weights": weights}
+        cross.ensure_seed(s)
+        links = cross.validate_links(s)   # 跨课程的联系：用新记下的预测检验
+    return {"students": len(ids), "predictions": n_pred, "assessed": assessed, "weights": weights, "links": links}
 
 
 # ------------------------------------------------------------ 教师端用的汇总
