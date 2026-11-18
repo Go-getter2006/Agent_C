@@ -4,12 +4,14 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ChevronDown, CloudOff, List, PanelRight } from "lucide-react";
 import { api } from "../api";
 import DiffOverlay from "../components/Diff";
-import { HomeworkPicker, ProblemList, SidePanel } from "../components/Lists";
+import { SidePanel } from "../components/Lists";
+import HomeworkNavigator from "../components/HomeworkNavigator";
 import { StudentShell } from "../components/Shell";
 import Thread from "../components/Thread";
 import { Cells, Drawer, Loading, Problem, ResultPill, gridLabel } from "../components/ui";
 import { useLayout, useLoad } from "../lib/hooks";
 import { clock } from "../lib/time";
+import { sortProblems } from "../lib/problems";
 import { useHomeworks, useStatus } from "../session";
 
 function ProblemDocument({ problemKey }: { problemKey: string }) {
@@ -27,18 +29,21 @@ export default function Workbench() {
   const navigate = useNavigate();
   const layout = useLayout();
   const [search, setSearch] = useSearchParams();
-  const { homeworks, current, pick, loading: hwLoading } = useHomeworks();
+  const { homeworks, current, pick, loading: hwLoading, error: hwError } = useHomeworks();
   const { status, reload: reloadStatus } = useStatus();
   const isProblem = !!key && key !== "general";
+  const [entered, setEntered] = useState(isProblem);
+  const [selectFirstFor, setSelectFirstFor] = useState<string | null>(null);
+  const needsList = entered || isProblem;
 
   // keep：切换作业、题目时先留着上一份，新的到了再换，页面不闪
   const listCache = useRef(new Map<string, Awaited<ReturnType<typeof api.homework>>>());
   const list = useLoad(async () => {
-    if (!current) return null;
+    if (!current || !needsList) return null;
     const value = await api.homework(current.key);
     listCache.current.set(current.key, value);
     return value;
-  }, [current?.key], 15000, true);
+  }, [current?.key, needsList], 15000, true);
   const detail = useLoad(() => (isProblem ? api.problem(key!) : Promise.resolve(null)), [key], 15000, true);
   const [drawer, setDrawer] = useState<"list" | "side" | null>(null);
   const [showDocument, setShowDocument] = useState(false);
@@ -48,6 +53,7 @@ export default function Workbench() {
   const detailOk = !!detail.data && detail.data.key === key;                          // 详情是不是当前这道题的
 
   useEffect(() => setDrawer(null), [key, layout]);
+  useEffect(() => { if (isProblem) setEntered(true); }, [key]); // 深链接也保留返回全部作业的入口。
 
   // 打开一道题（比如从提交页点过来）、它不在当前选的作业里：切到它所在的作业。
   // 只在换题的那一刻做一次——以前每次刷新都做，学生自己换作业马上又被拉回来，看起来“卡在一个练习里”
@@ -56,16 +62,25 @@ export default function Workbench() {
   useEffect(() => {
     if (!homeKey || !key || syncedFor.current === key) return;
     syncedFor.current = key;
+    if (shownList?.homework.key === current?.key && shownList?.problems.some(p => p.key === key)) return;
     if (current && homeKey !== current.key && homeworks.some((h) => h.key === homeKey)) pick(homeKey);
   }, [homeKey, key, current, homeworks, pick]);
 
-  // 学生自己换作业：进那个作业（最近交过的那道题，没有就停在作业里）
+  // 左栏进入本次作业；列表准备好后，只选择一次排序第一题，刷新不自动抢走当前题。
   const pickHomework = useCallback((hw: string) => {
-    if (hw === current?.key) return;
     syncedFor.current = key ?? null;
+    setEntered(true);
+    setSelectFirstFor(hw);
     pick(hw);
-    navigate("/chat");
-  }, [current?.key, key, pick, navigate]);
+  }, [key, pick]);
+  useEffect(() => {
+    if (!entered || !selectFirstFor || !listOk || shownList?.homework.key !== selectFirstFor) return;
+    const first = sortProblems(shownList.problems)[0];
+    setSelectFirstFor(null);
+    if (!first) return;
+    syncedFor.current = first.key;
+    navigate(`/chat/${first.key}`);
+  }, [entered, selectFirstFor, listOk, shownList, navigate]);
 
   const refresh = useCallback(() => {
     list.reload();
@@ -95,22 +110,15 @@ export default function Workbench() {
   const xdoj = status?.xdoj;
 
   const listPane = (onNavigate?: () => void) => (
-    <>
-      <HomeworkPicker homeworks={homeworks} current={current} onPick={pickHomework} />
-      {current && listOk && problems.length === 0 && <p className="plist-empty">这个作业里还没有题目</p>}
-      {list.error && <p className="plist-empty" role="status">{list.error}</p>}
-      {!listOk && current && <p className="plist-empty" role="status">正在切换作业题目…</p>}
-      <div className="problem-list-content" aria-busy={!listOk} {...(!listOk ? { inert: "" } : {})}>
-        <ProblemList problems={problems} currentKey={key ?? null} dueReviews={due} onNavigate={onNavigate} />
-      </div>
-    </>
+    <HomeworkNavigator homeworks={homeworks} current={current} problems={problems} currentKey={key ?? null}
+      entered={entered} loading={hwLoading} ready={listOk} error={list.error ?? hwError} dueReviews={due}
+      onEnter={pickHomework} onBack={() => { setSelectFirstFor(null); setEntered(false); }} onNavigate={onNavigate} />
   );
   const sidePane = shown && isProblem ? (
     <div className={detailOk ? "fade-swap" : "fade-swap is-stale"}>
       <SidePanel detail={shown}
         onDocument={() => { setDrawer(null); setShowDocument(true); }}
-        onDiff={(a, b) => { setDrawer(null); void api.event("open_diff", shown.key); setParam("diff", `${a}~${b}`); }}
-        onAsk={(sub) => { setDrawer(null); setParam("ask", sub); }} />
+        onDiff={(a, b) => { setDrawer(null); void api.event("open_diff", shown.key); setParam("diff", `${a}~${b}`); }} />
     </div>
   ) : null;
 
@@ -200,6 +208,7 @@ export default function Workbench() {
           </header>
           <Thread threadKey={threadKey} layout={layout} emptyTitle={key ? emptyTitle : "有什么想弄明白的？"}
             emptyText={key ? emptyText : "直接问，也可以从左侧选一道题。"}
+            welcomeKey={!passed && latest && !["AC", "PENDING", "UNKNOWN"].includes(latest.result) ? latest.key : null}
             askKey={isProblem ? ask : null} onAsked={() => setParam("ask", null)} onActivity={refresh} />
         </main>
         {layout === "four" && sidePane && <aside className="wb-side" aria-label="这道题的情况">{sidePane}</aside>}

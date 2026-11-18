@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSlider } from "./Slider";
 import { Link } from "react-router-dom";
-import { Check, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
+import { Check, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Hourglass, Layers } from "lucide-react";
 import { useEscape } from "../lib/hooks";
 import { deadline, shortTime } from "../lib/time";
 import { sortProblems } from "../lib/problems";
@@ -73,28 +73,20 @@ export function HomeworkPicker({ homeworks, current, onPick, compact = false }: 
 
 function RowIcon({ p }: { p: ProblemRow }) {
   if (p.passed) return <span className="prow-icon ok"><CircleCheck size={16} aria-hidden="true" /></span>;
+  if (p.last && ["PENDING", "UNKNOWN"].includes(p.last.result)) return <span className="prow-icon"><Hourglass size={16} aria-hidden="true" /></span>;
   if (p.last) return <span className="prow-icon bad"><CircleX size={16} aria-hidden="true" /></span>;
   return <span className="prow-icon"><Circle size={16} aria-hidden="true" /></span>;
 }
 
 /** 题目列表。只显示题目名，不显示题号。 */
-export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
-  problems: ProblemRow[]; currentKey: string | null; dueReviews: number; onNavigate?: () => void;
+export function ProblemList({ problems, currentKey, onNavigate }: {
+  problems: ProblemRow[]; currentKey: string | null; onNavigate?: () => void;
 }) {
   const box = useRef<HTMLElement>(null);
   const ordered = sortProblems(problems);
   const slider = useSlider("plist", box, '.prow[aria-current="true"]', `${currentKey}:${ordered.map(p => p.key).join(",")}`);
   return (
     <>
-      {dueReviews > 0 && (
-        <Link to="/chat" className="review-nudge" onClick={onNavigate}>
-          <span className="nudge-icon"><RotateCcw size={16} aria-hidden="true" /></span>
-          <span>
-            <strong>有 {dueReviews} 项待回顾</strong>
-            <small>空闲时会在对话里安排小题</small>
-          </span>
-        </Link>
-      )}
       <nav className="plist" aria-label="题目" ref={box}>
         <span className={`${slider.className} prow-slider`} style={slider.style} aria-hidden="true" />
         <div className="plist-head">
@@ -119,14 +111,6 @@ export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
             </span>
           </Link>
         ))}
-        <div className="plist-sep" />
-        <Link to="/chat/general" className="prow" aria-current={currentKey === "general" ? "true" : undefined} onClick={onNavigate}>
-          <span className="prow-icon"><MessagesSquare size={16} aria-hidden="true" /></span>
-          <span className="prow-main">
-            <span className="prow-title">其他问题</span>
-            <span className="prow-state">概念、题意，或者不确定是哪道题</span>
-          </span>
-        </Link>
       </nav>
     </>
   );
@@ -220,10 +204,9 @@ function Statement({ text, figures, pages, onDocument }: { text: string; figures
 }
 
 /** 右栏：这道题的提交、这道题用到的知识点。 */
-export function SidePanel({ detail, onDiff, onAsk, onDocument }: { detail: ProblemDetail; onDiff: (a: string, b: string) => void; onAsk: (submissionKey: string) => void; onDocument?: () => void }) {
+export function SidePanel({ detail, onDiff, onDocument }: { detail: ProblemDetail; onDiff: (a: string, b: string) => void; onDocument?: () => void }) {
   const subs = detail.submissions;
   const latest = subs[0];
-  const canAsk = latest && latest.result !== "AC" && latest.result !== "PENDING";
   return (
     <div className="side">
       <Statement text={detail.statement ?? ""} figures={detail.figures ?? []} pages={detail.pages ?? []} onDocument={onDocument} />
@@ -242,16 +225,11 @@ export function SidePanel({ detail, onDiff, onAsk, onDocument }: { detail: Probl
             </div>
             {latest.grid && <Cells grid={latest.grid} large />}
             {subs.length > 1 && <ChangeNote change={detail.changes?.[latest.key]} onDiff={() => onDiff(subs[1].key, latest.key)} />}
-            {canAsk && (
-              <button type="button" className="btn btn-primary" onClick={() => onAsk(latest.key)}>
-                <MessageCircle size={16} aria-hidden="true" />问问为什么错
-              </button>
-            )}
           </div>
         )}
         {subs.length > 1 && (
-          <details className="submission-history"><summary>之前的 {subs.length - 1} 次提交</summary><div className="timeline">
-            {subs.slice(1, 6).map((sub, i) => (
+          <div className="timeline submission-history" aria-label="之前的全部提交">
+            {subs.slice(1).map((sub, i) => (
               <div key={sub.key} className="tl-item">
                 <span className={sub.result === "AC" ? "tl-dot ok" : sub.result === "PENDING" ? "tl-dot wait" : "tl-dot"} aria-hidden="true" />
                 <span className="tl-main">
@@ -259,13 +237,13 @@ export function SidePanel({ detail, onDiff, onAsk, onDocument }: { detail: Probl
                     <span>第 {sub.attemptNo} 次，{sub.resultText}{sub.grid && sub.result !== "AC" ? `，过 ${sub.grid.filter(Boolean).length} 组` : ""}</span>
                     <span className="side-time">{shortTime(sub.time)}</span>
                   </span>
+                  {sub.grid ? <Cells grid={sub.grid} large /> : <span className="note">{sub.result === "PENDING" ? "正在评测" : sub.result === "CE" ? "编译错误，未运行测试点" : "测试点结果正在取"}</span>}
                   {subs[i + 2] && <ChangeNote change={detail.changes?.[sub.key]} onDiff={() => onDiff(subs[i + 2].key, sub.key)} />}
                 </span>
               </div>
             ))}
-          </div></details>
+          </div>
         )}
-        {subs.length > 6 && <p className="note">更早的 {subs.length - 6} 次在“提交”页里</p>}
       </section>
       <section className="side-card" aria-labelledby="side-kp">
         <h2 id="side-kp"><Layers size={16} aria-hidden="true" />用到的知识点</h2>

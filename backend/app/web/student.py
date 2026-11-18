@@ -354,6 +354,16 @@ def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session =
     return {"messages": _thread_view(s, user, th)}
 
 
+@router.post("/threads/{key}/welcome")
+def welcome(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    th = _thread(s, user, key)
+    if th is not None:
+        from ..chat import proactive
+
+        proactive.on_open_problem(s, user.student_id, th, user.course)
+    return {"messages": _thread_view(s, user, th)}
+
+
 @router.post("/threads/{key}/review")
 def offer_review(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
