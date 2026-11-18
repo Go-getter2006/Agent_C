@@ -1870,12 +1870,15 @@
 
 .kg-color .field {
   height: var(--control-h);
-  width: auto;
-  min-width: 180px;
+  width: 196px;
 }
 
 .kg-search .field {
-  width: 180px;
+  width: 150px;
+}
+
+.kg-topic-pick .field {
+  width: 140px;
 }
 
 .kg-toolbar > .seg:last-child {
@@ -1961,6 +1964,16 @@
   transform-origin: 0 0;
 }
 
+.kg-canvas-glide {
+  transition: transform 0.4s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kg-canvas-glide {
+    transition: none;
+  }
+}
+
 .kg-band {
   position: absolute;
   border-radius: var(--r-lg);
@@ -1969,7 +1982,8 @@
   pointer-events: none;
 }
 
-.kg-band-D {
+/* 数据结构的班带上的 C 语言基础：虚线框，退一步 */
+.kg-band-base {
   background: rgba(250, 251, 252, 0.85);
   border-style: dashed;
   border-color: var(--line-strong);
@@ -1978,40 +1992,36 @@
 .kg-band-head {
   display: flex;
   align-items: baseline;
-  gap: var(--sp-10);
+  flex-wrap: wrap;
+  gap: 2px var(--sp-10);
   padding: var(--sp-12) var(--sp-16);
 }
 
-.kg-band-head strong {
+.kg-band-head strong,
+.kg-iso-head strong {
   font-size: var(--fs-15);
   font-weight: 600;
   color: var(--ink);
 }
 
-.kg-band-head span {
+.kg-band-head span,
+.kg-iso-head span {
   font-size: var(--fs-12);
   color: var(--ink-3);
 }
 
-.kg-topic {
+.kg-iso-head {
   position: absolute;
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  line-height: 1.3;
+  align-items: baseline;
+  gap: var(--sp-10);
   pointer-events: none;
 }
 
-.kg-topic-code {
-  font-family: var(--font-code);
-  font-size: 10.5px;
+.kg-tip-topic {
+  display: block;
+  font-size: var(--fs-12);
   color: var(--ink-3);
-}
-
-.kg-topic-name {
-  font-size: var(--fs-13);
-  font-weight: 600;
-  color: var(--ink-2);
 }
 
 .kg-edges {
@@ -2024,13 +2034,13 @@
 
 .kg-edge {
   fill: none;
-  stroke: #b4bac3;
+  stroke: #aab1bb;
   stroke-width: 1.2;
   transition: opacity 0.15s;
 }
 
 .kg-edge-base {
-  opacity: 0.6;
+  opacity: 0.7;
 }
 
 .kg-edge-cross {
@@ -2050,8 +2060,9 @@
   stroke-width: 2;
 }
 
+/* 聚焦时和这条链无关的线几乎隐去 */
 .kg-edge-dim {
-  opacity: 0.12;
+  opacity: 0.07;
 }
 
 .kg-node {
@@ -2177,7 +2188,7 @@
 }
 
 .kg-node-dim {
-  opacity: 0.28;
+  opacity: 0.3;
 }
 
 .kg-tip {

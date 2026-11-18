@@ -1,7 +1,7 @@
 // 知识图谱页：上面一排筛选，中间是图（也可以切成表），点一个知识点在右边看详情。
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, BookOpen, CircleAlert, Link2, Network, Route, Search, Table2, X } from "lucide-react";
+import { ArrowRight, BookOpen, CircleAlert, Link2, Network, Search, Table2, X } from "lucide-react";
 import { get } from "../../api";
 import { StackedBar } from "../../components/charts";
 import KnowledgeGraph, { hasData, type KMEdge, type KMNode, type KMTopic } from "../../components/KnowledgeGraph";
@@ -33,8 +33,8 @@ interface KpDetail {
 
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
 
-function Panel({ cls, node, home, studentName, chain, onChain, onSelect, onClose }: {
-  cls: ClassInfo; node: KMNode; home: "C" | "D"; studentName: string | null; chain: boolean; onChain: (v: boolean) => void;
+function Panel({ cls, node, home, studentName, onSelect, onClose }: {
+  cls: ClassInfo; node: KMNode; home: "C" | "D"; studentName: string | null;
   onSelect: (code: string) => void; onClose: () => void;
 }) {
   const detail = useLoad(() => get<KpDetail>(`/api/teacher/classes/${cls.key}/knowledge-map/${node.code}`), [cls.key, node.code]);
@@ -77,13 +77,6 @@ function Panel({ cls, node, home, studentName, chain, onChain, onSelect, onClose
             <p className="note">还没有人有证据。全班平均准备度 {node.readiness === null ? "没有数据" : node.readiness.toFixed(2)}，是按 C 语言里的前置知识推算的。</p>
           </section>
         ) : <p className="note">{foundation ? "学生在 C 语言里还没有这方面的证据。" : "这个班的作业还没涉及这个知识点。"}</p>}
-
-        <section>
-          <label className="check">
-            <input type="checkbox" checked={chain} onChange={(e) => onChain(e.target.checked)} />
-            <Route size={15} aria-hidden="true" />在图上高亮整条前置、后续的链
-          </label>
-        </section>
 
         {detail.loading && !d && <Loading lines={4} />}
         {detail.error && <Problem message={detail.error} onRetry={detail.reload} />}
@@ -167,12 +160,13 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   const [scope, setScope] = useState<"home" | "all">("home");
   const [view, setView] = useState<"graph" | "table">("graph");
   const [showCross, setShowCross] = useState(true);
-  const [chain, setChain] = useState(false);
   const [selected, setSelected] = useState<string | null>(params.get("kp"));
   const [search, setSearch] = useState("");
+  const [topic, setTopic] = useState("");
+  const [shape, setShape] = useState({ hidden: 0, isolated: 0 });
+  const onLayout = useCallback((v: { hidden: number; isolated: number }) => setShape(v), []);
   const d = data.data;
 
-  useEffect(() => setChain(false), [selected]);
   useEscape(() => setSelected(null), selected !== null);
 
   const home: "C" | "D" = d?.class.course === "D" ? "D" : "C";
@@ -182,7 +176,12 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   const courseNames = useMemo(() => Object.fromEntries((d?.courses ?? []).map((c) => [c.code, c.name])), [d]);
   const node = d?.nodes.find((n) => n.code === selected) ?? null;
   const studentName = d?.students.find((s) => s.userId === student)?.name ?? null;
-  const cross = d ? d.edges.filter((e) => e.cross).length : 0;
+  // 只数这次看得到的边（只看数据结构时，跨课程的边不算）
+  const shownEdges = useMemo(() => {
+    const codes = new Set(nodes.map((n) => n.code));
+    return (d?.edges ?? []).filter((e) => codes.has(e.from) && codes.has(e.to));
+  }, [d, nodes]);
+  const cross = shownEdges.filter((e) => e.cross).length;
 
   const setStudent = (id: string) => {
     const next = new URLSearchParams(params);
@@ -198,7 +197,7 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
     <div className="kg-page">
       <div className="kg-toolbar card">
         {multi && (
-          <Segmented label="范围" value={scope} onChange={(v) => { setScope(v); setSelected(null); }}
+          <Segmented label="范围" value={scope} onChange={(v) => { setScope(v); setSelected(null); setTopic(""); }}
             options={[{ value: "home", label: "数据结构" }, { value: "all", label: "加上 C 语言基础" }]} />
         )}
         <label className="kg-color">
@@ -206,6 +205,13 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
           <select className="field" value={student} onChange={(e) => setStudent(e.target.value)}>
             <option value="">全班的分布</option>
             {d.students.map((s) => <option key={s.userId} value={s.userId}>{s.name}（{s.userId}）</option>)}
+          </select>
+        </label>
+        <label className="kg-color kg-topic-pick">
+          <span className="eyebrow">章</span>
+          <select className="field" value={topic} onChange={(e) => setTopic(e.target.value)}>
+            <option value="">全部</option>
+            {d.topics.filter((t) => courses.includes(t.course)).map((t) => <option key={t.code} value={t.code}>{t.code} {t.name}</option>)}
           </select>
         </label>
         <label className="search kg-search">
@@ -246,19 +252,19 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
         {multi && scope === "all" && <span><i className="kg-line kg-line-cross" />跨课程的前置关系</span>}
         <span><i className="kg-line kg-line-in" />前置</span>
         <span><i className="kg-line kg-line-out" />后续</span>
-        <span className="kg-counts note num">{nodes.length} 个知识点 · {d.edges.length} 条前置{multi ? `，其中 ${cross} 条跨课程` : ""} · 图：{d.status}</span>
+        <span className="kg-counts note num">{nodes.length} 个知识点 · {shownEdges.length} 条前置{cross > 0 ? `，其中 ${cross} 条跨课程` : ""}{view === "graph" && shape.hidden > 0 ? `（${shape.hidden} 条能由别的路径推出来，图上没画）` : ""} · 图：{d.status}</span>
       </div>
 
       {view === "graph" ? (
         <div className="kg-stage card">
           <KnowledgeGraph nodes={nodes} edges={d.edges} topics={d.topics} courses={courses} courseNames={courseNames} home={home}
-            showCross={showCross} chain={chain} selected={selected} search={search} mode={student ? "student" : "class"}
-            onSelect={setSelected} fitKey={`${scope}-${layoutKind}`} />
+            showCross={showCross} selected={selected} search={search} topic={topic} mode={student ? "student" : "class"}
+            onSelect={setSelected} onLayout={onLayout} fitKey={`${scope}-${layoutKind}-${showCross}`} />
           {node && courses.includes(node.course) && (
-            <Panel cls={cls} node={node} home={home} studentName={studentName} chain={chain} onChain={setChain}
+            <Panel cls={cls} node={node} home={home} studentName={studentName}
               onSelect={setSelected} onClose={() => setSelected(null)} />
           )}
-          <p className="kg-hint note">拖动可以移动，Ctrl + 滚轮缩放。点一个知识点看详情。</p>
+          <p className="kg-hint note">从左到右是学习的先后。点一个知识点：整条前置链和后续链亮起来，右边看详情。拖动移动，Ctrl + 滚轮缩放。</p>
         </div>
       ) : (
         <Card bodyClass="" className="table-card">
