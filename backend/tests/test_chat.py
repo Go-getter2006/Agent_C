@@ -84,7 +84,8 @@ def test_seeded_story(demo):
             ("DEBUG", "R08", "H1", "甲"), ("REPLY", "R08", "H2", "乙")]
         st = steps[0]
         assert st.bind_by == "thread" and st.root_error_code == "TY09" and st.root_skill_code == "C06.03.02"
-        assert st.willingness == "HIGH" and st.base_level == "基本掌握" and st.check_result["ok"]
+        # 演示故事里他在“最值”上反复出同一个错（OJ 上没过的提交也是证据），所以是“待加强”
+        assert st.willingness == "HIGH" and st.base_level == "待加强" and st.check_result["ok"]
         assert st.prompt_version and st.workflow_version and st.evidence_card["situation"] == "全是负数"
         # 昨天那一回合：给了示例代码后通过，出了一道小题
         rounds = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 410)).all()
@@ -93,7 +94,7 @@ def test_seeded_story(demo):
         stuck = s.scalars(select(m.StuckPoint).order_by(m.StuckPoint.id)).all()
         assert [(p.problem_id, p.skill_code, p.nth, p.resolution, p.passed_after) for p in stuck] == [
             (301, "C02.01.02", 1, "example_given", None), (410, "C06.03.02", 1, "example_given", True)]
-        assert mastery.skill_state(s, UID, "C06.03.02").level == "基本掌握"
+        assert mastery.skill_state(s, UID, "C06.03.02").level == "待加强"
         assert mastery.skill_state(s, UID, "C02.01.02").level == "待加强"
 
 

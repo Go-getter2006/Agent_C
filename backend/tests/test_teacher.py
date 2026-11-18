@@ -37,6 +37,18 @@ def test_roles_are_separated(client):
         assert client.get(path).status_code == 403, path
 
 
+def _avg_to_pass(server_id: int, uid: str) -> float:
+    """独立算一遍：每道通过的题交到第几次第一次通过，取平均。"""
+    with db.session_scope() as s:
+        subs = s.scalars(select(m.Submission).where(m.Submission.server_id == server_id, m.Submission.user_id == uid)
+                         .order_by(m.Submission.submission_id)).all()
+    by: dict[int, list[str]] = {}
+    for x in subs:
+        by.setdefault(x.problem_id, []).append(x.judgement)
+    tries = [js.index("AC") + 1 for js in by.values() if "AC" in js]
+    return round(sum(tries) / len(tries), 1)
+
+
 def test_class_overview_and_students(client, demo):
     login(client, "demo-teacher")
     sid = demo["server_id"]
@@ -51,8 +63,8 @@ def test_class_overview_and_students(client, demo):
     assert [h["title"] for h in ov["homeworks"]] == ["上机练习：一维数组", "上机练习：循环结构", "上机练习：选择结构"]
     rows = client.get(f"/api/teacher/classes/{key}/students").json()
     me = next(r for r in rows["students"] if r["userId"] == UID)
-    assert (me["name"], me["tried"], me["passed"], me["submissions"], me["firstTryRate"], me["stuck"]) == (
-        "林晓", 12, 9, 22, 25, 2)
+    assert (me["name"], me["tried"], me["passed"], me["submissions"], me["stuck"]) == ("林晓", 12, 9, 22, 2)
+    assert me["avgToPass"] == _avg_to_pass(demo["server_id"], UID)
     assert rows["total"] == 14 and len(rows["students"]) == 12
 
 
@@ -202,7 +214,8 @@ def test_overview_kpis_trend_attention(client, demo):
     login(client, "demo-teacher")
     ov = client.get(f"/api/teacher/classes/c{demo['server_id']}-31/overview").json()
     k = ov["kpis"]
-    assert k["students"] == 12 and 0 <= k["active"] <= 12 and "firstTryDelta" in k and "review" in k
+    assert k["students"] == 12 and 0 <= k["active"] <= 12 and "avgToPassDelta" in k and "review" in k
+    assert "firstTryRate" not in k                      # 不再把“第一次就通过的比例”当成主要指标
     assert len(ov["trend"]) == 8 and ov["trend"][-1]["label"] == "本周"
     assert sum(w["submissions"] for w in ov["trend"]) > 100
     names = {a["name"]: a["reasons"] for a in ov["attention"]}

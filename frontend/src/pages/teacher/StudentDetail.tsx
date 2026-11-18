@@ -41,14 +41,15 @@ interface Detail {
 
 interface ProfileRow {
   code: string; name: string; level: string; perf: number | null; perfLower: number | null; understanding: number | null;
-  nAssess: number; independence: number | null; retention: number | null; calibration: number | null; bias: number | null;
+  nAssess: number; independence: number | null; debugging: number | null; nEpisodes: number; retention: number | null;
+  calibration: number | null; bias: number | null;
   prereq: number | null; graph: number | null; fused: number | null; flags: { code: string; text: string }[];
 }
 
 interface Assessment {
   id: number; skill: string; skillName: string; kp: string; level: number | null; levelName: string; rawLevel: number | null;
   ruleLevel: number | null; confidence: number; evidence: string[]; misconception: string; adjusted: string; source: string;
-  problem: string; time: string;
+  problem: string; time: string; basis: "chat" | "code"; basisName: string;
 }
 
 interface AgentReview {
@@ -58,11 +59,12 @@ interface AgentReview {
 
 const DIMS: { key: keyof ProfileRow; name: string; tip: string }[] = [
   { key: "perf", name: "做题", tip: "掌握程度算法 v2：评测结果、提交次数、求助级别、雷同" },
-  { key: "understanding", name: "理解", tip: "智能体读学生在对话里自己说的话，按量规评 0~3 档" },
+  { key: "understanding", name: "理解", tip: "智能体按量规评 0~3 档：问过问题的看他自己说的话；没问过的看他在 OJ 上怎么改的代码" },
   { key: "independence", name: "独立", tip: "通过之前要了多少帮助：一次做对 1，给了示例代码才改对 0" },
+  { key: "debugging", name: "改错", tip: "只看 OJ 上的提交：没过的题交了几次改对、同一个错误是不是反复出现、是不是急着重交" },
   { key: "retention", name: "保持", tip: "复习时还记得多少（半衰期回归）" },
   { key: "calibration", name: "自知", tip: "小题前选的把握和实际对错的吻合程度" },
-  { key: "prereq", name: "先修", tip: "知识图上先修技能的掌握程度" },
+  { key: "prereq", name: "前置知识", tip: "学它之前要先会的那些知识点掌握得怎么样（知识图上的前置关系）" },
   { key: "fused", name: "综合", tip: "几个维度按学到的权重融合（见“模型对比”页）" },
 ];
 
@@ -83,8 +85,8 @@ function AgentCard({ d }: { d: Detail }) {
   const r = d.agentReview;
   return (
     <Card title={<><Bot size={16} aria-hidden="true" /> 智能体评估</>}
-      sub="全部自动：对话结束后智能体评“理解”（结论要附上学生原话，和事实冲突时会下调）；学生有了新数据，智能体自动重写下面的评语">
-      {!r && <p className="note"><Sparkles size={14} aria-hidden="true" /> 这个学生有了做题或对话的数据以后，智能体会自动写评估。</p>}
+      sub="全部自动。问过问题的，智能体看他在对话里说的话；没问过的（可能就是会，不需要问），看他在 OJ 上怎么改的代码。结论要附上原话或改动的代码行，和事实冲突时会下调">
+      {!r && <p className="note"><Sparkles size={14} aria-hidden="true" /> 这个学生有了做题数据以后，智能体会自动写评估。</p>}
       {r && (
         <div className="agent-review">
           <p>{r.summary}</p>
@@ -98,7 +100,7 @@ function AgentCard({ d }: { d: Detail }) {
           <span className="note">{r.source === "llm" ? "智能体自动写的" : "没有配置大模型，按规则自动生成"} · {shortTime(r.time)}</span>
         </div>
       )}
-      {d.assessments.length === 0 ? <p className="note">还没有评过“理解”：学生在对话里回答过问题、说过自己的想法以后才有。</p> : (
+      {d.assessments.length === 0 ? <p className="note">还没有评过“理解”：问过智能体问题，或者有题没过、后来自己改对了，就会自动评。</p> : (
         <ul className="assess-list">
           {d.assessments.map((a) => (
             <li key={a.id}>
@@ -106,7 +108,10 @@ function AgentCard({ d }: { d: Detail }) {
                 <span><strong>{a.skillName}</strong> <span className="note">{a.problem ? `「${a.problem}」` : a.kp}</span></span>
                 <span className={a.level !== null ? LEVEL_PILL[a.level] : "pill"}>{a.levelName}</span>
               </div>
-              {a.evidence.map((q, i) => <span key={i} className="assess-quote"><Quote size={12} aria-hidden="true" />{q}</span>)}
+              <span className="note">{a.basisName}</span>
+              {a.evidence.map((q, i) => a.basis === "code"
+                ? <code key={i} className="assess-code">{q}</code>
+                : <span key={i} className="assess-quote"><Quote size={12} aria-hidden="true" />{q}</span>)}
               {a.misconception && <span className="note">看出来的错误想法：{a.misconception}</span>}
               <span className="note">
                 {a.source === "llm" ? `大模型评的，把握 ${a.confidence.toFixed(2)}` : "规则评的"}
@@ -247,7 +252,7 @@ export default function StudentDetail() {
                     </Card>
                   )}
                   {d.course === "D" && d.readiness.length > 0 && (
-                    <Card title="还没有证据的知识点" sub="按 C 语言里的先修知识点推算的准备度，只作参考">
+                    <Card title="还没有证据的知识点" sub="按 C 语言里的前置知识推算的准备度，只作参考">
                       <ul className="ready-list">
                         {d.readiness.slice(0, 10).map((r) => (
                           <li key={r.code}>
@@ -307,7 +312,7 @@ export default function StudentDetail() {
                     </Card>
                   )}
                   {d.rootCauses.length > 0 && (
-                    <Card title="根因推断" sub="图模型（试验中）认为：这些技能反复失败，真正没掌握的可能是它的先修">
+                    <Card title="根因推断" sub="图模型（试验中）认为：这些技能反复失败，真正没掌握的可能是它的前置知识">
                       <ul className="rv-list">
                         {d.rootCauses.map((r, i) => (
                           <li key={i}><div className="rv-top"><span>{r.skill.name} ← <strong>{r.root.name}</strong></span><span className="num">{r.p.toFixed(2)}</span></div></li>

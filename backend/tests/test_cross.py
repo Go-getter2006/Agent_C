@@ -131,7 +131,7 @@ def test_ds_pages(database):
         warn = page["warning"]
         assert [x["name"] for x in warn["students"]] == ["基础弱"] and warn["topics"][0]["code"] == "C10.01"
         link = next(x for x in page["links"] if x["c"]["code"] == C_PTR and x["d"]["code"] == D_LIST)
-        assert link["status"] == "accepted" and link["relationName"] == "先修"
+        assert link["status"] == "accepted" and link["relationName"] == "前置" and link["rationale"]
         r = c.post(f"/api/teacher/cross/{link['id']}/review", json={"action": "reject"}).json()
         assert r["status"] == "rejected" and r["decidedBy"] == "teacher"      # 老师可以改（可选）
         # 没有手动入口：补充联系、检验都是每天夜里自动做
@@ -156,7 +156,7 @@ def test_ds_pages(database):
 def test_links_are_managed_automatically(database):
     """每天夜里：智能体自动补充联系（把握大的直接采用）、数据检验后自动采用或不用；老师改过的不动。"""
     answers = {"D02.02": {"links": [{"c": "C10.03.01", "d": D_LIST, "type": "used_for", "why": "遍历要移动指针", "confidence": 0.9},
-                                    {"c": "C06.02.01", "d": D_LIST, "type": "similar", "why": "顺序访问", "confidence": 0.4}]}}
+                                    {"c": "C06.02.01", "d": D_LIST, "type": "hyponym_of", "why": "顺序访问", "confidence": 0.4}]}}
 
     def backend(messages, json_mode, max_tokens, temperature):
         kp = next((k for k in answers if k in messages[-1]["content"] or "链表结点" in messages[-1]["content"]), None)

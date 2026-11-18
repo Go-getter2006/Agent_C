@@ -128,7 +128,7 @@ export interface ProgressData {
   summary: {
     passed: number;
     total: number;
-    firstTryRate: number | null;
+    avgToPass: number | null;  // 通过的题平均交到第几次才通过
     avgSubmissions: number | null;
     thisWeek: number;
     lastWeek: number;
@@ -144,8 +144,7 @@ export interface ProgressData {
     homeworks: Homework[];
     tried: number;
     passed: number;
-    firstTryPassed: number;
-    firstTryRate: number | null;
+    avgToPass: number | null;
     avgSubmissions: number | null;
     weeks: { label: string; start: string; submissions: number; passed: number }[];
   };

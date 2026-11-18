@@ -121,7 +121,7 @@ function Links({ d, reload }: { d: CrossData; reload: () => void }) {
                   <td><span className="cell-title">{l.c.name}</span><span className="cell-sub">{l.c.kp} · <Code>{l.c.code}</Code></span></td>
                   <td className="nowrap">{l.relationName}</td>
                   <td><span className="cell-title">{l.d.name}</span><span className="cell-sub">{l.d.kp} · <Code>{l.d.code}</Code></span></td>
-                  <td><span className="nowrap">{SOURCE[l.source] ?? l.source}</span>{l.rationale && l.source !== "seed" && <span className="cell-sub">{l.rationale}</span>}</td>
+                  <td><span className="nowrap">{SOURCE[l.source] ?? l.source}</span>{l.rationale && <span className="cell-sub">{l.rationale}</span>}</td>
                   <td>
                     <span className={VERDICT[l.verdict]?.cls ?? "pill"}>{VERDICT[l.verdict]?.text ?? l.verdict}</span>
                     {(l.nWith + l.nWithout) > 0 && (
@@ -149,6 +149,13 @@ function Links({ d, reload }: { d: CrossData; reload: () => void }) {
           </table>
         </div>
       )}
+      <div className="card-foot relation-help">
+        <b>关系是什么意思</b>（和 TransKT 的四种关系一致；箭头都是从 C 语言指向数据结构）：
+        <span><i>前置</i>学数据结构的这一点之前，要先会 C 的那一点（比如先会指针，才能写链表结点）</span>
+        <span><i>用到</i>数据结构的这一点里直接用到 C 的那一点（比如循环队列的下标用到取模）</span>
+        <span><i>组成部分</i>C 的那一点是它的一部分（比如顺序表插入里包含了数组元素后移）</span>
+        <span><i>是一种</i>C 的那一点是它的一个特例或一种具体做法（比如冒泡排序是交换排序的一种）</span>
+      </div>
       <p className="card-foot">
         数据检验：C 那头估计 ≥ {d.params.mastered} 算掌握了，比较两组学生在数据结构这头新题一次做对的比例；两组合起来至少 {d.params.minN} 次才下结论，
         “掌握了的更容易做对”的后验概率 ≥ {d.params.supportProb} 算数据支持。数据结构的估计 = η·C 那头给的先验 + (1−η)·自己的证据，

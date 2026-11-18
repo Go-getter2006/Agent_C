@@ -27,7 +27,7 @@ import datetime as dt
 import math
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import config, db
@@ -36,6 +36,7 @@ from .taxonomy import LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_WEAK, kp_of
 
 Z80 = 1.2816  # 80% 双侧区间
 AGENT_EVENTS = frozenset({"agent_understanding"})   # 智能体评估记下的证据
+V2_ONLY_EVENTS = AGENT_EVENTS | {"submit_failed"}    # v1（附件一的基线）不用的证据
 
 
 @dataclass
@@ -149,7 +150,7 @@ def _skill_states_v1(s: Session, user_id: str, at: dt.datetime, decay: bool) -> 
     rows = _rows(s, user_id, at)
     out: dict[str, SkillState] = {}
     for r in rows:
-        if r.ts > at or r.event_type in AGENT_EVENTS:
+        if r.ts > at or r.event_type in V2_ONLY_EVENTS:
             continue
         st = out.setdefault(r.skill_code, SkillState(r.skill_code))
         days = max(0.0, (at - r.ts).total_seconds() / 86400.0)
@@ -221,7 +222,7 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
         st.half_life = h
         for r in rows:
             days = max(0.0, (at - r.ts).total_seconds() / 86400.0)
-            w = r.weight * (r.reliability if r.reliability is not None else 1.0)
+            w = r.weight * (r.reliability if r.reliability is not None else 1.0) * cfg["event_scale"].get(r.event_type, 1.0)
             if decay:
                 w *= 0.5 ** (days / h)
             if r.event_type in AGENT_EVENTS:   # 智能体评估：只改估计值，不算练过
@@ -338,6 +339,25 @@ def record_pass(s: Session, user_id: str, label: m.ProblemLabel | None, source_k
     for code, factor in problem_skills(label):
         add_evidence(s, user_id, code, event, True, weight * factor, source_key, ts, independent, reliability)
     return event
+
+
+def record_failed_submission(s: Session, sub: m.Submission, skill_code: str) -> bool:
+    """一次没通过的提交（只在 v2 用）。不需要学生问过问题：在 OJ 上交了，就是证据。
+
+    记到出错的那个技能上（可能不是这道题的主技能，比如题考的是求最值，错在下标越界）。
+    同一道题上同一个技能，第几次没过分量递减，见 config.MASTERY["w_submit_failed"]。
+    """
+    if not skill_code:
+        return False
+    weights = config.MASTERY["w_submit_failed"]
+    prefix = f"fail:{sub.server_id}:{sub.problem_id}:"
+    earlier = s.scalar(select(func.count()).select_from(m.SkillEvidence).where(
+        m.SkillEvidence.user_id == sub.user_id, m.SkillEvidence.skill_code == skill_code,
+        m.SkillEvidence.event_type == "submit_failed", m.SkillEvidence.source_key.like(prefix + "%"))) or 0
+    if earlier >= len(weights):
+        return False
+    return add_evidence(s, sub.user_id, skill_code, "submit_failed", False, weights[earlier],
+                        f"{prefix}{sub.submission_id}", sub.submit_time or db.now())
 
 
 def record_stuck(s: Session, user_id: str, skill_code: str, nth: int, source_key: str,

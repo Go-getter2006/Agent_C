@@ -2613,3 +2613,28 @@
   flex-direction: column;
   gap: var(--sp-4);
 }
+
+.assess-code {
+  display: block;
+  font-family: var(--font-code);
+  font-size: var(--fs-12);
+  padding: var(--sp-4) var(--sp-8);
+  border-radius: var(--r-sm, 4px);
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.relation-help {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.relation-help i {
+  font-style: normal;
+  font-weight: 600;
+  display: inline-block;
+  min-width: 5em;
+  color: var(--ink-1, inherit);
+}

@@ -317,8 +317,9 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
     stuck_week = len(data.stuck_points(week))
     kpis = {
         "students": len(data.ids), "active": this["active"], "activeDelta": this["active"] - last["active"],
-        "firstTryRate": this["firstTryRate"], "firstTryDelta": (None if this["firstTryRate"] is None or last["firstTryRate"] is None
-                                                               else this["firstTryRate"] - last["firstTryRate"]),
+        "passed": this["passed"], "passedDelta": this["passed"] - last["passed"],
+        "avgToPass": this["avgToPass"], "avgToPassDelta": (None if this["avgToPass"] is None or last["avgToPass"] is None
+                                                           else round(this["avgToPass"] - last["avgToPass"], 1)),
         "submissions": this["submissions"], "submissionsDelta": this["submissions"] - last["submissions"],
         "stuckThisWeek": stuck_week or 0, "suspicious": len(fps),
         "review": review.teacher_stats(s, data.ids, now, data.course),
@@ -329,8 +330,17 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
             "homeworks": homeworks}
 
 
+def tries_to_pass(subs: list[m.Submission]) -> int | None:
+    """交到第几次第一次通过；还没通过返回 None。"""
+    return next((i for i, x in enumerate(subs, start=1) if x.judgement == "AC"), None)
+
+
 def _weekly(s: Session, data: "_ClassData", now: dt.datetime, weeks: int = 8) -> list[dict]:
-    """按周：交了多少次、多少人交过、新题第一次就通过的比例、求助回合数。旧的在前。"""
+    """按周：交了多少次、多少人交过、通过了几道题、这些题平均交几次才通过、求助回合数。旧的在前。
+
+    不用“第一次就通过的比例”：OJ 上交一次没有代价，学生常常先交上去看看；格式小错也算没过。
+    改错的过程（交几次、怎么改的）比第一次过没过更能说明会不会。
+    """
     local = now.astimezone(db.BEIJING)
     monday = (local - dt.timedelta(days=local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     rounds = s.scalars(select(m.ChatRound.started_at).where(
@@ -340,19 +350,19 @@ def _weekly(s: Session, data: "_ClassData", now: dt.datetime, weeks: int = 8) ->
         start, end = monday - dt.timedelta(weeks=i), monday - dt.timedelta(weeks=i - 1)
         n = 0
         people = set()
-        first_total = first_ok = 0
+        tries: list[int] = []
         for uid in data.ids:
             for subs in data.subs[uid].values():
                 inside = [x for x in subs if x.submit_time and start <= x.submit_time < end]
                 n += len(inside)
                 if inside:
                     people.add(uid)
-                if subs and subs[0].submit_time and start <= subs[0].submit_time < end:
-                    first_total += 1
-                    first_ok += subs[0].judgement == "AC"
+                k = tries_to_pass(subs)
+                if k is not None and subs[k - 1].submit_time and start <= subs[k - 1].submit_time < end:
+                    tries.append(k)
         out.append({"label": "本周" if i == 0 else f"{start.month}/{start.day}", "start": start.date().isoformat(),
-                    "submissions": n, "active": len(people),
-                    "firstTryRate": round(100 * first_ok / first_total) if first_total else None,
+                    "submissions": n, "active": len(people), "passed": len(tries),
+                    "avgToPass": round(sum(tries) / len(tries), 1) if tries else None,
                     "rounds": sum(1 for t in rounds if start <= t < end)})
     return out
 
@@ -367,20 +377,20 @@ def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
         m.CodeFingerprint.suspicious.is_(True))).all()) if data.ids else Counter()
     stuck_week = Counter(sp.user_id for sp in data.stuck_points(week))
 
-    def first_try(uid: str) -> tuple[int, int]:
-        tried = [v for v in data.subs[uid].values() if v]
-        return sum(1 for v in tried if v[0].judgement == "AC"), len(tried)
+    def tries_of(uid: str) -> list[int]:
+        return [k for v in data.subs[uid].values() if v and (k := tries_to_pass(v)) is not None]
 
-    totals = [first_try(uid) for uid in data.ids]
-    n_all = sum(n for _ok, n in totals)
-    class_rate = 100 * sum(ok for ok, _n in totals) / n_all if n_all else None
+    all_tries = [k for uid in data.ids for k in tries_of(uid)]
+    class_avg = sum(all_tries) / len(all_tries) if all_tries else None
     for st in data.students:
         reasons = []
         per = data.subs[st.user_id]
         tried = [k for k, v in per.items() if v]
-        ok, n = first_try(st.user_id)
-        if class_rate is not None and n >= 5 and 100 * ok / n <= class_rate - 30:
-            reasons.append(f"一次通过率 {round(100 * ok / n)}%，全班是 {round(class_rate)}%")
+        mine = tries_of(st.user_id)
+        if class_avg is not None and len(mine) >= 4:
+            avg = sum(mine) / len(mine)
+            if avg >= class_avg * 1.6 and avg - class_avg >= 1:
+                reasons.append(f"平均交 {avg:.1f} 次才通过，全班是 {class_avg:.1f} 次")
         if stuck_week.get(st.user_id, 0) >= 2:
             reasons.append(f"最近 7 天卡住 {stuck_week[st.user_id]} 次")
         if st.user_id in stubborn:
@@ -441,7 +451,7 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
         per = data.subs[st.user_id]
         tried = [k for k, v in per.items() if v]
         passed = sum(1 for k in tried if any(x.judgement == "AC" for x in per[k]))
-        first = sum(1 for k in tried if per[k][0].judgement == "AC")
+        tries = [k for v in per.values() if v and (k := tries_to_pass(v)) is not None]
         total = sum(len(per[k]) for k in tried)
         times = [x.submit_time for k in tried for x in per[k] if x.submit_time]
         levels = Counter(kp.level for kp in data.kps[st.user_id].values())
@@ -451,7 +461,7 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
             "copies": copied.get(st.user_id, 0),
             "activeDays": len({x.submit_time.astimezone(db.BEIJING).date() for k in tried for x in per[k] if x.submit_time}),
             "userId": st.user_id, "name": st.name, "tried": len(tried), "passed": passed, "submissions": total,
-            "firstTryRate": round(100 * first / len(tried)) if tried else None,
+            "avgToPass": round(sum(tries) / len(tries), 1) if tries else None,
             "weak": levels.get("待加强", 0), "mastered": levels.get("已掌握", 0),
             "stuck": stuck.get(st.user_id, 0), "stubborn": stubborn.get(st.user_id, 0),
             "rounds": rounds.get(st.user_id, 0), "lastActive": max(times).isoformat() if times else None})
@@ -599,16 +609,17 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
 
 
 def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) -> dict:
-    """对话行为和做题表现：建构性提问占比、索要答案占比，各自和一次通过率的相关系数（描述性，样本少时不算）。"""
+    """对话行为和做题表现：建构性提问占比、索要答案占比，各自和“平均交几次才通过”的相关系数
+    （描述性，样本少时不算；负数表示这类对话多的学生，通过需要的次数少）。"""
     xs_c, xs_a, ys = [], [], []
     for uid in ids:
         dia = profile.dialogue_profile(s, uid, course)
-        tried = [v for v in subs.get(uid, {}).values() if v]
-        if dia["total"] < 5 or len(tried) < 3:
+        tries = [k for v in subs.get(uid, {}).values() if v and (k := tries_to_pass(v)) is not None]
+        if dia["total"] < 5 or len(tries) < 3:
             continue
         xs_c.append(dia["constructive"])
         xs_a.append(dia["answerSeeking"])
-        ys.append(sum(1 for v in tried if v[0].judgement == "AC") / len(tried))
+        ys.append(sum(tries) / len(tries))
 
     def corr(xs: list[float], ys_: list[float]) -> float | None:
         n = len(xs)

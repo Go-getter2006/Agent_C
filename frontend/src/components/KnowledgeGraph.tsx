@@ -1,7 +1,7 @@
 // 知识图谱画布：登录的这门课一张图。数据结构的班还可以带上它要用到的 C 语言知识点（“基础”，只有掌握程度），
-// 中间连着跨课程的先修关系。
+// 中间连着跨课程的前置关系关系。
 // 排法：一章一行（从上到下是课本的顺序），同一章的知识点从左到右；C 语言在上，数据结构在下。
-// 交互：拖动平移，Ctrl + 滚轮或按钮缩放，滚轮上下移动；悬停一个点，它的先修和后继亮起来，其他变淡；点一下打开右边的详情。
+// 交互：拖动平移，Ctrl + 滚轮或按钮缩放，滚轮上下移动；悬停一个点，它的前置知识和后续知识亮起来，其他变淡；点一下打开右边的详情。
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Maximize2, Minus, Plus } from "lucide-react";
 
@@ -47,7 +47,7 @@ const BAND_GAP = 56;
 const PAD = 16;
 
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
-// 箭头颜色和边的样式对应：普通、跨课程、指向它的先修、它通向的后继
+// 箭头颜色和边的样式对应：普通、跨课程、指向它的前置知识、它通向的后续
 const ARROWS: Record<string, string> = { base: "#b4bac3", cross: "#eb6834", in: "#2a78d6", out: "#111318" };
 const LEVEL_CLS: Record<string, string> = { 已掌握: "mastered", 基本掌握: "basic", 待加强: "weak", 还没练到: "none" };
 
@@ -315,7 +315,7 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
           const weak = n.dist[2] ?? 0;
           const shown = hasData(n);
           const foundation = n.course !== home;
-          // 数据结构的知识点还没有证据时：按 C 语言的先修推出来的准备度
+          // 数据结构的知识点还没有证据时：按 C 语言的前置知识推出来的准备度
           const ready = n.course === "D" && !shown ? (stu ? (stu.predicted ? stu.p : null) : n.readiness) : null;
           const label = stu
             ? `${n.name}，${stu.level}${stu.predicted ? "（推算）" : ""}`

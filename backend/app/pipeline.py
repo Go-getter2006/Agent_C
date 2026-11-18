@@ -39,6 +39,8 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
         labels = labeler.label_submission(s, server_id, submission_id)
         primary = next((lab for lab in labels if lab.role == "primary" and lab.confidence >= 0.5), None)
         if primary is not None and primary.skill_code:
+            # 在 OJ 上交了没过就是证据，不需要他问过问题（v2；同一道题同一个技能分量递减）
+            mastery.record_failed_submission(s, sub, primary.skill_code)
             review.on_recurrence(s, sub, primary.error_code, primary.skill_code)   # 改正后又出现
         from .chat import proactive
 

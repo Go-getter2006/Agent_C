@@ -74,14 +74,14 @@ function Panel({ cls, node, home, studentName, chain, onChain, onSelect, onClose
         ) : node.course === "D" ? (
           <section>
             <h3>准备度</h3>
-            <p className="note">还没有人有证据。全班平均准备度 {node.readiness === null ? "没有数据" : node.readiness.toFixed(2)}，是按 C 语言里的先修知识点推算的。</p>
+            <p className="note">还没有人有证据。全班平均准备度 {node.readiness === null ? "没有数据" : node.readiness.toFixed(2)}，是按 C 语言里的前置知识推算的。</p>
           </section>
         ) : <p className="note">{foundation ? "学生在 C 语言里还没有这方面的证据。" : "这个班的作业还没涉及这个知识点。"}</p>}
 
         <section>
           <label className="check">
             <input type="checkbox" checked={chain} onChange={(e) => onChain(e.target.checked)} />
-            <Route size={15} aria-hidden="true" />在图上高亮整条先修链
+            <Route size={15} aria-hidden="true" />在图上高亮整条前置、后续的链
           </label>
         </section>
 
@@ -91,16 +91,16 @@ function Panel({ cls, node, home, studentName, chain, onChain, onSelect, onClose
           <>
             {(d.prereqs.length > 0 || d.next.length > 0) && (
               <section>
-                <h3>先修和后继</h3>
+                <h3>前置知识和后续知识</h3>
                 <div className="kg-links">
                   {d.prereqs.map((p) => (
                     <button key={p.code} type="button" className={p.cross ? "kg-link kg-link-cross" : "kg-link"} onClick={() => onSelect(p.code)}>
-                      <span className="eyebrow">先修{p.cross ? " · 跨课程" : ""}</span>{p.name}
+                      <span className="eyebrow">前置{p.cross ? " · 跨课程" : ""}</span>{p.name}
                     </button>
                   ))}
                   {d.next.map((p) => (
                     <button key={p.code} type="button" className={p.cross ? "kg-link kg-link-cross" : "kg-link"} onClick={() => onSelect(p.code)}>
-                      <span className="eyebrow">后继{p.cross ? " · 跨课程" : ""}</span>{p.name}<ArrowRight size={13} aria-hidden="true" />
+                      <span className="eyebrow">后续{p.cross ? " · 跨课程" : ""}</span>{p.name}<ArrowRight size={13} aria-hidden="true" />
                     </button>
                   ))}
                 </div>
@@ -243,10 +243,10 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
             <span><i className="swatch kg-sw-uncovered" />作业还没涉及</span>
           </>
         )}
-        {multi && scope === "all" && <span><i className="kg-line kg-line-cross" />跨课程的先修</span>}
-        <span><i className="kg-line kg-line-in" />先修</span>
-        <span><i className="kg-line kg-line-out" />后继</span>
-        <span className="kg-counts note num">{nodes.length} 个知识点 · {d.edges.length} 条先修{multi ? `，其中 ${cross} 条跨课程` : ""} · 图：{d.status}</span>
+        {multi && scope === "all" && <span><i className="kg-line kg-line-cross" />跨课程的前置关系</span>}
+        <span><i className="kg-line kg-line-in" />前置</span>
+        <span><i className="kg-line kg-line-out" />后续</span>
+        <span className="kg-counts note num">{nodes.length} 个知识点 · {d.edges.length} 条前置{multi ? `，其中 ${cross} 条跨课程` : ""} · 图：{d.status}</span>
       </div>
 
       {view === "graph" ? (
@@ -269,7 +269,7 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
                   <th scope="col">知识点</th><th scope="col">章</th>
                   {student ? <th scope="col">{studentName}</th> : LEVELS.map((l) => <th key={l} scope="col" className="num">{l}</th>)}
                   <th scope="col" className="num">{student ? "估计" : "平均估计 / 准备度"}</th>
-                  <th scope="col">先修</th>
+                  <th scope="col">前置</th>
                 </tr>
               </thead>
               <tbody>
