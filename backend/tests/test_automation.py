@@ -12,7 +12,7 @@ from app.chat import workflow
 from app.web.app import create_app
 from app.xdoj import sync_meta
 from app.xdoj.daemon import Daemon
-from app.xdoj.fake import FakeJudge, FakeRun, FakeSubmission
+from app.xdoj.fake import FakeJudge, FakeRun, FakeSubmission, FakeXdoj
 
 UID = "2500000001"
 
@@ -53,7 +53,13 @@ def test_unknown_homework_and_student_trigger_sync(ctx, fake, clock):
         assert len(handled) == 1                                            # 新学生、新作业合并成一次
 
 
-def test_unknown_student_login_triggers_roster_sync(database):
+def test_unknown_student_login_triggers_roster_sync(database, monkeypatch):
+    """XDOJ 上有这个学生、密码也对，只是名单还没同步到：马上自动再同步一次。"""
+    from app.web import teacher as teacher_api
+
+    fx = FakeXdoj()
+    fx.student_passwords["2599001234"] = "x"
+    monkeypatch.setattr(teacher_api, "_test_transport", fx.transport())
     with db.session_scope() as s:
         srv = m.Server(code="c-t", name="C 语言（测试）", course="C", base_url="http://fake.test/xdoj-ssm")
         s.add(srv)

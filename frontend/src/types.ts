@@ -223,6 +223,8 @@ export interface AuthInfo {
   demo: boolean;
   demoAccount: string | null;
   teacherLogin: boolean;
-  // 可以登录的课程。只有一门时登录页不出现课程选择；server 是这门课的 XDOJ（演示数据时为空）
+  // 可以登录的课程；server 是这门课的 XDOJ（演示数据时为空）
   courses: { code: CourseCode; name: string; server: string | null }[];
+  // 首页一直显示的两门课。available 为 false：那台 XDOJ 还没接入，首页能切过去但不能登录
+  allCourses?: { code: CourseCode; name: string; server: string | null; available: boolean }[];
 }

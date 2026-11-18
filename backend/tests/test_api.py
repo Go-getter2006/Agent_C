@@ -27,11 +27,15 @@ def login(c: TestClient, name: str = UID, password: str = "test-pass"):
     return c.post("/api/auth/login", json={"loginName": name, "password": password})
 
 
-def test_login_required_and_wrong_password(client):
+def test_login_required_and_wrong_password(client, monkeypatch):
+    from app.web import teacher as teacher_api
+    from app.xdoj.fake import FakeXdoj
+
+    monkeypatch.setattr(teacher_api, "_test_transport", FakeXdoj().transport())   # 不在名单里的账号会去 XDOJ 试登
     for path in ("/api/homeworks", "/api/progress", "/api/threads/general", "/api/problems/p1-406"):
         assert client.get(path).status_code == 401
     assert login(client, password="nope").status_code == 401
-    assert login(client, name="9999999999").status_code == 401
+    assert login(client, name="9999999999").status_code == 401           # 名单里没有，XDOJ 也登不上
     r = login(client)
     assert r.status_code == 200 and r.json() == {"role": "student", "name": "林晓", "course": "C"}
     assert "httponly" in r.headers["set-cookie"].lower()

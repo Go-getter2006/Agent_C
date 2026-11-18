@@ -52,8 +52,6 @@ export const api = {
   me: () => request<Me>("GET", "/api/auth/me", undefined, true),
   login: (loginName: string, password: string, course: Me["course"]) =>
     request<{ role: Me["role"]; name: string }>("POST", "/api/auth/login", { loginName, password, course }, true),
-  teacherLogin: (server: string, userId: string, password: string) =>
-    request<{ role: Me["role"]; name: string }>("POST", "/api/teacher/login", { server, userId, password }, true),
   logout: () => post<{ ok: boolean }>("/api/auth/logout"),
 
   status: () => get<StatusInfo>("/api/status"),
