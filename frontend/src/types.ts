@@ -203,6 +203,13 @@ export interface ReviewPage {
 
 export type CourseCode = "C" | "D";
 
+/** 知识问答的一个问答主题。general 是以前的综合对话。 */
+export interface Topic {
+  key: string;
+  title: string;
+  time: string;
+}
+
 export interface Me {
   role: "student" | "teacher" | "admin";
   name: string;

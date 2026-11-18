@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, setUnauthorizedHandler } from "./api";
 import { useLoad } from "./lib/hooks";
+import { clearDrafts, setScope } from "./lib/memory";
 import type { Homework, Me, StatusInfo } from "./types";
 
 interface SessionValue {
@@ -14,22 +15,28 @@ interface SessionValue {
 const SessionContext = createContext<SessionValue>({ me: null, checked: false, setMe: () => undefined, logout: async () => undefined });
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [me, setMe] = useState<Me | null>(null);
+  const [me, setMeRaw] = useState<Me | null>(null);
   const [checked, setChecked] = useState(false);
+  // 本机记住的位置、草稿按账户和课程分开：先换好范围再渲染页面
+  const setMe = useCallback((value: Me | null) => {
+    setScope(value);
+    setMeRaw(value);
+  }, []);
 
   useEffect(() => {
     api.me().then(setMe).catch(() => setMe(null)).finally(() => setChecked(true));
     setUnauthorizedHandler(() => setMe(null)); // 会话过期：回到登录页
     return () => setUnauthorizedHandler(null);
-  }, []);
+  }, [setMe]);
 
   const logout = useCallback(async () => {
+    clearDrafts();   // 退出登录：清掉这台设备上没发出去的草稿
     try {
       await api.logout();
     } finally {
       setMe(null);
     }
-  }, []);
+  }, [setMe]);
 
   const value = useMemo(() => ({ me, checked, setMe, logout }), [me, checked, logout]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

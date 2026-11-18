@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef, type MouseEvent } from "react";
-import { Link } from "react-router-dom";
-import { ArrowLeft, ChevronRight, FileText, MessagesSquare, RotateCcw } from "lucide-react";
+import { ArrowLeft, ChevronRight, FileText } from "lucide-react";
 import type { Homework, ProblemRow } from "../types";
 import { homeworkSummary, ProblemList } from "./Lists";
 
@@ -13,7 +12,6 @@ interface Props {
   loading: boolean;
   ready: boolean;
   error: string | null;
-  dueReviews: number;
   onEnter: (key: string) => void;
   onBack: () => void;
   onNavigate?: () => void;
@@ -43,7 +41,7 @@ export default function HomeworkNavigator(p: Props) {
     <div className="homework-nav" ref={root} data-level={p.entered ? "problems" : "homeworks"}>
       <div className="homework-nav-track">
         <section className="homework-nav-pane" aria-label="全部作业" aria-hidden={p.entered} {...(p.entered ? { inert: "" } : {})}>
-          <header className="homework-index-head"><h2>作业</h2><span className="note num">{p.homeworks.length} 次</span></header>
+          <header className="homework-index-head"><h2>全部作业</h2><span className="note num">{p.homeworks.length} 次</span></header>
           <nav className="homework-index" aria-label="选择作业">
             {p.homeworks.map(hw => (
               <button type="button" key={hw.key} className="homework-entry" aria-label={hw.title}
@@ -57,10 +55,6 @@ export default function HomeworkNavigator(p: Props) {
             ))}
             {!p.homeworks.length && <p className="plist-empty" role="status">{p.loading ? "正在取作业…" : p.error ?? "老师还没有给你的班级布置作业"}</p>}
           </nav>
-          <footer className="homework-index-foot">
-            <Link to="/chat/general" className="homework-general" onClick={p.onNavigate}><MessagesSquare size={18} aria-hidden="true" /><span>其他问题<small>概念和题意，也可以直接问</small></span></Link>
-            {p.dueReviews > 0 && <Link to="/chat/general" className="homework-general" onClick={p.onNavigate}><RotateCcw size={18} aria-hidden="true" /><span>{p.dueReviews} 项待回顾<small>空闲时在对话里安排小题</small></span></Link>}
-          </footer>
         </section>
         <section className="homework-nav-pane" aria-label="本次作业题目" aria-hidden={!p.entered} {...(!p.entered ? { inert: "" } : {})}>
           <header className="homework-detail-head">

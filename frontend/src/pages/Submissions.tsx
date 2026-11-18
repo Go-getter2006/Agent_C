@@ -1,7 +1,8 @@
-// 提交页：一道题一张卡片，卡片里是这道题的每一次提交。
+// 全部提交记录（从“我的学情”进来）：一道题一张卡片，最近交过的题在上，卡片里是这道题的每一次提交。
+// 想问某一次提交：点“就这一版问”，回到作业引导里那道题，下一条消息带着这次提交（不替学生自动发问）。
 import { Fragment, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronDown, ChevronUp, CircleCheck, Code2, Inbox, MessageCircle } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, CircleCheck, Code2, Inbox, MessageCircle } from "lucide-react";
 import { ApiError, api } from "../api";
 import DiffOverlay from "../components/Diff";
 import { ChangeNote, HomeworkPicker, homeworkSummary } from "../components/Lists";
@@ -55,17 +56,16 @@ export default function Submissions() {
   };
 
   const problems: Row[] = data.data?.problems ?? [];
-  const tried = problems.filter((p) => p.submissions.length > 0);
+  const latestTime = (p: Row) => Math.max(...p.submissions.map((s) => Date.parse(s.time ?? "") || 0));
+  const tried = problems.filter((p) => p.submissions.length > 0).sort((a, b) => latestTime(b) - latestTime(a));
   const untried = problems.filter((p) => p.submissions.length === 0);
   const total = tried.reduce((n, p) => n + p.submissions.length, 0);
 
   const ops = (p: Row, sub: SubmissionView) => (
     <span className="sub-ops">
-      {sub.result !== "AC" && sub.result !== "PENDING" && (
-        <button type="button" className="btn btn-sm btn-ghost" onClick={() => navigate(`/chat/${p.key}?ask=${sub.key}`)}>
-          <MessageCircle size={15} aria-hidden="true" />问问为什么错
-        </button>
-      )}
+      <Link className="btn btn-sm btn-ghost" to={`/homework/${p.key}?sub=${sub.key}`}>
+        <MessageCircle size={15} aria-hidden="true" />就这一版问
+      </Link>
       <button type="button" className="btn btn-sm btn-ghost" aria-expanded={open === sub.key} onClick={() => void toggleSource(sub)}>
         <Code2 size={15} aria-hidden="true" />{open === sub.key ? "收起代码" : "看代码"}
         {open === sub.key ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
@@ -87,7 +87,8 @@ export default function Submissions() {
         <div className="page-inner">
           <div className="page-head">
             <div>
-              <h1>提交记录</h1>
+              <Link to="/progress" className="link back-link"><ArrowLeft size={15} aria-hidden="true" />我的学情</Link>
+              <h1>全部提交记录</h1>
               <p className="page-sub">{current ? `${homeworkSummary(current)}${total ? `，一共交了 ${total} 次` : ""}` : "按作业看每一次提交"}</p>
             </div>
             <div className="page-tools subs-picker">
@@ -113,7 +114,7 @@ export default function Submissions() {
                   </div>
                   <div className="sub-card-tools">
                     {p.passed ? <span className="pill pill-pass"><CircleCheck aria-hidden="true" />已通过</span> : <span className="pill">还没通过</span>}
-                    <Link to={`/chat/${p.key}`} className="btn btn-sm">去对话</Link>
+                    <Link to={`/homework/${p.key}`} className="btn btn-sm">回到这道题</Link>
                   </div>
                 </div>
                 <div className="sub-rows" role="list">
@@ -150,7 +151,7 @@ export default function Submissions() {
                         <strong>{p.title}</strong>
                         <span className="note">{p.brief}</span>
                       </span>
-                      <Link className="btn btn-sm btn-ghost" to={`/chat/${p.key}`}>去问问题</Link>
+                      <Link className="btn btn-sm btn-ghost" to={`/homework/${p.key}`}>去问问题</Link>
                     </li>
                   ))}
                 </ul>

@@ -108,6 +108,9 @@ def template(ctx: Ctx, decision: Decision, flow: str, text: str = "", prior=None
             return Draft(before=f"你最近有 {len(ctx.candidates)} 道题没通过：{refs}，问的是哪一道？")
         if ctx.problem is not None and ctx.submission is None:
             return Draft(before="这道题你还没有提交过。先在 XDOJ 上交一次，或者把代码贴过来，我再帮你看。")
+        if ctx.knowledge:
+            return Draft(before="要结合作业题问的话，打开输入框上方的“结合当前题”，或者到“作业引导”里打开那道题；"
+                                "也可以直接把代码贴过来。")
         return Draft(before="你问的是哪一道题？在题目列表里选一道，或者把代码贴过来。")
     if flow == "passed":
         return Draft(before="这道题你已经通过了。还有哪里想弄清楚，可以直接问。")

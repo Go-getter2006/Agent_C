@@ -13,7 +13,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import accounts, catalog, changes, db, llm, pdftext, progress, quiz, review
@@ -42,10 +42,42 @@ def _problem(s: Session, user: m.User, key: str) -> catalog.ProblemInfo:
 
 
 def _thread(s: Session, user: m.User, key: str) -> tuple[int, int] | None:
-    if key == "general":
+    if key == "general" or key == "new" or key.startswith("t"):
         return None
     info = _problem(s, user, key)
     return info.server_id, info.problem_id
+
+
+def _topic(s: Session, user: m.User, key: str) -> int | None:
+    """知识问答的主题：t<编号>。只认自己的、这门课的。general 是以前的综合对话（没有主题）。"""
+    if not key.startswith("t"):
+        return None
+    try:
+        tid = int(key[1:])
+    except ValueError:
+        raise HTTPException(status_code=404, detail="没有这个问答。")
+    row = s.get(m.ChatTopic, tid)
+    if row is None or row.user_id != user.student_id or row.course != user.course:
+        raise HTTPException(status_code=404, detail="没有这个问答。")
+    return tid
+
+
+def _knowledge(key: str) -> bool:
+    """知识问答的线程：以前的综合对话、各个主题、还没发第一条的新问答。"""
+    return key == "general" or key == "new" or key.startswith("t")
+
+
+def topic_title(text: str) -> str:
+    """主题名：第一个问题的第一句，去掉结尾的标点，最长 16 个汉字宽（字母、数字、空格算半个）。"""
+    first = re.split(r"[\n。？?！!]", (text or "").strip(), maxsplit=1)[0].strip()
+    first = re.sub(r"\s+", " ", first).strip("，,：: ")
+    width, out = 0, ""
+    for ch in first:
+        width += 1 if ord(ch) < 0x2E80 else 2
+        if width > 32:
+            return out.rstrip() + "…"
+        out += ch
+    return out or "新的问答"
 
 
 def _own_submission(s: Session, user: m.User, key: str) -> m.Submission:
@@ -119,8 +151,8 @@ def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
     return out
 
 
-def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None) -> list[dict]:
-    msgs = workflow.thread_messages(s, user.student_id, thread, user.course)
+def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None, topic: int | None = None) -> list[dict]:
+    msgs = workflow.thread_messages(s, user.student_id, thread, user.course, topic)
     rnd = workflow.open_round(s, user.student_id, user.course)
     out = []
     for i, msg in enumerate(msgs):
@@ -326,48 +358,88 @@ class SendBody(BaseModel):
     text: str = Field(default="", max_length=8000)
     action: str | None = None
     submissionKey: str | None = None
+    problemKey: str | None = None   # 知识问答里选了“结合当前题”：带上这道题
+
+
+@router.get("/topics")
+def topics(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    """知识问答的问答记录：最近的在上。以前的综合对话有内容的话，列在里面，叫“以前的问答”。"""
+    rows = s.scalars(select(m.ChatTopic).where(m.ChatTopic.user_id == user.student_id,
+                                               m.ChatTopic.course == user.course)
+                     .order_by(m.ChatTopic.last_message_at.desc(), m.ChatTopic.id.desc())).all()
+    out = [{"key": f"t{r.id}", "title": r.title, "time": r.last_message_at.isoformat()} for r in rows]
+    legacy = s.scalar(select(func.max(m.ChatMessage.created_at)).where(
+        *workflow.thread_filter(user.student_id, None, user.course)))
+    if legacy is not None:
+        out.append({"key": "general", "title": "以前的问答", "time": legacy.isoformat()})
+        out.sort(key=lambda x: x["time"], reverse=True)
+    return {"topics": out}
 
 
 @router.get("/threads/{key}")
 def thread(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
+    topic = _topic(s, user, key)
     sync_api.notify_student_active(s, user.student_id)
     workflow.refresh_rounds(s, user.student_id)
-    return {"messages": _thread_view(s, user, th)}
+    if key == "new":
+        return {"messages": []}
+    return {"messages": _thread_view(s, user, th, topic)}
 
 
 @router.post("/threads/{key}/messages")
 def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
+    topic = _topic(s, user, key)
+    knowledge = _knowledge(key)
     if body.submissionKey:
         _own_submission(s, user, body.submissionKey)
+    pin = None
+    if knowledge and body.problemKey:
+        info = _problem(s, user, body.problemKey)
+        pin = (info.server_id, info.problem_id)
     if not body.action and not body.text.strip():
         raise HTTPException(status_code=400, detail="消息是空的。")
+    if key == "new":   # 新建问答：第一条消息发出时才建主题，名字取这一问
+        row = m.ChatTopic(user_id=user.student_id, course=user.course, title=topic_title(body.text))
+        s.add(row)
+        s.flush()
+        topic, key = row.id, f"t{row.id}"
     try:
-        workflow.handle(s, user.student_id, th, body.text, body.action, body.submissionKey, course=user.course)
+        workflow.handle(s, user.student_id, th, body.text, body.action, body.submissionKey, course=user.course,
+                        topic=topic, knowledge=knowledge, pin=pin)
     except llm.LLMUnavailable:
         raise HTTPException(status_code=502, detail="这条没发出去，再发一次试试。")
+    if topic is not None:
+        row = s.get(m.ChatTopic, topic)
+        if row is not None:
+            row.last_message_at = db.now()
     if body.action in ("think", "hint", "tell"):
         s.add(m.UiEvent(user_id=user.student_id, kind=f"help_{body.action}", target=key, course=user.course))
     elif body.submissionKey:
         s.add(m.UiEvent(user_id=user.student_id, kind="ask_why", target=body.submissionKey, course=user.course))
-    return {"messages": _thread_view(s, user, th)}
+    if pin is not None:
+        s.add(m.UiEvent(user_id=user.student_id, kind="ask_with_problem", target=body.problemKey or "", course=user.course))
+    return {"messages": _thread_view(s, user, th, topic), "thread": key}
 
 
 @router.post("/threads/{key}/welcome")
 def welcome(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
+    topic = _topic(s, user, key)
     if th is not None:
         from ..chat import proactive
 
         proactive.on_open_problem(s, user.student_id, th, user.course)
-    return {"messages": _thread_view(s, user, th)}
+    if key == "new":
+        return {"messages": []}
+    return {"messages": _thread_view(s, user, th, topic)}
 
 
 @router.post("/threads/{key}/review")
 def offer_review(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
-    if th is not None:
+    if th is not None or key != "general":   # 只在以前的综合对话里补题；知识问答的主题不插小题（小题在复习提升里做）
         return {"status": "busy"}  # 不往具体题目的调试对话里插题。
     return {"status": review.offer_in_chat(s, user.student_id, user.course)}
 

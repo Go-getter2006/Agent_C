@@ -137,6 +137,7 @@ _REVISION_MARKS: list[tuple[str, str, str | None]] = [
     ("0006", "cross_links", None),
     ("0007", "agent_assessments", "basis"),
     ("0008", "xdoj_problem_figures", None),
+    ("0009", "chat_messages", "topic_id"),
 ]
 
 

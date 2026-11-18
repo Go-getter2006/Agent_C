@@ -44,13 +44,16 @@
   --accent-line: #f1c9b3;
   --mark: #fff3bf;
   --mark-edge: #f2b705;
+  /* 黄色只标“当前操作”：选中的题、选中的问答、学生自己选的代码行、复习的当前一步、待做的数字（界面改造方案 #FFD54A） */
+  --select: #ffd54a;
+  --select-bg: #fff6d6;
   --focus: #b9431a;
 
-  /* 语义色：通过、未通过、提醒；一定和文字或形状一起出现 */
-  --pass: #15803d;
-  --pass-bg: #e7f6ec;
-  --fail: #c4321f;
-  --fail-bg: #fdecea;
+  /* 语义色：通过、未通过、提醒；一定和文字或形状一起出现（界面改造方案：绿 #287455、砖红 #9F4835，配文字表示已公布的评测结果） */
+  --pass: #287455;
+  --pass-bg: #e6f2ea;
+  --fail: #9f4835;
+  --fail-bg: #f9eae5;
   --warn: #a15c00;
   --warn-bg: #fff4dc;
   --info: #1d5fbf;

@@ -1,9 +1,10 @@
 // 一条对话线程：消息、正在输入、求助按钮、输入栏。
 // 学生只看到自然的回复、代码块和“正在输入”；没有步骤条、标签、分数。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, type LucideIcon } from "lucide-react";
+import { ArrowUp, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, X, type LucideIcon } from "lucide-react";
 import { api } from "../api";
 import type { Layout } from "../lib/hooks";
+import { readDraft, readScroll, saveScroll, writeDraft } from "../lib/memory";
 import { dayLabel, sameDay } from "../lib/time";
 import type { HelpAction, Message, QuizView } from "../types";
 import { useSession } from "../session";
@@ -23,12 +24,19 @@ function EmptyScene() {
 function AgentMark() {
   return <span className="brand-mark" aria-hidden="true"><Braces size={15} strokeWidth={2.4} /></span>;
 }
-export const ASK_WHY = "这次提交为什么错了？";
-
 interface Payload {
   text?: string;
   action?: HelpAction;
   submissionKey?: string;
+  problemKey?: string;
+}
+
+/** 输入框上面的一枚标签：这条消息带着什么一起问（结合哪道题、针对哪次提交）。可以去掉。 */
+export interface ThreadContext {
+  label: string;
+  problemKey?: string;
+  submissionKey?: string;
+  onClear: () => void;
 }
 
 interface Props {
@@ -36,9 +44,11 @@ interface Props {
   layout: Layout;
   emptyTitle: string;
   emptyText: string;
-  askKey?: string | null;      // 从“问问为什么错”进来：自动问这次提交
+  placeholder?: string;
   welcomeKey?: string | null;  // 未通过的最新提交：让智能体主动提问。
-  onAsked?: () => void;
+  context?: ThreadContext | null;
+  contextOffer?: { label: string; onPick: () => void } | null;   // 还没带上时：可以点一下带上
+  onThread?: (key: string) => void;   // 新建问答发出第一条以后，有了自己的编号
   onActivity?: () => void;     // 有新消息、小题有进展：让外面刷新列表和右栏
 }
 
@@ -46,21 +56,26 @@ function looksLikeCode(text: string): boolean {
   return text.includes("\n") && /[;{}]|#include/.test(text);
 }
 
-export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKey, welcomeKey, onAsked, onActivity }: Props) {
+export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, welcomeKey, context, contextOffer,
+  onThread, onActivity }: Props) {
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [stale, setStale] = useState(false);   // 换了题、新的对话还没取到：先留着上一份（变淡），不闪一下
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
   const [failed, setFailed] = useState<{ payload: Payload; message: string } | null>(null);
-  const [text, setText] = useState("");
-  const [reviewWaiting, setReviewWaiting] = useState(false);
+  const [text, setTextRaw] = useState(() => readDraft(threadKey));
+  const setText = useCallback((value: string) => {
+    setTextRaw(value);
+    writeDraft(keyRef.current, value);   // 没发出去的草稿按对话记在本机，换栏目再回来还在
+  }, []);
   const scroller = useRef<HTMLDivElement>(null);
+  const restoreScroll = useRef<number | null>(readScroll(threadKey));
+  const created = useRef<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const keyRef = useRef(threadKey);
   keyRef.current = threadKey;
   const busy = pending !== null;
   const loadSeq = useRef(0);
-  const offerBusy = useRef(false);
   const interacting = useRef(false);
   const welcomed = useRef(new Set<string>());
   interacting.current = busy || !!text.trim();
@@ -81,12 +96,16 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
   }, []);
 
   useEffect(() => {
+    if (created.current === threadKey) {   // 新建的问答刚有了编号：消息已经在了，不重新取、不闪
+      created.current = null;
+      return;
+    }
     setStale(true);
     setLoadError(null);
     setPending(null);
     setFailed(null);
-    setText("");
-    setReviewWaiting(false);
+    setTextRaw(readDraft(threadKey));
+    restoreScroll.current = readScroll(threadKey);
     load(false);
   }, [threadKey, load]);
 
@@ -99,7 +118,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
   }, [busy, load]);
 
   useEffect(() => {
-    if (!welcomeKey || threadKey === "general" || messages === null || stale || interacting.current || askKey) return;
+    if (!welcomeKey || !threadKey.startsWith("p") || messages === null || stale || interacting.current) return;
     const token = `${threadKey}:${welcomeKey}`;
     if (welcomed.current.has(token)) return;
     welcomed.current.add(token);
@@ -108,59 +127,46 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
       if (threadKey !== keyRef.current || seq !== loadSeq.current || interacting.current) return;
       setMessages(old => old && old.length > r.messages.length ? old : r.messages);
     }).catch(() => { welcomed.current.delete(token); });
-  }, [welcomeKey, threadKey, messages, stale, askKey]); // 首次请求失败时，下次正常轮询可以自动重试。
-
-  // 综合对话空闲时主动递来复习小题；学生输入或讨论具体题目时不打断。
-  useEffect(() => {
-    if (threadKey !== "general" || messages === null || stale) return;
-    let disposed = false;
-    const offer = async () => {
-      if (disposed || offerBusy.current || interacting.current || document.visibilityState !== "visible") return;
-      offerBusy.current = true;
-      try {
-        const result = await api.offerReview("general");
-        if (!disposed && keyRef.current === "general") {
-          setReviewWaiting(result.status === "waiting");
-          if (result.status === "ready") load(true);
-        }
-      } catch { /* 出题暂不可用，不影响学生正常提问。 */ }
-      finally { offerBusy.current = false; }
-    };
-    void offer();
-    const timer = window.setInterval(() => void offer(), 60000);
-    return () => { disposed = true; window.clearInterval(timer); };
-  }, [threadKey, messages === null, stale, load]);
+  }, [welcomeKey, threadKey, messages, stale]); // 首次请求失败时，下次正常轮询可以自动重试。
+  // 复习小题不再插进对话：在“复习提升”里做（以前对话里出过的题照样能看、能接着做）
 
   const send = useCallback(async (payload: Payload) => {
     const key = keyRef.current;
     setPending(payload);
     setFailed(null);
+    let still = true;   // 发出去以后还在这个对话里（中途换了别的对话，结果就不管了）
     try {
       const r = await api.send(key, payload);
-      if (key !== keyRef.current) return;
+      still = key === keyRef.current;
+      if (!still) return;
       loadSeq.current += 1;
       setMessages(r.messages);
+      if (r.thread && r.thread !== key) {   // 新建问答：第一条发出去以后有了编号
+        writeDraft(key, "");
+        created.current = r.thread;
+        keyRef.current = r.thread;
+        onThread?.(r.thread);
+      }
       onActivity?.();
     } catch (err) {
-      if (key === keyRef.current) setFailed({ payload, message: (err as Error).message });
+      still = key === keyRef.current;
+      if (still) setFailed({ payload, message: (err as Error).message });
     } finally {
-      if (key === keyRef.current) setPending(null);
+      if (still) setPending(null);
     }
-  }, [onActivity]);
+  }, [onActivity, onThread]);
 
-  // 从“问问为什么错”进来
-  useEffect(() => {
-    if (askKey && messages !== null && !stale && !busy) {
-      onAsked?.();
-      void send({ text: ASK_WHY, submissionKey: askKey });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [askKey, messages === null, stale]);
-
+  // 换了对话以后第一次取到消息：回到上次看到的位置；以后有新消息就到最下面
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages?.length, pending, failed, threadKey]);
+    if (!el || messages === null || stale) return;
+    if (restoreScroll.current !== null) {
+      el.scrollTop = restoreScroll.current;
+      restoreScroll.current = null;
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
+  }, [messages?.length, pending, failed, threadKey, stale]);
 
   useLayoutEffect(() => {
     const el = input.current;
@@ -173,7 +179,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
     const value = text.trim();
     if (!value || busy) return;
     setText("");
-    void send({ text: value });
+    void send({ text: value, problemKey: context?.problemKey, submissionKey: context?.submissionKey });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -195,7 +201,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
 
   return (
     <>
-      <div className="chat-scroll" ref={scroller}>
+      <div className="chat-scroll" ref={scroller} onScroll={(e) => saveScroll(threadKey, e.currentTarget.scrollTop)}>
         {messages === null && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
         {loadError && <div className="chat-list"><Problem message={loadError} onRetry={() => load(false)} /></div>}
         {messages !== null && (
@@ -213,7 +219,6 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
                 onAction={(action) => void send({ action })} onQuiz={(q) => updateQuiz(m.id, q)}
                 onCopy={() => void api.event("copy_code", threadKey)} />
             ))}
-            {threadKey === "general" && reviewWaiting && <p className="note" role="status">复习小题暂时没有准备好，会自动重试。你可以先继续提问。</p>}
             {shown && (
               <div className="msg msg-student">
                 <div className="msg-body">
@@ -250,9 +255,21 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
         )}
       </div>
       <form className="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        {(context || contextOffer) && (
+          <div className="composer-context">
+            {context ? (
+              <span className="context-chip">
+                {context.label}
+                <button type="button" onClick={context.onClear} aria-label={`不带上：${context.label}`}><X size={14} aria-hidden="true" /></button>
+              </span>
+            ) : contextOffer && (
+              <button type="button" className="context-offer" onClick={contextOffer.onPick}>{contextOffer.label}</button>
+            )}
+          </div>
+        )}
         <div className="composer-box">
           <label className="sr-only" htmlFor="composer-input">输入消息</label>
-          <textarea id="composer-input" ref={input} rows={1} value={text} placeholder="说说你的想法，或贴一段代码"
+          <textarea id="composer-input" ref={input} rows={1} value={text} placeholder={placeholder ?? "说说你的想法，或贴一段代码"}
             className={looksLikeCode(text) ? "has-code" : undefined} onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown} spellCheck={false} />
           <button type="submit" className="send" disabled={busy || !text.trim()} aria-label="发送">

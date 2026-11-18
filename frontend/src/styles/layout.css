@@ -75,6 +75,11 @@
   flex: 1;
 }
 
+/* 学生端左下角的“我的学情” */
+.nav-bottom {
+  flex: none;
+}
+
 .nav-label {
   padding: var(--sp-16) var(--sp-12) var(--sp-6);
   font-size: var(--fs-11);
@@ -148,8 +153,8 @@
   height: 20px;
   padding: 0 6px;
   border-radius: var(--r-pill);
-  background: #f0533f;
-  color: var(--on-dark);
+  background: var(--select);
+  color: var(--ink);
   font-size: var(--fs-11);
   font-weight: 600;
   line-height: 20px;
@@ -1532,7 +1537,7 @@
 .prow-slider {
   background: var(--surface);
   border: 1px solid var(--line);
-  box-shadow: var(--shadow-card);
+  box-shadow: inset 3px 0 0 var(--select), var(--shadow-card);   /* 黄色：当前选中的题 */
 }
 
 .tab-slider {
@@ -1745,3 +1750,53 @@
     padding-left: var(--sp-16);
   }
 }
+
+
+/* ================================================================ 知识问答、作业引导（界面改造方案第 1～3 节） */
+.topic-pane { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.topic-head { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-10); padding: var(--sp-16) var(--sp-12) var(--sp-12); }
+.topic-head h2 { font-size: var(--fs-13); font-weight: 600; color: var(--ink-2); }
+.topic-list { display: flex; flex-direction: column; gap: 2px; padding: 0 var(--sp-8) var(--sp-16); overflow-y: auto; }
+.topic-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  padding: var(--sp-10) var(--sp-12); border: 1px solid transparent; border-radius: var(--r-md);
+  background: none; color: var(--ink); text-align: left; font: inherit; cursor: pointer;
+}
+.topic-item strong { font-size: var(--fs-14); font-weight: 600; line-height: 1.4; }
+.topic-item small { font-size: var(--fs-12); color: var(--ink-3); }
+.topic-item:hover { background: var(--surface-3); }
+.topic-item[aria-current="true"] { background: var(--surface); border-color: var(--line); box-shadow: inset 3px 0 0 var(--select), var(--shadow-card); }
+.topic-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* 输入框上面：这条消息带着什么一起问 */
+.composer-context { display: flex; max-width: 780px; margin: 0 auto var(--sp-6); }
+.context-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-4); max-width: 100%;
+  padding: 3px 4px 3px 10px; border-radius: var(--r-pill); background: var(--select-bg);
+  border: 1px solid var(--select); color: var(--ink); font-size: var(--fs-12);
+}
+.context-chip button { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: none; color: var(--ink-2); cursor: pointer; }
+.context-chip button:hover { background: var(--surface); color: var(--ink); }
+.context-offer { padding: 3px 10px; border: 1px dashed var(--line-strong); border-radius: var(--r-pill); background: none; color: var(--ink-2); font: inherit; font-size: var(--fs-12); cursor: pointer; }
+.context-offer:hover { border-color: var(--field); color: var(--ink); background: var(--surface-2); }
+.homework-intro { margin-top: 18vh; }
+.homework-intro strong { font-size: 26px; }
+
+/* 右栏：本题提交，每一次直接列出来 */
+.srows { display: flex; flex-direction: column; }
+.srow {
+  display: grid; grid-template-columns: minmax(84px, auto) auto 1fr auto auto; align-items: center;
+  gap: var(--sp-4) var(--sp-12); padding: var(--sp-10) 0; border-bottom: 1px solid var(--line);
+}
+.srow:last-child { border-bottom: 0; }
+.srow-when { display: flex; flex-direction: column; line-height: 1.35; }
+.srow-when strong { font-size: var(--fs-13); font-weight: 600; }
+.srow-when small { font-size: var(--fs-11); color: var(--ink-3); }
+.srow-result { font-size: var(--fs-13); color: var(--ink-2); }
+.srow-result.ok { color: var(--pass); }
+.srow-result.bad { color: var(--fail); }
+.srow-cells { min-width: 0; }
+.srow-count { font-size: var(--fs-12); color: var(--ink-3); white-space: nowrap; }
+.srow-change { grid-column: 1 / -1; font-size: var(--fs-12); color: var(--ink-3); line-height: 1.6; }
+.srow-compare { margin-top: var(--sp-10); }
+.back-link { display: inline-flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-6); font-size: var(--fs-13); }

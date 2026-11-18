@@ -396,7 +396,7 @@ select.field {
 .stat-label svg {
   width: 15px;
   height: 15px;
-  color: var(--brand);
+  color: var(--ink-3);
 }
 
 .stat-row {
