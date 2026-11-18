@@ -142,14 +142,26 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
     return [...rows.filter((x) => !x.on), ...rows.filter((x) => x.on)];
   }, [L, lit]);
 
+  const chapterBounds = useMemo(() => {
+    const points = topic ? nodes.filter(n => n.topic === topic).map(n => L.pos.get(n.code)).filter(p => !!p) : [];
+    if (!points.length) return null;
+    const x = Math.min(...points.map(p => p!.x)), y = Math.min(...points.map(p => p!.y));
+    return { x, y, w: Math.max(...points.map(p => p!.x)) - x + CHIP_W, h: Math.max(...points.map(p => p!.y)) - y + CHIP_H };
+  }, [topic, nodes, L]);
+  const bx = chapterBounds?.x, by = chapterBounds?.y, bw = chapterBounds?.w, bh = chapterBounds?.h;
   const fit = useCallback(() => {
     const el = box.current;
     if (!el) return;
     const w = el.clientWidth;
+    if (window.innerWidth >= 768 && bx !== undefined && by !== undefined && bw && bh) {
+      const k = Math.max(.5, Math.min(1.35, (w - 64) / bw, (el.clientHeight - 80) / bh));
+      setView({ x: (w - bw * k) / 2 - bx * k, y: Math.max(40, (el.clientHeight - bh * k) / 2) - by * k, k });
+      return;
+    }
     const minK = w < 768 ? 0.62 : 0.5;
     const k = Math.max(minK, Math.min(1, w / L.width));
     setView({ x: Math.max(0, (w - L.width * k) / 2), y: 0, k });
-  }, [L.width]);
+  }, [L.width, bx, by, bw, bh]);
 
   useLayoutEffect(() => {
     fit();

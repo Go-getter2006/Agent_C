@@ -85,6 +85,24 @@ def test_mistake_on_another_skill_fixed_counts_as_knowing_it(database):
         assert st.level == LEVEL_BASIC and st.s > 0
 
 
+def test_mistake_fixed_in_the_next_submission_counts_before_passing(database):
+    """缺分号改掉了（下一次编译过了，错在算法上）：语法那个技能算改对了；算法那个还没改对，待加强。"""
+    t = db.now() - dt.timedelta(hours=3)
+    with db.session_scope() as s:
+        _setup(s)
+        _fail(s, 1, 100, t, skill="C01.01.01")
+        s.add(m.SubmissionLabel(server_id=1, submission_id=1, error_code="SY01", skill_code="C01.01.01",
+                                role="primary", confidence=0.9))
+        _fail(s, 2, 100, t + dt.timedelta(minutes=5))
+        s.add(m.SubmissionLabel(server_id=1, submission_id=2, error_code="TY09", skill_code=SKILL,
+                                role="primary", confidence=0.9))
+        s.flush()
+        assert _level(s, "C01.01.01") == LEVEL_BASIC
+        assert _level(s) == LEVEL_WEAK
+        recs = kpdesc.records(s, [UID], "C")[UID]
+        assert "1 道改对了" in kpdesc.describe(recs["C01.01"])
+
+
 def test_same_mistake_again_after_fixing_is_weak(database):
     t = db.now() - dt.timedelta(hours=3)
     with db.session_scope() as s:

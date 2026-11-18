@@ -73,14 +73,21 @@ def test_student_detail_has_internal_fields_for_teacher(client):
     d = client.get(f"/api/teacher/students/{UID}").json()
     assert d["student"]["name"] == "林晓" and d["student"]["class"]["name"].endswith("01 班")
     skill = next(x for x in d["skills"] if x["code"] == "C06.03.02")
-    assert skill["level"] == "基本掌握" and 0 < skill["p"] < 1 and skill["graph"] is not None
+    # 演示情节中反复出现最值初始化错误，v2 与学生端一致判为待加强。
+    assert skill["level"] == "待加强" and 0 < skill["p"] < 1 and skill["graph"] is not None
     sub = next(x for x in d["submissions"] if x["title"] == "成绩最高分" and x["attemptNo"] == 3)
     assert sub["labels"][0]["code"] == "TY09" and sub["grid"] == [True, True, False, True, True]
     assert sub["problemId"] == 406
     assert [(x["code"], x["nth"], x["resolution"]) for x in d["stuck"]] == [
         ("C06.03.02", 1, "example_given"), ("C02.01.02", 1, "example_given")]
     assert {r["endReason"] for r in d["rounds"]} >= {"通过", "超时"}
-    assert d["quizzes"][0]["outcome"] == "right_judge"
+    # 最新一项也可能尚未完成；核对接口与实际记录一致，不能假定最近一项已答对。
+    with db.session_scope() as s:
+        latest_quiz = s.scalars(select(m.QuizAttempt).where(
+            m.QuizAttempt.user_id == UID, m.QuizAttempt.skill_code.like("C%"))
+            .order_by(m.QuizAttempt.id.desc())).first()
+        assert latest_quiz is not None
+        assert (d["quizzes"][0]["outcome"], d["quizzes"][0]["state"]) == (latest_quiz.outcome, latest_quiz.state)
     # 教师端也不给测试点的原始数据
     blob = json.dumps(d, ensure_ascii=False)
     assert "-12 -7 -30" not in blob

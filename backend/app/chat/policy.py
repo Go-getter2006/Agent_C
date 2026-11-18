@@ -26,6 +26,7 @@ class PolicyInput:
     located: bool = False            # 上一次已经指出了位置和哪类情况
     same_error_resubmit: bool = False
     no_progress: bool = False        # 同一题连续 5 次提交没有进展
+    needs_example: bool = False      # 明确完全不会或希望看局部示例
 
 
 @dataclass
@@ -68,6 +69,8 @@ def _help(rule: str, level: str) -> Decision:
 def decide(p: PolicyInput) -> Decision:
     if p.action == "think":
         return Decision("R00", "NA", "甲", "ack")
+    if p.bound and p.needs_example:
+        return Decision("R07", "H3", "乙", "stuck")
     if p.action is None:
         if p.intent == "OTHER":
             return Decision("R01", "NA", "甲", "other")

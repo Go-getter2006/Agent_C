@@ -1,6 +1,6 @@
 // 对话页（工作台）。题目在左边，对话在中间，这道题的情况在右边；窄了以后两边收进抽屉。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ChevronDown, CloudOff, FileText, List, PanelRight } from "lucide-react";
 import { api } from "../api";
 import DiffOverlay from "../components/Diff";
@@ -11,6 +11,7 @@ import { Cells, Drawer, Loading, Problem, ResultPill, gridLabel } from "../compo
 import { useLayout, useLoad } from "../lib/hooks";
 import { clock } from "../lib/time";
 import { useHomeworks, useStatus } from "../session";
+import LearningStart from "./LearningStart";
 
 function ProblemDocument({ problemKey }: { problemKey: string }) {
   const doc = useLoad(() => api.problemDocument(problemKey), [problemKey], 2500);
@@ -32,11 +33,19 @@ export default function Workbench() {
   const isProblem = !!key && key !== "general";
 
   // keep：切换作业、题目时先留着上一份，新的到了再换，页面不闪
-  const list = useLoad(() => (current ? api.homework(current.key) : Promise.resolve(null)), [current?.key], 15000, true);
+  const listCache = useRef(new Map<string, Awaited<ReturnType<typeof api.homework>>>());
+  const list = useLoad(async () => {
+    if (!current) return null;
+    const value = await api.homework(current.key);
+    listCache.current.set(current.key, value);
+    return value;
+  }, [current?.key], 15000, true);
   const detail = useLoad(() => (isProblem ? api.problem(key!) : Promise.resolve(null)), [key], 15000, true);
   const [drawer, setDrawer] = useState<"list" | "side" | null>(null);
   const [showDocument, setShowDocument] = useState(false);
-  const listOk = !!list.data && !!current && list.data.homework.key === current.key;   // 列表是不是当前作业的
+  const cachedList = current ? listCache.current.get(current.key) : null;
+  const shownList = list.data?.homework.key === current?.key ? list.data : cachedList ?? list.data;
+  const listOk = !!shownList && !!current && shownList.homework.key === current.key;
   const detailOk = !!detail.data && detail.data.key === key;                          // 详情是不是当前这道题的
 
   useEffect(() => setDrawer(null), [key, layout]);
@@ -74,15 +83,7 @@ export default function Workbench() {
     setSearch(next, { replace: name === "ask" });
   };
 
-  // 没有指定题目：进最近提交过的那道
-  if (!key) {
-    if (hwLoading || (current && !listOk && !list.error)) return <StudentShell><div className="wb" /></StudentShell>;
-    const rows = listOk ? list.data!.problems : [];
-    const recent = rows.filter((p) => p.last?.time).sort((a, b) => (a.last!.time! < b.last!.time! ? 1 : -1))[0];
-    if (recent) return <Navigate to={`/chat/${recent.key}`} replace />;
-  }
-
-  const problems = list.data?.problems ?? [];
+  const problems = shownList?.problems ?? [];
   const row = problems.find((p) => p.key === key);
   const d = detailOk ? detail.data : null;
   const shown = detail.data;   // 右栏：新的没到时先留着上一道题的（变淡），不闪
@@ -98,8 +99,10 @@ export default function Workbench() {
     <>
       <HomeworkPicker homeworks={homeworks} current={current} onPick={pickHomework} />
       {current && listOk && problems.length === 0 && <p className="plist-empty">这个作业里还没有题目</p>}
-      <div className={listOk ? "fade-swap" : "fade-swap is-stale"}>
-        <ProblemList problems={problems} currentKey={key ?? "general"} dueReviews={due} onNavigate={onNavigate} />
+      {list.error && <p className="plist-empty" role="status">{list.error}</p>}
+      {!listOk && current && <p className="plist-empty" role="status">正在切换作业题目…</p>}
+      <div className="problem-list-content" aria-busy={!listOk} {...(!listOk ? { inert: "" } : {})}>
+        <ProblemList problems={problems} currentKey={key ?? null} dueReviews={due} onNavigate={onNavigate} />
       </div>
     </>
   );
@@ -157,7 +160,7 @@ export default function Workbench() {
               XDOJ 暂时连不上{xdoj.dataTime ? `，显示的是 ${clock(xdoj.dataTime)} 的数据` : "，显示的是之前同步到的数据"}
             </div>
           )}
-          <header className="chat-head">
+          <header className="chat-head" hidden={!key}>
             {isProblem && <button type="button" className="btn btn-sm" onClick={() => setShowDocument(true)}>
               <FileText size={15} aria-hidden="true" />原始 PDF
             </button>}
@@ -198,8 +201,10 @@ export default function Workbench() {
               </>
             )}
           </header>
-          <Thread threadKey={threadKey} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
-            askKey={isProblem ? ask : null} onAsked={() => setParam("ask", null)} onActivity={refresh} />
+          {!key ? <LearningStart homework={current} problems={listOk ? problems : []} due={due}
+              loading={hwLoading || (!!current && !listOk && !list.error)} error={list.error} />
+            : <Thread threadKey={threadKey} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
+              askKey={isProblem ? ask : null} onAsked={() => setParam("ask", null)} onActivity={refresh} />}
         </main>
         {layout === "four" && sidePane && <aside className="wb-side" aria-label="这道题的情况">{sidePane}</aside>}
       </div>

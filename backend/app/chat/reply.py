@@ -16,6 +16,7 @@ from .context import Ctx
 from .policy import Decision
 from .text import dedent, excerpt_range
 from .validate import Draft
+from . import teaching
 
 HELP_ACTIONS = ["think", "hint", "tell"]
 BLANK = "______"
@@ -194,7 +195,7 @@ _LEVEL_RULES = {
     "H0": "只反问一次，引导他自己发现问题。可以引用他的代码。不讲原因，不给改法，不给新代码。",
     "H1": "指出问题的大致位置，或者说明是哪类情况下出错。不讲原因，不给改法，不给新代码。",
     "H2": "讲清楚原理和触发条件。可以给一个你自己构造的很小的例子（不超过一行数据）。新写的代码最多 2 行。",
-    "H3": "给他卡住的那一块的示例代码，3 到 8 行，用他代码里的变量名，不给整题。代码前一句说这块做什么，代码后一句说接下来他自己要做什么。",
+    "H3": "学生需要具体示范：给当前局部困难的最小代码片段，最多 8 行，按需要决定行数；有学生代码就沿用其变量名，没有就给最小骨架。不拼成整题。前后简要解释，并留一步由学生完成。",
 }
 _FLOW_RULES = {
     "other": "这条消息和学习无关。一两句回应，引回学习。",
@@ -284,7 +285,9 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
             f"【学生这条消息】\n{llm.strip_identity(text, ctx.user_id, ctx.user_name)[:1500]}")
     if feedback:
         user += f"\n\n【上一次写的不合格】{feedback}。请改正后重新输出。"
-    draft = llm.call_json("reply", course_prompt(_SYSTEM, ctx.course), user, validate, retries=1, max_tokens=700)
+    user += "\n\n【证据完整性】空字符串表示确实没有输出，null 表示没有取到。代码的标准输入来自对应测试点的 standardInput，程序实际输出在 programOutput。缺失时不要自行运行、推算或编造评测输出。"
+    system = _SYSTEM + "\n\n【可调整的教学指导】\n" + teaching.guidance()
+    draft = llm.call_json("reply", course_prompt(system, ctx.course), user, validate, retries=1, max_tokens=900)
     if HELP_ORDER.get(decision.help_level, -1) >= 0 and flow in ("help", "locate"):
         draft.actions = list(HELP_ACTIONS)
     return draft

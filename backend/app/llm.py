@@ -116,7 +116,10 @@ def evidence_for_model(evidence: dict, user_id: str = "", name: str = "") -> dic
         "judgement": evidence.get("judgement"),
         "judgementCode": evidence.get("judgementCode"),
         "compileOutput": strip_identity(evidence.get("compileOutput") or "", user_id, name),
-        "testCases": [{key: row[key] for key in fields if key in row}
+        "testCases": [{**{key: row[key] for key in fields if key in row},
+                       "standardInputAvailable": row.get("standardInput") is not None,
+                       "standardOutputAvailable": row.get("standardOutput") is not None,
+                       "programOutputAvailable": row.get("programOutput") is not None}
                       for row in evidence.get("testCases", [])],
     }
 

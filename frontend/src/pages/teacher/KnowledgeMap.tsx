@@ -250,6 +250,13 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
           options={[{ value: "graph", label: <><Network size={15} aria-hidden="true" />图</> }, { value: "table", label: <><Table2 size={15} aria-hidden="true" />表</> }]} />
       </div>
 
+      <nav className="kg-chapters" aria-label="章节导航">
+        <button type="button" className="btn btn-sm" aria-pressed={!topic} onClick={() => { setTopic(""); setSelected(null); }}>课程概览</button>
+        {d.topics.filter(t => courses.includes(t.course)).map(t => <button key={t.code} type="button"
+          className="btn btn-sm" aria-pressed={topic === t.code} onClick={() => { setTopic(t.code); setSelected(null); }}>
+          {t.name}<span className="note num">{nodes.filter(n => n.topic === t.code).length}</span>
+        </button>)}
+      </nav>
       <div className="kg-legend legend">
         {student ? (
           <>

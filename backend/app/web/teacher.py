@@ -518,10 +518,15 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     post = {c: r for c, r in post_all.items() if in_course(c, course)}
     gap = config.GRAPH["big_gap"]
     skills = []
-    for code in sorted(set(simple) | {c for c, r in post.items() if r.has_evidence}):
+    practiced_v2 = {c for c, x in v2.items() if not x.predicted and in_course(c, course)}
+    for code in sorted(set(simple) | practiced_v2 | {c for c, r in post.items() if r.has_evidence}):
         st, st2, g = simple.get(code), v2.get(code), post.get(code)
-        row = {**_skill_view(code), "p": round(st.p, 2) if st else None, "level": st.level if st else "还没练到",
-               "yes": round(st.s, 2) if st else 0, "no": round(st.f, 2) if st else 0,
+        st2 = st2 if st2 is not None and not st2.predicted else None
+        # level、p 用 v2（学生端、智能体用的那个），和学生看到的一致；v1 是附件一的基线，单独给出作对照。
+        # 只有 OJ 失败证据的技能 v1 里没有（v1 不用这类证据），以前在这里整个漏掉
+        row = {**_skill_view(code), "p": round(st2.p, 2) if st2 else None, "level": st2.level if st2 else "还没练到",
+               "v1": round(st.p, 2) if st else None, "v1Level": st.level if st else None,
+               "yes": round(st2.s, 2) if st2 else 0, "no": round(st2.f, 2) if st2 else 0,
                "v2": round(st2.p, 2) if st2 else None, "v2Level": st2.level if st2 else "还没练到",
                "v2Interval": [round(x, 2) for x in st2.interval] if st2 else None,
                "halfLife": round(st2.half_life) if st2 and st2.half_life else None,

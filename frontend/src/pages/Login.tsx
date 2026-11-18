@@ -9,7 +9,7 @@ import { useLoad } from "../lib/hooks";
 import { useSession } from "../session";
 
 const FACTS = [
-  { icon: ShieldCheck, title: "交了题马上能看到结果", text: "在 XDOJ 上交题，这里就能看到哪几组没过，接着问为什么。" },
+  { icon: ShieldCheck, title: "从你的练习继续", text: "自动整理 XDOJ 的练习提交，把代码、题目和分析放在一起。" },
   { icon: MessageSquare, title: "按你的节奏给帮助", text: "先问你几个问题；想自己想、要提示、还是直接讲，由你决定。" },
   { icon: RotateCcw, title: "快忘的时候提醒复习", text: "卡过的地方，过几天用一道小题帮你回忆，记住了间隔就拉长。" },
 ];
@@ -57,8 +57,9 @@ export default function Login() {
           <span className="brand-name">程序设计智能体</span>
         </div>
         <div className="login-pitch">
-          <h2>{pitch}</h2>
-          <p>接在学校的 XDOJ 上。学生问问题、做小题、复习；老师看全班卡在哪里。</p>
+          <span className="eyebrow">{pitch}</span>
+          <h2>从一次错误提交，<br />找到下一步怎么改。</h2>
+          <p>读懂题目，梳理思路，在合适的时候得到提示和代码示例。教师也能看到需要关注的问题。</p>
         </div>
         <ul className="login-facts">
           {FACTS.map(({ icon: Icon, title, text }) => (
@@ -116,11 +117,11 @@ export default function Login() {
             </span>
           </label>
           {error && <p className="error-text" role="alert">{error}</p>}
-          <button type="submit" className="btn btn-primary btn-block" disabled={busy}>{busy ? "正在登录" : "登录"}</button>
+          <button type="submit" className="btn btn-primary btn-block" disabled={busy}>{busy ? "正在登录" : tab === "student" ? "进入学习" : "进入教师工作台"}</button>
           {demo && (
             <p className="login-demo">
               现在装的是演示数据。{tab === "student" ? <>学号 <code>{info.data?.demoAccount}</code></> : <>教师账号 <code>demo-teacher</code></>}，
-              密码是服务器上设置的演示口令（DEV_LOGIN_PASSWORD）。
+              密码请使用管理员提供的演示口令。
             </p>
           )}
           {info.data && !info.data.ready && (

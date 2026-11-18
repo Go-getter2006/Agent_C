@@ -13,7 +13,7 @@ interface Detail {
   student: { userId: string; name: string; class: { key: string; name: string } };
   knowledge: { code: string; name: string; level: string; p: number; score: number; text: string; v1: number | null; v1Level: string | null }[];
   skills: (SkillRef & {
-    p: number | null; level: string; yes: number; no: number; v2: number | null; v2Level: string; v2Interval: [number, number] | null;
+    p: number | null; level: string; v1: number | null; v1Level: string | null; yes: number; no: number; v2: number | null; v2Level: string; v2Interval: [number, number] | null;
     halfLife: number | null; discounted: number; graph: number | null; bigGap: boolean;
   })[];
   submissions: {
@@ -347,7 +347,7 @@ export default function StudentDetail() {
                           <td><Interval p={k.v2} range={k.v2Interval} /></td>
                           <td className="num">{k.halfLife === null ? "—" : `${k.halfLife} 天`}</td>
                           <td className="num">{k.discounted || ""}</td>
-                          <td className="num">{k.p === null ? "—" : k.p.toFixed(2)}</td>
+                          <td className="num">{k.v1 === null ? "—" : k.v1.toFixed(2)}</td>
                           <td className="num">{k.graph === null ? "—" : k.graph.toFixed(2)}</td>
                           <td className="num nowrap">{k.yes.toFixed(1)} / {k.no.toFixed(1)}</td>
                           <td>{k.bigGap && <span className="pill pill-warn">差别大</span>}</td>

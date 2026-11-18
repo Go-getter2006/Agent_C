@@ -28,6 +28,8 @@ class Record:
     unsolved: int = 0                                    # 交过、还没过
     talks: list[int] = field(default_factory=list)       # 智能体评“理解”的等级（0~3）
     errors: Counter = field(default_factory=Counter)     # 常错（学生端说法）
+    err_fixed: int = 0      # 题不是考这个的，但他在这方面出过错、后来改对了（几道题）
+    err_unsolved: int = 0   # 同上，还没改对
 
     @property
     def fixed(self) -> int:
@@ -48,25 +50,56 @@ def problem_kps(s: Session, keys: set[tuple[int, int]] | None = None) -> dict[tu
 
 def records(s: Session, user_ids: list[str], course: str,
             keys: set[tuple[int, int]] | None = None) -> dict[str, dict[str, Record]]:
-    """每个学生每个知识点的记录。keys 给了就只看这些题（比如这个班布置过的题）。"""
+    """每个学生每个知识点的记录。keys 给了就只看这些题（比如这个班布置过的题）。
+
+    一道题算进它标注的知识点；没通过时标出来的错误属于别的知识点的（题考最值、错在 printf），
+    也算进那个知识点的“出过这方面的错”，和掌握程度算法记证据的方式一样。
+    """
     out: dict[str, dict[str, Record]] = defaultdict(lambda: defaultdict(Record))
     if not user_ids:
         return out
     kps_of = {k: {kp for kp in v if course_of(kp) == course} for k, v in problem_kps(s, keys).items()}
+    in_scope = (lambda k: k in keys) if keys is not None else (lambda k: True)
     subs = s.scalars(select(m.Submission).where(m.Submission.user_id.in_(user_ids))
                      .order_by(m.Submission.submission_id)).all()
     per: dict[tuple[str, int, int], list[m.Submission]] = defaultdict(list)
     for sub in subs:
-        if kps_of.get((sub.server_id, sub.problem_id)):
+        if in_scope((sub.server_id, sub.problem_id)):
             per[(sub.user_id, sub.server_id, sub.problem_id)].append(sub)
-    failed_ids: dict[tuple[int, int], tuple[str, set[str]]] = {}
-    for (uid, server_id, problem_id), rows in per.items():
+    # 每道题没通过的那几次（第一次通过之前），和它们标出来的错误
+    failed: dict[tuple[int, int], tuple[str, int, int]] = {}
+    outcome: dict[tuple[str, int, int], int | None] = {}
+    for key, rows in per.items():
         done = [x for x in rows if x.judgement != "PENDING"]
-        if not done:
-            continue
         first_ac = next((i for i, x in enumerate(done) if x.judgement == "AC"), None)
-        kps = kps_of[(server_id, problem_id)]
-        for kp in kps:
+        outcome[key] = first_ac
+        for x in done[: first_ac if first_ac is not None else len(done)]:
+            failed[(x.server_id, x.submission_id)] = key
+    err_kps: dict[tuple[str, int, int], set[str]] = defaultdict(set)
+    err_at: dict[tuple[tuple[str, int, int], str], list[int]] = {}   # 这道题上这个知识点出错的那几次提交
+    label_kp: dict[tuple[int, int], str] = {}                        # 每次没通过的提交标出的错误属于哪个知识点
+    if failed:
+        for lab in s.scalars(select(m.SubmissionLabel).where(
+                m.SubmissionLabel.is_current.is_(True), m.SubmissionLabel.role == "primary",
+                m.SubmissionLabel.submission_id.in_({sid for _srv, sid in failed}))).all():
+            key = failed.get((lab.server_id, lab.submission_id))
+            if key is None or lab.confidence < 0.5:
+                continue
+            name = error_name(lab.error_code, student_facing=True)
+            own = kps_of.get(key[1:], set())
+            extra = {kp_of_skill(lab.skill_code)} if lab.skill_code and course_of(lab.skill_code) == course else set()
+            for kp in extra - own:
+                err_kps[key].add(kp)
+                err_at.setdefault((key, kp), []).append(lab.submission_id)
+            label_kp[(lab.server_id, lab.submission_id)] = kp_of_skill(lab.skill_code) if lab.skill_code else ""
+            for kp in own | extra:
+                if name:
+                    out[key[0]][kp].errors[name] += 1
+    for key, first_ac in outcome.items():
+        if not any(x.judgement != "PENDING" for x in per[key]):
+            continue
+        uid = key[0]
+        for kp in kps_of.get(key[1:], set()):
             rec = out[uid][kp]
             rec.problems += 1
             if first_ac == 0:
@@ -75,21 +108,15 @@ def records(s: Session, user_ids: list[str], course: str,
                 rec.fixed_tries.append(first_ac + 1)
             else:
                 rec.unsolved += 1
-        for x in done[: first_ac if first_ac is not None else len(done)]:
-            failed_ids[(x.server_id, x.submission_id)] = (uid, kps)
-    if failed_ids:
-        sids = {sid for _srv, sid in failed_ids}
-        for lab in s.scalars(select(m.SubmissionLabel).where(
-                m.SubmissionLabel.is_current.is_(True), m.SubmissionLabel.role == "primary",
-                m.SubmissionLabel.submission_id.in_(sids))).all():
-            hit = failed_ids.get((lab.server_id, lab.submission_id))
-            if hit is None or lab.confidence < 0.5:
-                continue
-            uid, kps = hit
-            name = error_name(lab.error_code, student_facing=True)
-            for kp in kps | ({kp_of_skill(lab.skill_code)} if lab.skill_code and course_of(lab.skill_code) == course else set()):
-                if name:
-                    out[uid][kp].errors[name] += 1
+        for kp in err_kps.get(key, set()):
+            # 和掌握程度算法一样：这道题通过了，或者后来某一次交的时候这个知识点上的错已经改掉了，就算改对
+            last_err = max(err_at.get((key, kp), [0]))
+            later = [x for x in per[key] if x.submission_id > last_err and x.judgement != "PENDING"]
+            fixed = first_ac is not None or any(label_kp.get((x.server_id, x.submission_id), kp) != kp for x in later)
+            if fixed:
+                out[uid][kp].err_fixed += 1
+            else:
+                out[uid][kp].err_unsolved += 1
     for a in s.scalars(select(m.AgentAssessment).where(
             m.AgentAssessment.user_id.in_(user_ids), m.AgentAssessment.level.is_not(None))).all():
         if course_of(a.skill_code) == course:
@@ -112,7 +139,7 @@ def _talk_text(levels: list[int], teacher: bool) -> str:
 
 def describe(rec: Record | None, teacher: bool = False) -> str:
     """一个学生在一个知识点上的一句话。没有数字分数；题数可以说。"""
-    if rec is None or (rec.problems == 0 and not rec.talks):
+    if rec is None or (rec.problems == 0 and not rec.talks and not rec.err_fixed and not rec.err_unsolved):
         return "还没有做过这方面的题"
     parts = []
     if rec.problems:
@@ -128,6 +155,9 @@ def describe(rec: Record | None, teacher: bool = False) -> str:
         if rec.unsolved:
             bits.append(f"{rec.unsolved} 道还没过")
         parts.append(f"做过 {rec.problems} 道：" + "，".join(bits))
+    if rec.err_fixed or rec.err_unsolved:
+        bits = ([f"{rec.err_fixed} 道改对了"] if rec.err_fixed else []) + ([f"{rec.err_unsolved} 道还没改对"] if rec.err_unsolved else [])
+        parts.append(f"在 {rec.err_fixed + rec.err_unsolved} 道别的题里出过这方面的错：" + "，".join(bits))
     talk = _talk_text(rec.talks, teacher)
     if talk:
         parts.append(talk)

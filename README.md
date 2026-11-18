@@ -6,6 +6,8 @@
 
 ## 界面
 
+桌面端本轮改动、模型证据传入方式及验证范围见 [桌面改进交付记录](docs/桌面改进交付记录.md)。教学指导可编辑 `backend/app/chat/prompts/tutoring.md`，或用 `CHAT_TEACHING_PROMPT_FILE` 指定自定义文件。贡献署名见 [CONTRIBUTORS.md](CONTRIBUTORS.md)。
+
 | 学生：对话 | 教师：知识图谱 |
 |---|---|
 | ![对话](docs/design/screenshots/对话-1440.png) | ![知识图谱](docs/design/screenshots/教师-知识图谱-详情-1440.png) |

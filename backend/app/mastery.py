@@ -218,17 +218,34 @@ def half_life_days(rows: list[m.SkillEvidence]) -> float:
     return max(cfg["half_life_min"], min(cfg["half_life_max"], h))
 
 
-def first_passes(s: Session, user_id: str, at: dt.datetime) -> dict[tuple[int, int], int]:
-    """这个学生到 at 为止每道题第一次通过的提交编号：(服务器, 题号) → 提交编号。"""
-    rows = s.execute(select(m.Submission.server_id, m.Submission.problem_id, func.min(m.Submission.submission_id))
-                     .where(m.Submission.user_id == user_id, m.Submission.judgement == "AC",
-                            m.Submission.submit_time <= at)
-                     .group_by(m.Submission.server_id, m.Submission.problem_id)).all()
-    return {(int(a), int(b)): int(c) for a, b, c in rows}
+def attempt_history(s: Session, user_id: str, at: dt.datetime) -> dict[tuple[int, int], list[tuple[int, str, str | None]]]:
+    """这个学生到 at 为止每道题的提交：(服务器, 题号) → [(提交编号, 评测结果, 这次标出的主错误的技能)]，按编号排。"""
+    rows = s.execute(select(m.Submission.server_id, m.Submission.problem_id, m.Submission.submission_id,
+                            m.Submission.judgement)
+                     .where(m.Submission.user_id == user_id, m.Submission.submit_time <= at)
+                     .order_by(m.Submission.submission_id)).all()
+    skills: dict[tuple[int, int], str] = {}
+    if rows:
+        for server_id, submission_id, skill in s.execute(
+                select(m.SubmissionLabel.server_id, m.SubmissionLabel.submission_id, m.SubmissionLabel.skill_code)
+                .join(m.Submission, (m.Submission.server_id == m.SubmissionLabel.server_id)
+                      & (m.Submission.submission_id == m.SubmissionLabel.submission_id))
+                .where(m.Submission.user_id == user_id, m.SubmissionLabel.is_current.is_(True),
+                       m.SubmissionLabel.role == "primary", m.SubmissionLabel.confidence >= 0.5)).all():
+            skills[(int(server_id), int(submission_id))] = skill
+    out: dict[tuple[int, int], list[tuple[int, str, str | None]]] = {}
+    for server_id, problem_id, submission_id, judgement in rows:
+        out.setdefault((int(server_id), int(problem_id)), []).append(
+            (int(submission_id), judgement or "", skills.get((int(server_id), int(submission_id)))))
+    return out
 
 
-def resolved_by(row: m.SkillEvidence, passes: dict[tuple[int, int], int]) -> str | None:
-    """这次没通过后来改对了吗：改对了返回那次通过的证据来源（pass:服务器:提交），没改对返回 None。"""
+def resolved_by(row: m.SkillEvidence, history: dict[tuple[int, int], list[tuple[int, str, str | None]]]) -> str | None:
+    """这次没通过，后来改对了吗。改对了返回改对的那次提交（pass:服务器:提交 或 fixed:服务器:提交），没改对返回 None。
+
+    两种算改对：这道题后来通过了；或者后来又交了一次，这次标出来的错误已经不在这个技能上（比如缺分号的错改掉了，
+    现在错在算法上——缺分号这件事他改对了）。后来那次没标出错误的，不算（不知道改没改对）。
+    """
     parts = (row.source_key or "").split(":")
     if row.event_type != "submit_failed" or len(parts) != 4:
         return None
@@ -236,8 +253,14 @@ def resolved_by(row: m.SkillEvidence, passes: dict[tuple[int, int], int]) -> str
         server_id, problem_id, submission_id = int(parts[1]), int(parts[2]), int(parts[3])
     except ValueError:
         return None
-    first = passes.get((server_id, problem_id))
-    return f"pass:{server_id}:{first}" if first is not None and first > submission_id else None
+    for later, judgement, skill in history.get((server_id, problem_id), []):
+        if later <= submission_id or judgement == "PENDING":
+            continue
+        if judgement == "AC":
+            return f"pass:{server_id}:{later}"
+        if skill is not None and skill != row.skill_code:
+            return f"fixed:{server_id}:{later}"
+    return None
 
 
 def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
@@ -245,7 +268,7 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
     from .cross import weighted_parents
 
     cfg = config.MASTERY_V2
-    passes = first_passes(s, user_id, at)
+    history = attempt_history(s, user_id, at)
     by_skill: dict[str, list[m.SkillEvidence]] = {}
     for r in _rows(s, user_id, at):
         if r.event_type in AGENT_EVENTS and not include_agent:
@@ -269,7 +292,7 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                 else:
                     st.f += w
                 continue
-            fixed_by = resolved_by(r, passes) if not r.success else None
+            fixed_by = resolved_by(r, history) if not r.success else None
             if fixed_by is not None:
                 # 后来改对了：失败只算一小部分；这次通过没有记到这个技能上（错在别的技能），改对它算一次会
                 st.f += w * cfg["resolved_fail_factor"]
