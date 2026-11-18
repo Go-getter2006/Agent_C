@@ -53,7 +53,9 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
         return  # 只有第一次通过算证据
     label = labeler.current_problem_label(s, server_id, sub.problem_id)
     if label is None:
-        label = problems.annotate_problem(s, server_id, sub.problem_id)  # 兜底：还没标的题立刻标
+        # 还没标的题立刻标：先试大模型，标不了就按 XDOJ 的标签兜底。以前这里没有标注就不记证据，
+        # 做对的题全都白做，只剩没过的那几次被记下来，几乎人人“待加强”
+        label = problems.ensure_label(s, server_id, sub.problem_id)
     fp = similarity.check_pass(s, sub)
     reliability = config.MASTERY_V2["copy_reliability"] if fp is not None and fp.suspicious else 1.0
     if label is not None:
@@ -75,3 +77,39 @@ def local_task(server_id: int, kind: str, target_id: int) -> None:
             process_submission(s, server_id, target_id)
         elif kind == "label_problem":
             problems.annotate_problem(s, server_id, target_id)
+
+
+def backfill_passes(s: Session, limit: int = 100) -> int:
+    """以前因为题目还没有标注、没记上证据的“第一次通过”，补记上（后台空闲时自动做）。返回补了几条。
+
+    只补掌握程度的证据，不再发对话里的总结、不出小题（那是当时的事）。
+    """
+    from sqlalchemy import func
+
+    recorded = set(s.scalars(select(m.SkillEvidence.source_key).where(
+        m.SkillEvidence.event_type.like("pass%"))).all())
+    firsts = s.execute(select(m.Submission.server_id, m.Submission.user_id, m.Submission.problem_id,
+                              func.min(m.Submission.submission_id))
+                       .where(m.Submission.judgement == "AC", m.Submission.detail_status == "done")
+                       .group_by(m.Submission.server_id, m.Submission.user_id, m.Submission.problem_id)).all()
+    done = 0
+    for server_id, user_id, problem_id, submission_id in firsts:
+        if done >= limit:
+            break
+        if f"pass:{server_id}:{submission_id}" in recorded:
+            continue
+        sub = s.get(m.Submission, (server_id, submission_id))
+        label = labeler.current_problem_label(s, server_id, problem_id) or problems.tag_label(s, server_id, problem_id)
+        if sub is None or label is None:
+            continue
+        earlier = s.scalar(select(func.count()).select_from(m.Submission).where(
+            m.Submission.server_id == server_id, m.Submission.user_id == user_id,
+            m.Submission.problem_id == problem_id, m.Submission.submission_id < submission_id)) or 0
+        fp = similarity.check_pass(s, sub)
+        reliability = config.MASTERY_V2["copy_reliability"] if fp is not None and fp.suspicious else 1.0
+        mastery.record_pass(s, user_id, label, f"pass:{server_id}:{submission_id}", sub.submit_time or db.now(),
+                            earlier, help_before(s, sub), reliability)
+        done += 1
+    if done:
+        log.info("补记了 %d 次以前没记上的通过", done)
+    return done

@@ -16,6 +16,11 @@ v2（默认）：在 v1 上加四处改动。
        （相当于 n0 次作答），所以数据结构的估计 = η·C 那头给的先验 + (1−η)·自己的证据，η 随自己的证据变多而变小。
     4. 按不确定度定档：后验 Beta 的 80% 区间。“已掌握”要求区间下限也不低于 0.6，证据少时不会轻易给高档；
        “还没练到”看有没有真实的作答，不再被遗忘拉回去。
+    6. 改对算会：一道题前面没过、后来自己改对了，前面那几次失败只按很小的分量算（resolved_fail_factor）；
+       出错的那个技能如果不是这道题本身考的，改对它本身算一次“会”（他找到了错并改掉了）。
+       “待加强”要求有**还没改对**的失败，而且估计低于 weak_below；改对过又犯（别的题上改对过、新的题上又错、
+       还没改对）也是待加强。以前失败一次记 0.5、改对只记 0.8，
+       交两次才改对的同学反而落到“待加强”，几乎人人待加强。
     5. 智能体评估的“理解”（app/assess.py）也是证据：会 / 不会按等级记，分量乘大模型的置信度。
        它只改变估计值，不算“练过”（不计入作答次数、不改变“最近一次是不是独立做对”），
        所以只聊过、没做过题的技能不会因此有档位；会做但讲不清的，估计值和区间下限会被拉低，不容易到“已掌握”。
@@ -55,6 +60,7 @@ class SkillState:
     discounted: int = 0              # v2：被打了折的证据条数（雷同）
     f_raw: float = 0.0               # v2：不衰减的“不会”证据
     predicted: bool = False          # v2：没有证据，完全由先修推出来的
+    recurred: bool = False           # v2：在别的题上改对过，现在又在新的题上错、还没改对（改对过又犯）
 
     @property
     def p(self) -> float:
@@ -74,16 +80,23 @@ class SkillState:
         return max(0.0, self.p - Z80 * self.sd), min(1.0, self.p + Z80 * self.sd)
 
     @property
+    def score(self) -> float:
+        """教师端的“掌握分”：只看他自己的证据（做题、会话、小题），用很轻的先验 Beta(0.5, 0.5)，不掺图先验。
+        档位仍按 p 和区间定（谨慎）；分数要能把“做得好”和“做得一般”的同学分开，所以不往 0.5 拉。"""
+        return (0.5 + self.s) / (1.0 + self.s + self.f)
+
+    @property
     def level(self) -> str:
         if self.model == "v1":
             return level_of(self.p, self.s + self.f, self.raw, self.last_independent_success)
         return level_v2(self.p, self.interval[0], self.events, self.raw, self.last_independent_success,
-                        self.s, self.f_raw)
+                        self.s, self.f_raw, self.recurred)
 
 
 def level_v2(p: float, lower: float, events: int, raw: float, last_independent_success: bool,
-             s: float = 0.0, f_raw: float = 0.0) -> str:
-    """定档。“待加强”必须有真实的失败证据：只因为证据少、先验拉着，不算待加强。"""
+             s: float = 0.0, f_raw: float = 0.0, recurred: bool = False) -> str:
+    """定档。“待加强”必须有还没改对的失败：只因为证据少、先验拉着，或者交了几次自己改对了，都不算待加强。
+    改对过又犯（别的题上改对过，新的题上又错、还没改对）一定是待加强。"""
     cfg = config.MASTERY_V2
     if events == 0 or raw < cfg["min_raw"]:
         return LEVEL_NONE
@@ -91,7 +104,7 @@ def level_v2(p: float, lower: float, events: int, raw: float, last_independent_s
         return LEVEL_MASTERED
     if f_raw <= 0:
         return LEVEL_BASIC if s >= cfg["min_current_success"] else LEVEL_NONE
-    if p < cfg["weak_below"]:
+    if p < cfg["weak_below"] or recurred:
         return LEVEL_WEAK
     return LEVEL_BASIC
 
@@ -205,11 +218,34 @@ def half_life_days(rows: list[m.SkillEvidence]) -> float:
     return max(cfg["half_life_min"], min(cfg["half_life_max"], h))
 
 
+def first_passes(s: Session, user_id: str, at: dt.datetime) -> dict[tuple[int, int], int]:
+    """这个学生到 at 为止每道题第一次通过的提交编号：(服务器, 题号) → 提交编号。"""
+    rows = s.execute(select(m.Submission.server_id, m.Submission.problem_id, func.min(m.Submission.submission_id))
+                     .where(m.Submission.user_id == user_id, m.Submission.judgement == "AC",
+                            m.Submission.submit_time <= at)
+                     .group_by(m.Submission.server_id, m.Submission.problem_id)).all()
+    return {(int(a), int(b)): int(c) for a, b, c in rows}
+
+
+def resolved_by(row: m.SkillEvidence, passes: dict[tuple[int, int], int]) -> str | None:
+    """这次没通过后来改对了吗：改对了返回那次通过的证据来源（pass:服务器:提交），没改对返回 None。"""
+    parts = (row.source_key or "").split(":")
+    if row.event_type != "submit_failed" or len(parts) != 4:
+        return None
+    try:
+        server_id, problem_id, submission_id = int(parts[1]), int(parts[2]), int(parts[3])
+    except ValueError:
+        return None
+    first = passes.get((server_id, problem_id))
+    return f"pass:{server_id}:{first}" if first is not None and first > submission_id else None
+
+
 def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                      with_predicted: bool, include_agent: bool = True) -> dict[str, SkillState]:
     from .cross import weighted_parents
 
     cfg = config.MASTERY_V2
+    passes = first_passes(s, user_id, at)
     by_skill: dict[str, list[m.SkillEvidence]] = {}
     for r in _rows(s, user_id, at):
         if r.event_type in AGENT_EVENTS and not include_agent:
@@ -220,6 +256,8 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
         st = SkillState(code, model="v2")
         h = half_life_days([r for r in rows if r.event_type not in AGENT_EVENTS])
         st.half_life = h
+        pass_keys = {r.source_key for r in rows if r.success and r.event_type.startswith("pass")}
+        fixed_problems: set[str] = set()   # 这个技能上改对过的题
         for r in rows:
             days = max(0.0, (at - r.ts).total_seconds() / 86400.0)
             w = r.weight * (r.reliability if r.reliability is not None else 1.0) * cfg["event_scale"].get(r.event_type, 1.0)
@@ -231,17 +269,28 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                 else:
                     st.f += w
                 continue
-            if r.success:
+            fixed_by = resolved_by(r, passes) if not r.success else None
+            if fixed_by is not None:
+                # 后来改对了：失败只算一小部分；这次通过没有记到这个技能上（错在别的技能），改对它算一次会
+                st.f += w * cfg["resolved_fail_factor"]
+                if fixed_by not in pass_keys:
+                    st.s += w * cfg["resolved_fix_credit"]
+            elif r.success:
                 st.s += w
             else:
                 st.f += w
-                st.f_raw += r.weight
+                st.f_raw += r.weight   # 还没改对的失败
+                problem = ":".join((r.source_key or "").split(":")[1:3]) if r.event_type == "submit_failed" else ""
+                if problem and fixed_problems - {problem}:
+                    st.recurred = True   # 别的题上改对过，这道新题上又错、还没改对
+            if fixed_by is not None:
+                fixed_problems.add(":".join(r.source_key.split(":")[1:3]))
             st.raw += r.weight
             st.events += 1
             if (r.reliability or 1.0) < 1.0:
                 st.discounted += 1
             st.last_ts = r.ts
-            st.last_independent_success = bool(r.success and r.independent)
+            st.last_independent_success = bool((r.success and r.independent) or fixed_by is not None)
         out[code] = st
 
     # 图先验：按先修顺序走一遍，先修（有证据或能推出来的）的均值决定起点
@@ -280,6 +329,7 @@ class KpState:
     skills: list[SkillState] = field(default_factory=list)
     lower: float = 0.0
     predicted: bool = False
+    score: float | None = None   # 教师端的掌握分（0~1），见 SkillState.score；推出来的没有
 
 
 def kp_states(s: Session, user_id: str, model: str | None = None, with_predicted: bool = False) -> dict[str, KpState]:
@@ -296,6 +346,7 @@ def kp_states(s: Session, user_id: str, model: str | None = None, with_predicted
         kp.raw = sum(x.raw for x in real)
         if total > 0:
             kp.p = sum((x.s + x.f) * x.p for x in real) / total
+            kp.score = sum((x.s + x.f) * x.score for x in real) / total
         elif kp.skills:
             kp.p = sum(x.p for x in kp.skills) / len(kp.skills)
         if not real:
@@ -306,7 +357,7 @@ def kp_states(s: Session, user_id: str, model: str | None = None, with_predicted
         if model == "v2":
             kp.lower = (sum((x.s + x.f) * x.interval[0] for x in real) / total) if total > 0 else min(x.interval[0] for x in real)
             kp.level = level_v2(kp.p, kp.lower, sum(x.events for x in real), kp.raw, latest.last_independent_success,
-                                sum(x.s for x in real), sum(x.f_raw for x in real))
+                                sum(x.s for x in real), sum(x.f_raw for x in real), any(x.recurred for x in real))
         else:
             kp.level = level_of(kp.p, kp.evidence, kp.raw, latest.last_independent_success)
     return out

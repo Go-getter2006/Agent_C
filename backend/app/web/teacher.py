@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import accounts, assess, catalog, config, cross, crypto, db, graphmodel, logs, mastery, profile, review
+from .. import accounts, assess, catalog, config, cross, crypto, db, graphmodel, kpdesc, logs, mastery, profile, review
 from .. import models as m
 from ..labeling.labeler import current_problem_label
 from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
@@ -330,6 +330,11 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
             "homeworks": homeworks}
 
 
+def score(p: float | None) -> int | None:
+    """掌握程度的估计换成 0~100 的分数（教师端看；学生端不显示数字）。"""
+    return None if p is None else int(round(100 * p))
+
+
 def tries_to_pass(subs: list[m.Submission]) -> int | None:
     """交到第几次第一次通过；还没通过返回 None。"""
     return next((i for i, x in enumerate(subs, start=1) if x.judgement == "AC"), None)
@@ -455,8 +460,11 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
         total = sum(len(per[k]) for k in tried)
         times = [x.submit_time for k in tried for x in per[k] if x.submit_time]
         levels = Counter(kp.level for kp in data.kps[st.user_id].values())
+        practiced = [kp.score for kp in data.kps[st.user_id].values() if kp.level != "还没练到" and kp.score is not None]
         orders = [order_pct[(st.user_id, k)] for k in tried if (st.user_id, k) in order_pct]
         rows.append({
+            # 掌握分：练过的知识点的掌握分（做题、会话、小题都算，只看他自己的证据）的平均，0~100
+            "score": score(sum(practiced) / len(practiced)) if practiced else None,
             "orderPct": round(sum(orders) / len(orders)) if orders else None,
             "copies": copied.get(st.user_id, 0),
             "activeDays": len({x.submit_time.astimezone(db.BEIJING).date() for k in tried for x in per[k] if x.submit_time}),
@@ -522,7 +530,9 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
         skills.append(row)
     kp1 = mastery.kp_states(s, user_id, model="v1")
     kp2 = mastery.kp_states(s, user_id, model="v2", with_predicted=True)
+    recs = kpdesc.records(s, [user_id], course, problem_set).get(user_id, {})
     kps = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "level": kp.level, "p": round(kp.p, 2),
+            "score": score(kp.score), "text": kpdesc.describe(recs.get(code), teacher=True),
             "v1": round(kp1[code].p, 2) if code in kp1 else None, "v1Level": kp1[code].level if code in kp1 else None}
            for code, kp in sorted(kp2.items()) if not kp.predicted and in_course(code, course)]
     # 数据结构：还没有证据的知识点，按 C 语言里的先修推出来的准备度；C 语言这边没有这一块
@@ -783,12 +793,13 @@ def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(t
         if label is not None:
             covered |= {kp_of_skill(c) for c in [label.primary_skill, *(label.secondary_skills or [])]}
     states = {uid: mastery.kp_states(s, uid, model="v2", with_predicted=True) for uid in ids}
+    recs = kpdesc.records(s, [student], course, set(class_problems(s, cls))).get(student, {}) if student is not None else {}
     nodes = []
     for code, name in KNOWLEDGE_POINTS.items():
         if course_of(code) not in shown or (course_of(code) != course and code not in linked_c):
             continue   # 数据结构的班只带上它要用到的那些 C 语言知识点
         dist = Counter()
-        ps, preds = [], []
+        ps, preds, scores = [], [], []
         for uid in ids:
             st = states[uid].get(code)
             if st is None or st.predicted:
@@ -798,14 +809,21 @@ def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(t
             else:
                 dist[st.level] += 1
                 ps.append(st.p)
+                if st.score is not None:
+                    scores.append(st.score)
         node = {"code": code, "name": name, "course": course_of(code), "topic": code[:3],
                 "topicName": TOPICS.get(code[:3], ""), "skills": len(skills_of_kp(code)), "covered": code in covered,
                 "foundation": code in linked_c,
                 "dist": [dist.get(level, 0) for level in LEVELS], "mean": round(sum(ps) / len(ps), 2) if ps else None,
+                "score": score(sum(scores) / len(scores)) if scores else None,   # 全班练过的同学的平均掌握分
                 "withEvidence": len(ps), "readiness": round(sum(preds) / len(preds), 2) if preds else None}
         if student is not None:
             st = states[student].get(code)
-            node["student"] = None if st is None else {"level": st.level, "p": round(st.p, 2), "predicted": st.predicted}
+            node["student"] = None if st is None else {
+                "level": st.level, "p": round(st.p, 2), "score": None if st.predicted else score(st.score),
+                "predicted": st.predicted,
+                # 数据结构的班看 C 语言的知识点：只有档位和估计，不说答题记录
+                "text": "" if course_of(code) != course else kpdesc.describe(recs.get(code), teacher=True)}
         nodes.append(node)
     shown_codes = {n["code"] for n in nodes}
     topics = [{"code": c, "name": n, "course": course_of(c)} for c, n in TOPICS.items()
@@ -841,14 +859,23 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
             st = skill_states[uid].get(code)
             dist[st.level if st is not None and not st.predicted else "还没练到"] += 1
         skills.append({**_skill_view(code), "dist": [dist.get(level, 0) for level in LEVELS]})
-    weak = []
+    recs = kpdesc.records(s, ids, course, set(class_problems(s, cls))) if not other else {}
+    weak, everyone = [], []
+    order = {"待加强": 0, "基本掌握": 1, "已掌握": 2, "还没练到": 3}
     for p in people:
         kps = mastery.kp_states(s, p.user_id, model="v2", with_predicted=True)
         st = kps.get(kp)
+        row = {"userId": p.user_id, "name": p.name, "level": st.level if st else "还没练到",
+               "p": round(st.p, 2) if st else None, "score": score(st.score) if st and not st.predicted else None,
+               "predicted": bool(st and st.predicted),
+               # 数据结构的班看 C 语言的知识点：只有档位和估计，不说答题记录
+               "text": "" if other else kpdesc.describe(recs.get(p.user_id, {}).get(kp), teacher=True)}
+        everyone.append(row)
         if st is not None and (st.level == "待加强" or (st.predicted and st.p < 0.45)):
-            weak.append({"userId": p.user_id, "name": p.name, "level": st.level, "p": round(st.p, 2),
-                         "predicted": st.predicted})
+            weak.append(row)
     weak.sort(key=lambda r: r["p"])
+    everyone.sort(key=lambda r: (order.get(r["level"], 3), r["score"] if r["score"] is not None else 101))
+    summary = "" if other else kpdesc.describe_class([recs.get(uid, {}).get(kp) or kpdesc.Record() for uid in ids], len(ids))
     errs = Counter()
     if ids and not other:
         rows = s.execute(
@@ -870,7 +897,8 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
     ref = lambda c, is_x: {"code": c, "name": KNOWLEDGE_POINTS.get(c, ""), "course": course_of(c), "cross": is_x}  # noqa: E731
     return {"code": kp, "name": KNOWLEDGE_POINTS[kp], "course": course_of(kp), "topicName": TOPICS.get(kp[:3], ""),
             "foundation": other,
-            "skills": skills, "weak": weak, "errors": [{"code": c, "name": error_name(c), "count": n}
+            "skills": skills, "weak": weak, "students": everyone, "summary": summary,
+            "errors": [{"code": c, "name": error_name(c), "count": n}
                                                        for c, n in errs.most_common(6)],
             "problems": problems, "prereqs": [ref(a, is_x) for a, b, _n, is_x in edges if b == kp],
             "next": [ref(b, is_x) for a, b, _n, is_x in edges if a == kp], "levels": list(LEVELS)}

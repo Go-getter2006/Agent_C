@@ -2349,6 +2349,123 @@
   color: var(--ink-2);
 }
 
+/* 掌握分：数字 + 细条，颜色跟档位一致 */
+.score-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.score-badge b {
+  min-width: 2ch;
+  font-weight: 600;
+  text-align: right;
+}
+
+.score-bar {
+  display: inline-block;
+  width: 44px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.score-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.score-mastered .score-bar span { background: var(--lv-mastered); }
+.score-basic .score-bar span { background: var(--lv-basic); }
+.score-weak .score-bar span { background: var(--lv-weak); }
+
+.kp-text {
+  min-width: 240px;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+/* 知识图谱节点右上角的分数（全班平均，或者选中的那个学生的） */
+.kg-node-score {
+  position: absolute;
+  top: 4px;
+  right: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.kg-node:has(.kg-node-score) .kg-node-name {
+  padding-right: 18px;
+}
+
+.kg-tip-text {
+  max-width: 260px;
+  margin: 6px 0 0;
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.kg-panel-text {
+  margin: 0;
+  font-size: var(--fs-13);
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.kg-panel-me {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-10) var(--sp-12);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.kg-people {
+  display: flex;
+  flex-direction: column;
+}
+
+.kg-people li {
+  padding: var(--sp-8) 0;
+  border-top: 1px solid var(--line);
+}
+
+.kg-people li:first-child {
+  border-top: 0;
+}
+
+.kg-people-me {
+  margin: 0 calc(-1 * var(--sp-8));
+  padding-left: var(--sp-8) !important;
+  padding-right: var(--sp-8) !important;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.kg-people-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+}
+
+.kg-people-top .link {
+  flex: 1;
+  min-width: 0;
+}
+
+.kg-people-text {
+  margin: 4px 0 0;
+  font-size: var(--fs-12);
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
 .kg-panel-student {
   display: flex;
   align-items: center;

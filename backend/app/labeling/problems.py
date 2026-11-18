@@ -127,6 +127,99 @@ def save_problem_label(s: Session, server_id: int, problem_id: int, brief: str, 
     return label
 
 
+# XDOJ 自带的类别、标签、作业标题、题目标题里的关键词 → 技能。程序确定的兜底标注：大模型还没标（没配、题面还没
+# 整理好、标注失败）时用它，做对的题照样记成证据、知识图谱照样知道作业覆盖了哪些知识点。大模型标好以后取代它。
+# 越具体的放越前面：第一个对上的是主技能。
+TAG_SKILLS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("二维数组", "矩阵"), "C07.01.01"),
+    (("排序",), "C06.05.01"),
+    (("二分",), "C06.04.03"),
+    (("查找", "搜索"), "C06.04.01"),
+    (("最大值", "最小值", "最值", "最高分", "最低", "最大", "最小"), "C06.03.03"),
+    (("平均",), "C06.03.05"),
+    (("字符串", "字符数组"), "C08.05.01"),
+    (("大小写", "字母", "字符"), "C08.04.01"),
+    (("一维数组", "数组"), "C06.02.01"),
+    (("结构体",), "C11.01.01"),
+    (("指针",), "C10.01.01"),
+    (("递归",), "C09.06.01"),
+    (("函数",), "C09.01.01"),
+    (("素数", "质数"), "C12.04.01"),
+    (("公约数", "公倍数"), "C12.04.02"),
+    (("回文", "反转", "逆序数"), "C12.03.02"),
+    (("数位", "各位"), "C12.03.01"),
+    (("进制",), "C12.06.01"),
+    (("递推", "斐波那契", "数列"), "C12.05.01"),
+    (("枚举", "穷举"), "C12.01.01"),
+    (("模拟",), "C12.02.01"),
+    (("嵌套循环", "双重循环", "多重循环", "图形", "打印"), "C05.06.01"),
+    (("累加", "累乘", "求和", "阶乘", "计数"), "C05.05.01"),
+    (("多组",), "C05.08.01"),
+    (("循环",), "C05.03.01"),
+    (("switch",), "C04.04.01"),
+    (("多分支", "else if"), "C04.02.01"),
+    (("分支", "选择", "判断"), "C04.01.01"),
+    (("浮点", "精度", "小数"), "C02.02.01"),
+    (("溢出", "大数", "取值范围"), "C02.01.01"),
+    (("基本计算", "顺序结构", "顺序", "计算", "公式"), "C03.01.03"),
+    (("输入输出", "格式"), "C01.03.01"),
+)
+
+
+def tag_skills(texts: list[str]) -> list[str]:
+    """按 TAG_SKILLS 从这些文字里认出技能，最多三个，第一个是主技能。"""
+    out: list[str] = []
+    for text in texts:   # 先认标签（最具体），再认类别、作业标题、题目标题
+        low = (text or "").lower()
+        for words, skill in TAG_SKILLS:
+            if skill not in out and any(w.lower() in low for w in words):
+                out.append(skill)
+    return out[:3]
+
+
+def tag_label(s: Session, server_id: int, problem_id: int) -> m.ProblemLabel | None:
+    """按 XDOJ 的标签、类别、作业标题、题目标题兜底标注一道题（来源记为 tags）。认不出就返回 None。"""
+    problem = s.get(m.Problem, (server_id, problem_id))
+    if problem is None:
+        return None
+    tags = list(s.scalars(select(m.ProblemTag.tag).where(
+        m.ProblemTag.server_id == server_id, m.ProblemTag.problem_id == problem_id)).all())
+    contests = list(s.scalars(select(m.Contest.title).join(
+        m.ContestProblem, (m.ContestProblem.server_id == m.Contest.server_id)
+        & (m.ContestProblem.contest_id == m.Contest.contest_id)).where(
+        m.ContestProblem.server_id == server_id, m.ContestProblem.problem_id == problem_id)).all())
+    skills = tag_skills(tags + [problem.category or ""] + [problem.title or ""] + contests)
+    if not skills:
+        return None
+    label = save_problem_label(s, server_id, problem_id, problem.title or "", skills[0], skills[1:], [], "tags")
+    label.content_hash = ""   # 不是按题面标的：大模型能标的时候一定重标
+    return label
+
+
+def ensure_label(s: Session, server_id: int, problem_id: int) -> m.ProblemLabel | None:
+    """这道题的当前标注：先试大模型；大模型标不了时用 XDOJ 的标签兜底。"""
+    from .labeler import current_problem_label
+
+    label = annotate_problem(s, server_id, problem_id)
+    if label is None:
+        label = current_problem_label(s, server_id, problem_id) or tag_label(s, server_id, problem_id)
+    return label
+
+
+def label_assigned(s: Session, limit: int = 20) -> int:
+    """作业里还没有任何标注的题，按标签兜底标上（后台空闲时自动做，不需要大模型）。返回标了几道。"""
+    from .labeler import current_problem_label
+
+    rows = s.execute(select(m.ContestProblem.server_id, m.ContestProblem.problem_id).distinct()).all()
+    done = 0
+    for server_id, problem_id in rows:
+        if done >= limit:
+            break
+        if current_problem_label(s, server_id, problem_id) is None and tag_label(s, server_id, problem_id) is not None:
+            done += 1
+    return done
+
+
 def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = False) -> m.ProblemLabel | None:
     """标注一道题。题面和测试点没变、已经标过时直接返回。没有大模型时返回 None（留到以后标）。"""
     from .labeler import current_problem_label

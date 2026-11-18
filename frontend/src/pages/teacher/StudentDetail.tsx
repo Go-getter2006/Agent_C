@@ -7,11 +7,11 @@ import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, LevelLegend, Loading, Problem, ResultPill, levelClass } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
-import { Code, HELP, OUTCOME, REASON, RESOLUTION, TeacherPage, endReason, type SkillRef } from "./common";
+import { Code, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, endReason, type SkillRef } from "./common";
 
 interface Detail {
   student: { userId: string; name: string; class: { key: string; name: string } };
-  knowledge: { code: string; name: string; level: string; p: number; v1: number; v1Level: string }[];
+  knowledge: { code: string; name: string; level: string; p: number; score: number; text: string; v1: number | null; v1Level: string | null }[];
   skills: (SkillRef & {
     p: number | null; level: string; yes: number; no: number; v2: number | null; v2Level: string; v2Interval: [number, number] | null;
     halfLife: number | null; discounted: number; graph: number | null; bigGap: boolean;
@@ -219,17 +219,18 @@ export default function StudentDetail() {
               )}
 
               <div className="grid-main">
-                <Card title="知识点" sub="档位来自掌握程度算法 v2（学生端和智能体用的）；括号里是 v1 的档位，作对照" bodyClass="">
+                <Card title="知识点" sub="掌握分 0~100：做题（一次做对、交几次改对、还没过）和会话里智能体评的理解都算在里面；括号里是 v1 的档位，作对照" bodyClass="">
                   <div className="table-scroll">
                     <table className="table">
-                      <thead><tr><th scope="col">知识点</th><th scope="col">档位</th><th scope="col" className="num">估计</th><th scope="col">v1</th></tr></thead>
+                      <thead><tr><th scope="col">知识点</th><th scope="col">档位</th><th scope="col" className="num">掌握分</th><th scope="col">怎么样</th><th scope="col">v1</th></tr></thead>
                       <tbody>
                         {d.knowledge.map((k) => (
                           <tr key={k.code}>
                             <td><span className="cell-title">{k.name}</span> <Code>{k.code}</Code></td>
                             <td><LevelPill level={k.level} /></td>
-                            <td className="num">{k.p.toFixed(2)}</td>
-                            <td className="muted nowrap">{k.v1Level}（{k.v1.toFixed(2)}）</td>
+                            <td className="num"><ScoreBadge score={k.score} /></td>
+                            <td className="kp-text">{k.text}</td>
+                            <td className="muted nowrap">{k.v1 === null ? "—" : `${k.v1Level}（${k.v1.toFixed(2)}）`}</td>
                           </tr>
                         ))}
                       </tbody>
