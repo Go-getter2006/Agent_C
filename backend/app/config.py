@@ -117,9 +117,9 @@ SYNC = {
 TAXONOMY_VERSION = "0.1"      # 知识点表、技能表
 ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
 LABELER_VERSION = "2026-11-16a"
-PROMPT_VERSION = "2026-11-16a"
-WORKFLOW_VERSION = "2026-11-16a"
-MASTERY_VERSION = "2026-11-16a"
+PROMPT_VERSION = "2026-11-18a"
+WORKFLOW_VERSION = "2026-11-18a"
+MASTERY_VERSION = "2026-11-18a"
 GRAPH_VERSION = "2026-11-17a"
 
 # ---------------------------------------------------------------- 学情（附件一第 8 节）
@@ -210,6 +210,29 @@ PROACTIVE = {
     "quiet_minutes": 10,     # 他在这道题上和智能体说话不到 10 分钟：不插嘴
     "daily_limit": 4,        # 每人每天最多几条
     "stuck_attempts": 3,     # 同一道题第几次还没过、错在同一处，算卡住
+}
+
+# 智能体评估“理解”（app/assess.py）。等级 0~3 记成证据：会 / 不会，分量 × 置信度。
+# 这些证据只改变估计值，不算“练过”：只有对话、没有做题的技能不会因此有档位。
+AGENT_ASSESS = {
+    "evidence": {3: (True, 0.8), 2: (True, 0.5), 1: (False, 0.3), 0: (False, 0.6)},
+    "min_confidence": 0.4,       # 大模型自己都没把握的不记证据（照样存下来给老师看）
+    "batch": 5,                  # 后台空闲时一次评几个回合
+    "max_wait_hours": 48,        # 结束超过两天还没评的回合不再评
+}
+
+# 多维画像和融合（app/profile.py）。默认权重是融合用的起点，数据够了按“下一次新题能不能一次做对”学
+PROFILE = {
+    "dims": ("perf", "understanding", "independence", "retention", "prereq"),
+    "default_weights": {"bias": 0.0, "perf": 1.0, "understanding": 0.35, "independence": 0.3, "retention": 0.2,
+                        "prereq": 0.25},
+    "min_samples": 30,           # 少于这么多次预测，用默认权重
+    "ridge": 2.0,                # 学权重时往默认权重收缩的力度
+    "understanding_half_life": 30.0,   # 理解的评估按 30 天半衰期衰减
+    "independence_weight": {"pass_first_try": 1.0, "pass_self_fixed": 0.85, "pass_after_h0_h1": 0.6,
+                            "pass_after_h2": 0.3, "pass_after_h3": 0.0},
+    "calibration_value": {"很有把握": 0.9, "一半": 0.6, "没把握": 0.3},
+    "review_hours": 1,           # 同一个学生同一门课，评语至少隔这么久才重写（画像变了也一样）
 }
 
 CHAT = {

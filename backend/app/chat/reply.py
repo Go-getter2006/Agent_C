@@ -260,6 +260,8 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         f"他的第 {ctx.attempt_no} 次提交，结果：{ctx.submission.judgement}" if ctx.submission else "",
         f"问题类型：{error_name(ctx.root_error)}" if ctx.root_error else "",
         f"涉及的技能：{skill_name(ctx.root_skill)}" if ctx.root_skill else "",
+        f"他在这个知识点上的情况：{ctx.profile_note}（据此调整讲法：讲不清原因的多问为什么，常要提示的先让他自己说）"
+        if ctx.profile_note else "",
         f"出问题的行：第 {ctx.diag_line} 行" if ctx.diag_line else "",
         f"没通过的是哪类情况：{ctx.situation}" if ctx.situation else "",
         f"能不能给自己构造的小例子：{'能' if decision.reveal_level == '乙' else '不能，只说是哪类情况'}",

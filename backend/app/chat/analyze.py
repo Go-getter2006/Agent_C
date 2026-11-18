@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 
 from .. import llm
-from ..taxonomy import ICAP, INTENTS, is_skill_code
+from ..taxonomy import ICAP, INTENTS, course_prompt, is_skill_code
 
 
 @dataclass
@@ -73,7 +73,36 @@ def analyze_rules(text: str, has_code: bool, awaiting_answer: bool, bound: bool 
     return a
 
 
-_SYSTEM = """你在分析一名学 C 语言的学生发给答疑助手的一条消息。只输出 JSON：
+# ------------------------------------------------------------ 对话行为
+# 参考 StudyChat（McNichols 等 2026）的对话行为分类：概念性提问和学习表现正相关，索要答案负相关。
+# 这里由意图、有没有自己的想法、按了哪个按钮定，不再另外调用大模型。
+ACTS = {
+    "concept": "概念提问", "debug_specific": "带着自己的想法问", "debug_vague": "只说错了",
+    "answer_seeking": "索要答案", "hint_request": "要提示", "self_explain": "解释自己的想法",
+    "self_regulate": "想自己想", "short_reply": "简短回应", "stuck": "说不会", "task": "问题意", "other": "其他",
+}
+CONSTRUCTIVE_ACTS = frozenset({"concept", "debug_specific", "self_explain", "self_regulate"})
+
+
+def dialogue_act(intent: str, has_attempt: bool, action: str | None = None) -> str:
+    if action == "tell":
+        return "answer_seeking"
+    if action == "hint":
+        return "hint_request"
+    if action == "think":
+        return "self_regulate"
+    if intent == "CONCEPT":
+        return "concept"
+    if intent == "DEBUG":
+        return "debug_specific" if has_attempt else "debug_vague"
+    if intent == "ANSWER":
+        return "answer_seeking"
+    if intent == "REPLY":
+        return "self_explain" if has_attempt else "short_reply"
+    return {"STUCK": "stuck", "TASK": "task"}.get(intent, "other")
+
+
+_SYSTEM = """你在分析一名学 C 语言课程的学生发给答疑助手的一条消息。只输出 JSON：
 {"intent":"DEBUG","skillCode":"","hasAttempt":true,"icap":"constructive","answerCorrect":null,"understood":false}
 intent 只能取：DEBUG 调试求助；CONCEPT 概念提问；TASK 题意澄清；ANSWER 索要答案或要代码；
 REPLY 回答助手刚才的问题（包括表示懂了）；STUCK 表示不会、没思路；OTHER 和学习无关。
@@ -86,7 +115,7 @@ understood：学生是否表示已经懂了或已经通过。"""
 
 def analyze(text: str, has_code: bool, awaiting_answer: bool, last_agent_text: str = "",
             diagnosis_note: str = "", skill_options: list[tuple[str, str]] | None = None,
-            bound: bool = False) -> Analysis:
+            bound: bool = False, course: str = "C") -> Analysis:
     fallback = analyze_rules(text, has_code, awaiting_answer, bound)
     if not llm.available():
         return fallback
@@ -116,6 +145,6 @@ def analyze(text: str, has_code: bool, awaiting_answer: bool, last_agent_text: s
             f"【助手那个问题的正确方向（学生看不到）】\n{diagnosis_note[:300] or '（无）'}\n\n"
             f"【学生的消息】\n{text[:1500]}\n\n【消息里是否贴了代码】{'是' if has_code else '否'}")
     try:
-        return llm.call_json("analyze", _SYSTEM, user, validate, retries=1, max_tokens=200)
+        return llm.call_json("analyze", course_prompt(_SYSTEM, course), user, validate, retries=1, max_tokens=200)
     except llm.LLMUnavailable:
         return fallback
