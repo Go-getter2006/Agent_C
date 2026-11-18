@@ -18,7 +18,7 @@ export default function Submissions() {
   const { homeworks, current, pick, loading } = useHomeworks();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
-  const data = useLoad(() => (current ? api.homeworkSubmissions(current.key) : Promise.resolve(null)), [current?.key], 20000);
+  const data = useLoad(() => (current ? api.homeworkSubmissions(current.key) : Promise.resolve(null)), [current?.key], 15000);
   const [open, setOpen] = useState<string | null>(null);
   const [source, setSource] = useState<{ key: string; lines?: string[]; error?: string } | null>(null);
 

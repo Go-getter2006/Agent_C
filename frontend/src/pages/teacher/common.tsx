@@ -141,7 +141,7 @@ export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide =
           {!loading && !error && withClass && !current && (
             <div className="card">
               <Empty icon={Users} title="你名下还没有同步到班级">
-                正在同步你名下的班级和名单，请稍候再刷新。
+                正在自动同步你名下的班级和名单，同步好了会自己出现，不用刷新。
               </Empty>
             </div>
           )}

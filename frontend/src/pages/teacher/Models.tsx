@@ -102,7 +102,7 @@ const SERIES = [
 ];
 
 export default function Models({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key]);
+  const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key], 300000);
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在取模型的结果" lines={5} /></div>;

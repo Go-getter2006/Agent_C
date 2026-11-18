@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Bot, Copy, FileDown, Quote, Sparkles, Waypoints } from "lucide-react";
-import { get, post } from "../../api";
+import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, LevelLegend, Loading, Problem, ResultPill, levelClass } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
@@ -79,28 +79,12 @@ function DimCell({ v }: { v: number | null }) {
 
 const LEVEL_PILL: Record<number, string> = { 0: "pill pill-fail", 1: "pill pill-warn", 2: "pill pill-pass", 3: "pill pill-pass" };
 
-function AgentCard({ d, userId, onDone }: { d: Detail; userId: string; onDone: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function AgentCard({ d }: { d: Detail }) {
   const r = d.agentReview;
-  const run = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await post(`/api/teacher/students/${userId}/agent-review`, { force: r !== null });
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
   return (
     <Card title={<><Bot size={16} aria-hidden="true" /> 智能体评估</>}
-      sub="对话结束后，智能体读学生自己说的话评“理解”；结论要附上学生原话，和程序能确定的事实冲突时会下调"
-      action={<button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run()}>
-        <Sparkles size={15} aria-hidden="true" />{busy ? "正在写" : r ? "重新评估" : "让智能体写一段评估"}</button>}>
-      {error && <p className="error-text" role="alert">{error}</p>}
+      sub="全部自动：对话结束后智能体评“理解”（结论要附上学生原话，和事实冲突时会下调）；学生有了新数据，智能体自动重写下面的评语">
+      {!r && <p className="note"><Sparkles size={14} aria-hidden="true" /> 这个学生有了做题或对话的数据以后，智能体会自动写评估。</p>}
       {r && (
         <div className="agent-review">
           <p>{r.summary}</p>
@@ -111,7 +95,7 @@ function AgentCard({ d, userId, onDone }: { d: Detail; userId: string; onDone: (
             </ul>
           )}
           {r.suggestions.length > 0 && <ul className="agent-suggest">{r.suggestions.map((x, i) => <li key={i}>{x}</li>)}</ul>}
-          <span className="note">{r.source === "llm" ? "大模型写的" : "没有大模型时按规则生成"} · {shortTime(r.time)}</span>
+          <span className="note">{r.source === "llm" ? "智能体自动写的" : "没有配置大模型，按规则自动生成"} · {shortTime(r.time)}</span>
         </div>
       )}
       {d.assessments.length === 0 ? <p className="note">还没有评过“理解”：学生在对话里回答过问题、说过自己的想法以后才有。</p> : (
@@ -158,7 +142,7 @@ function Interval({ p, range }: { p: number | null; range: [number, number] | nu
 
 export default function StudentDetail() {
   const { id } = useParams();
-  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}`), [id]);
+  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}`), [id], 60000);
   const [allSkills, setAllSkills] = useState(false);
   const d = data.data;
   const skills = useMemo(() => (d ? d.skills.filter((k) => allSkills || k.yes + k.no > 0) : []), [d, allSkills]);
@@ -205,7 +189,7 @@ export default function StudentDetail() {
                 )}
               </Card>
 
-              <AgentCard d={d} userId={d.student.userId} onDone={data.reload} />
+              <AgentCard d={d} />
 
               {d.course === "D" && d.joint.length > 0 && (
                 <Card title="联合状态" sub="数据结构每个知识点：自己的证据、C 语言基础给的先验，和两者各占多少（η）。做的题越多，η 越小" bodyClass="">

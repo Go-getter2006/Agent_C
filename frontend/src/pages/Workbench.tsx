@@ -21,8 +21,8 @@ export default function Workbench() {
   const { status, reload: reloadStatus } = useStatus();
   const isProblem = !!key && key !== "general";
 
-  const list = useLoad(() => (current ? api.homework(current.key) : Promise.resolve(null)), [current?.key], 20000);
-  const detail = useLoad(() => (isProblem ? api.problem(key!) : Promise.resolve(null)), [key], 20000);
+  const list = useLoad(() => (current ? api.homework(current.key) : Promise.resolve(null)), [current?.key], 15000);
+  const detail = useLoad(() => (isProblem ? api.problem(key!) : Promise.resolve(null)), [key], 15000);
   const [drawer, setDrawer] = useState<"list" | "side" | null>(null);
 
   useEffect(() => setDrawer(null), [key, layout]);

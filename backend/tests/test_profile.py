@@ -1,6 +1,7 @@
 """多维掌握画像：智能体评估“理解”（要有学生原话、和事实冲突时下调）、对话行为、维度权重的学习、学生端不出数字。"""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import random
 
@@ -186,6 +187,11 @@ def test_student_sees_dims_without_numbers(demo):
     assert all(isinstance(i["insight"], str) for i in items)
 
 
+def _pending(now=None) -> list[tuple[str, str]]:
+    with db.session_scope() as s:
+        return profile.pending_reviews(s, now=now)
+
+
 def test_teacher_profile_and_agent_review(demo):
     rid = _round(demo)
     with db.session_scope() as s:
@@ -194,21 +200,29 @@ def test_teacher_profile_and_agent_review(demo):
         c.post("/api/auth/login", json={"loginName": "demo-teacher", "password": "test-pass"})
         d = c.get(f"/api/teacher/students/{UID}").json()
         assert d["profile"] and d["assessments"][0]["levelName"] == "能解释" and d["dialogue"]["total"] >= 2
-        assert d["agentReview"] is None
-        # 没有大模型：用规则写
-        r = c.post(f"/api/teacher/students/{UID}/agent-review", json={}).json()
-        assert r["source"] == "rule" and r["summary"]
+        # 演示数据入库时跑过夜里的任务：评语已经自动写好了（没有大模型时按规则）；没有手动入口
+        assert d["agentReview"]["source"] == "rule" and d["agentReview"]["summary"]
+        assert c.post(f"/api/teacher/students/{UID}/agent-review", json={}).status_code in (404, 405)
+        # 刚才有了新的理解评估：一小时内不重写，过了一小时自动重写
+        later = db.now() + dt.timedelta(hours=2)
+        assert (UID, "C") not in _pending() and (UID, "C") in _pending(later)
+        assert profile.refresh_reviews(now=later) >= 1
+        assert (UID, "C") not in _pending(later)
         # 有大模型：评语里的知识点必须是画像里的；不合格两次就退回规则
         codes = [x["code"] for x in d["profile"]]
         good = {"summary": "最值这一块会做，也讲得清原因。", "strengths": [codes[0]],
                 "concerns": [{"kp": codes[-1], "dimension": "independence", "why": "多靠提示"}], "suggestions": ["多让他先说想法"]}
         llm.set_backend(_fake(good))
         try:
-            r = c.post(f"/api/teacher/students/{UID}/agent-review", json={"force": True}).json()
-            assert r["source"] == "llm" and r["summary"].startswith("最值") and r["concerns"][0]["dimension"] == "独立"
+            with db.session_scope() as s:
+                row = profile.agent_review(s, UID, "C", force=True)
+                assert row.source == "llm"
+            r = c.get(f"/api/teacher/students/{UID}").json()["agentReview"]
+            assert r["summary"].startswith("最值") and r["concerns"][0]["dimension"] == "独立"
             llm.set_backend(_fake({**good, "strengths": ["D02.02"]}))
-            again = c.post(f"/api/teacher/students/{UID}/agent-review", json={"force": True}).json()
-            assert again["time"] == r["time"]          # 画像没变：用上一次的，不重写
+            with db.session_scope() as s:
+                again = profile.agent_review(s, UID, "C", force=True)
+                assert again.id == row.id                 # 画像没变：用上一次的，不重写
         finally:
             llm.set_backend(None)
         g = c.get(f"/api/teacher/classes/c{demo['server_id']}-31/graph").json()

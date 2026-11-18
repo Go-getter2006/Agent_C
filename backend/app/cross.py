@@ -6,9 +6,10 @@
 和 TransKT（Han 等 2025）的关系：TransKT 让大模型零样本给两门课的概念建立带类型的联系，再用图网络和对比学习
 得到联合的知识状态。这里保留“带类型的联系”和“联合状态”两个想法，换了三处：
 
-1. 联系要经过检验才进模型。来源有人工初稿（taxonomy/prereq.py）、智能体提出、老师添加；智能体提出的先是“待审”，
-   数据结构的老师采用以后才用。每天夜里用数据检验每条联系：C 那头掌握了的学生，数据结构这头新题一次做对的比例
-   是不是更高（两组的 Beta 后验比较）。数据支持的联系分量大，数据不支持的分量小。
+1. 联系要经过检验才进模型，全部自动：每天夜里智能体给还没提过的数据结构知识点补充联系；把握大的自动采用
+   （还没检验时分量打七折），把握不大的先“待检验”。每天夜里再用数据检验每条联系：C 那头掌握了的学生，
+   数据结构这头新题一次做对的比例是不是更高（两组的 Beta 后验比较）。数据支持的自动采用、分量最大；
+   智能体提出、数据不支持的自动不用；人工初稿数据不支持时只把分量降到 0.3。老师可以改，但不用去点。
 2. 联合状态用可解释的贝叶斯更新，不用黑箱网络：数据结构技能的先验 = 先修（包括 C 那头）估计的加权平均，
    权重看联系的类型和数据检验的结论；先验的分量 n0 相当于几次作答，所以
    估计 = η·先验 + (1−η)·数据结构自己的证据，η = n0 / (n0 + 2 + 数据结构这头的证据量)。
@@ -130,7 +131,7 @@ def verdict_of(k1: int, n1: int, k2: int, n2: int) -> tuple[float | None, str]:
 
 
 def validate_links(s: Session, now: dt.datetime | None = None) -> int:
-    """每天夜里：检验每条联系（采用的和待审的）。用的是“新题的第一次提交能不能一次做对”的记录。"""
+    """每天夜里自动：检验每条联系（采用的和待检验的）。用的是“新题的第一次提交能不能一次做对”的记录。"""
     now = now or db.now()
     outcomes: dict[tuple[str, str], list[bool]] = defaultdict(list)
     for r in s.scalars(select(m.PredictionLog).where(m.PredictionLog.skill_code.like("D%"))).all():
@@ -168,7 +169,7 @@ part_of（它包含了 C 的这个技能，是其中一部分）、similar（两
 
 
 def propose_links(s: Session, d_kp: str) -> list[m.CrossLink]:
-    """让智能体给一个数据结构知识点提出新的跨课程联系，存成“待审”。没有大模型时抛 LLMUnavailable。"""
+    """智能体给一个数据结构知识点提出新的跨课程联系，先存成“待检验”（auto_links 再决定采不采用）。没有大模型时抛 LLMUnavailable。"""
     d_skills = [c for c in skills_of_kp(d_kp)]
     if not d_skills:
         return []
@@ -218,13 +219,51 @@ def propose_links(s: Session, d_kp: str) -> list[m.CrossLink]:
     return rows
 
 
+def auto_links(s: Session, now: dt.datetime | None = None) -> dict:
+    """每天夜里自动做：写入初稿、智能体补充联系、用数据检验、按检验结果采用或不用。老师手动改过的不动。"""
+    now = now or db.now()
+    seeded = ensure_seed(s)
+    proposed = accepted_n = rejected_n = 0
+    if llm.available():
+        tried = {kp_of_skill(r.d_skill) for r in s.scalars(select(m.CrossLink).where(m.CrossLink.source == "llm")).all()}
+        tried |= {k for k in (s.scalars(select(m.SyncState.value).where(m.SyncState.key.like("cross_proposed:%"))).all())}
+        todo = [kp for kp in sorted(KNOWLEDGE_POINTS) if kp.startswith("D") and kp not in tried]
+        for kp in todo[:cfg()["propose_per_night"]]:
+            _mark_proposed(s, kp)
+            try:
+                rows = propose_links(s, kp)
+            except llm.LLMUnavailable:
+                continue
+            proposed += len(rows)
+            for row in rows:
+                if (row.confidence or 0) >= cfg()["auto_accept_confidence"]:
+                    row.status, row.reviewed_at = "accepted", now
+                    accepted_n += 1
+    checked = validate_links(s, now)
+    for link in s.scalars(select(m.CrossLink).where(m.CrossLink.reviewed_by.is_(None))).all():
+        if link.status == "proposed" and link.verdict == "supported":
+            link.status, link.reviewed_at = "accepted", now
+            accepted_n += 1
+        elif link.source == "llm" and link.status != "rejected" and link.verdict == "unsupported":
+            link.status, link.reviewed_at = "rejected", now
+            rejected_n += 1
+    return {"seeded": seeded, "proposed": proposed, "accepted": accepted_n, "rejected": rejected_n, "checked": checked}
+
+
+def _mark_proposed(s: Session, kp: str) -> None:
+    """记下这个知识点智能体已经提过了（提不出合格的也算），不每天重复提。"""
+    from .xdoj.store import set_state
+
+    set_state(s, 0, f"cross_proposed:{kp}", kp)
+
+
 def link_view(link: m.CrossLink) -> dict:
     return {"id": link.id, "c": {"code": link.c_skill, "name": skill_name(link.c_skill),
                                  "kp": KNOWLEDGE_POINTS.get(kp_of_skill(link.c_skill), "")},
             "d": {"code": link.d_skill, "name": skill_name(link.d_skill),
                   "kp": KNOWLEDGE_POINTS.get(kp_of_skill(link.d_skill), ""), "kpCode": kp_of_skill(link.d_skill)},
             "relation": link.relation, "relationName": relation_name(link.relation), "source": link.source,
-            "status": link.status, "rationale": link.rationale, "confidence": link.confidence,
+            "status": link.status, "decidedBy": "teacher" if link.reviewed_by else ("auto" if link.reviewed_at else ""), "rationale": link.rationale, "confidence": link.confidence,
             "nWith": link.n_with, "nWithout": link.n_without, "rateWith": link.rate_with,
             "rateWithout": link.rate_without, "probSupport": link.prob_support, "verdict": link.verdict,
             "weight": round(link_weight(link), 2), "checkedAt": link.checked_at.isoformat() if link.checked_at else None}

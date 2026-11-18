@@ -1,8 +1,9 @@
-// 跨课程（只在数据结构这边）：C 基础预警、跨课程联系（类型、来源、数据检验、采用与否）、让智能体补充联系。
+// 跨课程（只在数据结构这边）：C 基础预警、跨课程联系（类型、来源、数据检验、采用与否）。
+// 全部自动：智能体每天夜里补充联系、用数据检验、按结果采用或不用；老师可以改，但不用去点。
 // 只有 C 语言知识点的掌握程度，没有 C 语言的答题记录。
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Check, CircleAlert, FlaskConical, Sparkles, X } from "lucide-react";
+import { Check, CircleAlert, X } from "lucide-react";
 import { get, post } from "../../api";
 import { Card, Empty, Loading, Problem, Segmented } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
@@ -13,6 +14,7 @@ interface CrossLinkRow {
   id: number; c: SkillSide; d: SkillSide; relation: string; relationName: string; source: string; status: string;
   rationale: string; confidence: number | null; nWith: number; nWithout: number; rateWith: number | null;
   rateWithout: number | null; probSupport: number | null; verdict: string; weight: number; checkedAt: string | null;
+  decidedBy: "teacher" | "auto" | "";
 }
 interface CrossData {
   class: { key: string; name: string };
@@ -29,7 +31,7 @@ interface CrossData {
 }
 
 const SOURCE: Record<string, string> = { seed: "人工初稿", llm: "智能体提出", teacher: "老师添加" };
-const STATUS: Record<string, string> = { accepted: "采用", proposed: "待审", rejected: "不用" };
+const STATUS: Record<string, string> = { accepted: "采用", proposed: "待检验", rejected: "不用" };
 const VERDICT: Record<string, { text: string; cls: string }> = {
   supported: { text: "数据支持", cls: "pill pill-pass" },
   unsupported: { text: "数据不支持", cls: "pill pill-fail" },
@@ -77,7 +79,6 @@ function Warning({ d }: { d: CrossData }) {
 
 function Links({ d, reload }: { d: CrossData; reload: () => void }) {
   const [show, setShow] = useState<"all" | "proposed" | "accepted" | "rejected">("all");
-  const [kp, setKp] = useState(d.focus[0]?.code ?? d.dKps[0]?.code ?? "");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const rows = useMemo(() => d.links.filter((l) => show === "all" || l.status === show), [d.links, show]);
@@ -98,29 +99,11 @@ function Links({ d, reload }: { d: CrossData; reload: () => void }) {
   };
 
   return (
-    <Card title="跨课程联系" sub={`C 语言的技能和数据结构的技能之间带类型的联系。只有“采用”的进入数据结构的估计；分量 = 类型 × 数据检验（${Object.entries(d.params.reliability).map(([k, v]) => `${VERDICT[k]?.text ?? k} ${v}`).join("，")}）`}
+    <Card title="跨课程联系" sub={`C 语言的技能和数据结构的技能之间带类型的联系，全部自动维护：智能体每天夜里补充，数据检验以后自动采用或不用。只有“采用”的进入数据结构的估计；分量 = 类型 × 数据检验（${Object.entries(d.params.reliability).map(([k, v]) => `${VERDICT[k]?.text ?? k} ${v}`).join("，")}）`}
       bodyClass="">
       <div className="card-body cross-tools">
         <Segmented label="显示" value={show} onChange={setShow}
-          options={[{ value: "all", label: "全部" }, { value: "proposed", label: `待审${pending ? ` ${pending}` : ""}` }, { value: "accepted", label: "采用" }, { value: "rejected", label: "不用" }]} />
-        <label className="cross-propose">
-          <span className="sr-only">数据结构知识点</span>
-          <select className="field" value={kp} onChange={(e) => setKp(e.target.value)}>
-            {d.dKps.map((k) => <option key={k.code} value={k.code}>{k.name}</option>)}
-          </select>
-          <button type="button" className="btn btn-sm" disabled={busy || !kp}
-            onClick={() => void act(async () => {
-              const r = await post<{ links: CrossLinkRow[] }>("/api/teacher/cross/propose", { kp });
-              setShow("proposed");
-              return r;
-            }, "智能体提出的联系放在“待审”里，采用以后才生效。")}>
-            <Sparkles size={15} aria-hidden="true" />让智能体补充联系
-          </button>
-        </label>
-        <button type="button" className="btn btn-sm btn-ghost" disabled={busy}
-          onClick={() => void act(() => post("/api/teacher/cross/validate"), "已经用现有数据重新检验了一遍。")}>
-          <FlaskConical size={15} aria-hidden="true" />现在检验
-        </button>
+          options={[{ value: "all", label: "全部" }, { value: "proposed", label: `待检验${pending ? ` ${pending}` : ""}` }, { value: "accepted", label: "采用" }, { value: "rejected", label: "不用" }]} />
         {note && <span className="note" role="status">{note}</span>}
       </div>
       {rows.length === 0 ? <Empty title="没有" /> : (
@@ -150,12 +133,13 @@ function Links({ d, reload }: { d: CrossData; reload: () => void }) {
                   <td className="num">{l.status === "accepted" ? l.weight.toFixed(2) : "—"}</td>
                   <td className="nowrap">
                     <span className={l.status === "accepted" ? "pill pill-pass" : l.status === "proposed" ? "pill pill-warn" : "pill"}>{STATUS[l.status]}</span>
+                    {l.decidedBy && <span className="cell-sub">{l.decidedBy === "teacher" ? "老师改的" : "自动"}</span>}
                     {l.status !== "accepted" && (
-                      <button type="button" className="icon-btn" disabled={busy} aria-label="采用"
+                      <button type="button" className="icon-btn" disabled={busy} aria-label="改成采用" title="改成采用（可选）"
                         onClick={() => void act(() => post(`/api/teacher/cross/${l.id}/review`, { action: "accept" }))}><Check size={16} /></button>
                     )}
                     {l.status !== "rejected" && (
-                      <button type="button" className="icon-btn" disabled={busy} aria-label="不用"
+                      <button type="button" className="icon-btn" disabled={busy} aria-label="改成不用" title="改成不用（可选）"
                         onClick={() => void act(() => post(`/api/teacher/cross/${l.id}/review`, { action: "reject" }))}><X size={16} /></button>
                     )}
                   </td>
@@ -175,7 +159,7 @@ function Links({ d, reload }: { d: CrossData; reload: () => void }) {
 }
 
 export default function Cross({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<CrossData>(`/api/teacher/classes/${cls.key}/cross`), [cls.key]);
+  const data = useLoad(() => get<CrossData>(`/api/teacher/classes/${cls.key}/cross`), [cls.key], 120000);
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!data.data) return <div className="card card-body"><Loading what="正在取跨课程的数据" lines={5} /></div>;
   return (

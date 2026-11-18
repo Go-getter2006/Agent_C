@@ -442,7 +442,11 @@ def agent_review(s: Session, user_id: str, course: str, requested_by: int | None
         # 画像没变、上一次也是大模型写的（或者现在没有大模型）：直接用上一次的
         same = last.profile_hash == digest and (last.source == "llm" or not llm.available())
         recent = db.now() - last.created_at < dt.timedelta(hours=config.PROFILE["review_hours"])
-        if same or (recent and not force):
+        if same:
+            if force:   # 后台自动核对过：画像没变，评语沿用，时间记成这次核对的时间
+                last.created_at = db.now()
+            return last
+        if recent and not force:
             return last
     codes = {r["code"] for r in payload["knowledge"]}
     content, source = None, "rule"
@@ -479,6 +483,55 @@ def agent_review(s: Session, user_id: str, course: str, requested_by: int | None
     s.flush()
     llm.flush_records(s)
     return row
+
+
+def pending_reviews(s: Session, limit: int | None = None, now: dt.datetime | None = None) -> list[tuple[str, str]]:
+    """哪些学生的哪门课该自动写（或重写）评语了：有了新的数据（做题证据、理解评估），而且离上一份超过 review_hours。"""
+    from sqlalchemy import func
+
+    now = now or db.now()
+    gap = dt.timedelta(hours=config.PROFILE["review_hours"])
+    last = {(u, c): t for u, c, t in s.execute(
+        select(m.AgentReview.user_id, m.AgentReview.course, func.max(m.AgentReview.created_at))
+        .group_by(m.AgentReview.user_id, m.AgentReview.course)).all()}
+    newest: dict[tuple[str, str], dt.datetime] = {}
+    rows = s.execute(select(m.SkillEvidence.user_id, func.substr(m.SkillEvidence.skill_code, 1, 1),
+                            func.max(m.SkillEvidence.ts))
+                     .group_by(m.SkillEvidence.user_id, func.substr(m.SkillEvidence.skill_code, 1, 1))).all()
+    rows += s.execute(select(m.AgentAssessment.user_id, m.AgentAssessment.course, func.max(m.AgentAssessment.created_at))
+                      .group_by(m.AgentAssessment.user_id, m.AgentAssessment.course)).all()
+    for uid, course, t in rows:
+        if course in ("C", "D") and t is not None:
+            t = db.as_utc(t)
+            newest[(uid, course)] = max(t, newest.get((uid, course), t))
+    students = set(s.scalars(select(m.Student.user_id)).all())
+    out = []
+    for key, t in newest.items():
+        if key[0] not in students:
+            continue
+        done = last.get(key)
+        done = db.as_utc(done) if done is not None else None
+        if done is None or (t > done and now - done >= gap):
+            out.append((t, key))
+    out.sort(reverse=True)
+    keys = [k for _t, k in out]
+    return keys[:limit] if limit else keys
+
+
+def refresh_reviews(limit: int | None = None, now: dt.datetime | None = None) -> int:
+    """后台自动写评语，不用老师去点。返回新写了几份（画像没变的不重写）。"""
+    n = 0
+    with db.session_scope() as s:
+        for uid, course in pending_reviews(s, limit, now):
+            before = s.scalar(select(m.AgentReview.id).where(m.AgentReview.user_id == uid, m.AgentReview.course == course)
+                              .order_by(m.AgentReview.id.desc()))
+            try:
+                row = agent_review(s, uid, course, force=True)
+            except Exception:   # 一个学生出错不影响别的
+                log.exception("自动写评语出错")
+                continue
+            n += row.id != before
+    return n
 
 
 def review_view(row: m.AgentReview | None) -> dict | None:

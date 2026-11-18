@@ -15,7 +15,7 @@ interface StuckData {
 }
 
 export default function Stuck({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<StuckData>(`/api/teacher/classes/${cls.key}/stuck`), [cls.key]);
+  const data = useLoad(() => get<StuckData>(`/api/teacher/classes/${cls.key}/stuck`), [cls.key], 60000);
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在取卡点名单" lines={5} /></div>;

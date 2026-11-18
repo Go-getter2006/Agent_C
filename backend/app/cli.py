@@ -187,12 +187,12 @@ def daemon_cmd() -> None:
     _logging()
     from .xdoj.daemon import Daemon
 
-    from . import assess, graphmodel
+    from . import automation, graphmodel
 
-    db.create_all()
+    db.migrate()
     # 还没有数据源也能启动：教师在网页上登记后，一分钟内会被发现
     Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
-           nightly=graphmodel.nightly, idle_work=assess.run_pending).run_forever()
+           nightly=graphmodel.nightly, idle_work=automation.idle_work).run_forever()
 
 
 @cli.command("assess-pending")
