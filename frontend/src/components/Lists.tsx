@@ -1,10 +1,11 @@
 // 作业选择器、题目列表、右栏“这道题”。
 import { useEffect, useRef, useState } from "react";
+import { useSlider } from "./Slider";
 import { Link } from "react-router-dom";
-import { Check, ChevronsUpDown, Circle, CircleCheck, CircleX, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
 import { useEscape } from "../lib/hooks";
 import { deadline, shortTime } from "../lib/time";
-import type { Homework, ProblemDetail, ProblemRow } from "../types";
+import type { Homework, ProblemDetail, ProblemRow, SubmissionChange } from "../types";
 import { Cells, Meter, ResultPill, gridLabel } from "./ui";
 
 export function homeworkSummary(hw: Homework): string {
@@ -78,6 +79,8 @@ function RowIcon({ p }: { p: ProblemRow }) {
 export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
   problems: ProblemRow[]; currentKey: string | null; dueReviews: number; onNavigate?: () => void;
 }) {
+  const box = useRef<HTMLElement>(null);
+  const slider = useSlider("plist", box, '.prow[aria-current="true"]', `${currentKey}:${problems.length}`);
   return (
     <>
       {dueReviews > 0 && (
@@ -89,7 +92,8 @@ export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
           </span>
         </Link>
       )}
-      <nav className="plist" aria-label="题目">
+      <nav className="plist" aria-label="题目" ref={box}>
+        <span className={`${slider.className} prow-slider`} style={slider.style} aria-hidden="true" />
         <div className="plist-head">
           <span>题目</span>
           <span className="num">{problems.filter((p) => p.passed).length}/{problems.length} 通过</span>
@@ -126,6 +130,55 @@ export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
   );
 }
 
+/** 一次提交改了什么、修好了什么问题。直接显示，不用点进去看差异。 */
+export function ChangeNote({ change, onDiff }: { change: SubmissionChange | undefined; onDiff?: () => void }) {
+  if (!change) return null;
+  if (!change.available) return <p className="chg-note note">代码还在取，稍后显示改了什么</p>;
+  const where = change.lines.map((l) => (l.from === l.to ? `第 ${l.from} 行` : `第 ${l.from}~${l.to} 行`)).join("、");
+  return (
+    <div className="chg">
+      <p className="chg-head">
+        {change.changed === 0 ? "代码没改，又交了一次" : change.big ? `大幅改动：改了 ${change.changed} 行，像是换了一种写法` : `改了 ${change.changed} 行${where ? `（${where}）` : ""}`}
+      </p>
+      {(change.fixed.length > 0 || change.passedNow) && (
+        <p className="chg-fixed"><CircleCheck size={13} aria-hidden="true" />{change.fixed.length ? `修好了：${change.fixed.join("、")}` : "这次通过了"}</p>
+      )}
+      {change.still.length > 0 && <p className="chg-still"><CircleX size={13} aria-hidden="true" />还在：{change.still.join("、")}</p>}
+      {change.new.length > 0 && <p className="chg-still"><CircleX size={13} aria-hidden="true" />新出现：{change.new.join("、")}</p>}
+      {change.excerpt.length > 0 && !change.big && (
+        <pre className="chg-code" aria-label="改动的代码">
+          {change.excerpt.map((e, i) => (
+            <span key={i} className={e.type === "add" ? "chg-add" : "chg-del"}>
+              <i>{e.type === "add" ? "+" : "−"}</i><b className="num">{e.n}</b>{e.text}{"\n"}
+            </span>
+          ))}
+        </pre>
+      )}
+      {onDiff && change.changed > 0 && (
+        <button type="button" className="link chg-more" onClick={onDiff}><GitCompare size={13} aria-hidden="true" />看完整的对照</button>
+      )}
+    </div>
+  );
+}
+
+/** 题目内容：默认收起，只露前几行。 */
+function Statement({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  if (!text.trim()) return null;
+  const long = text.length > 260 || text.split("\n").length > 8;
+  return (
+    <section className="side-card" aria-labelledby="side-stmt">
+      <h2 id="side-stmt"><FileText size={16} aria-hidden="true" />题目</h2>
+      <div className={open || !long ? "stmt" : "stmt stmt-clip"}>{text}</div>
+      {long && (
+        <button type="button" className="link side-link" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? <><ChevronUp size={14} aria-hidden="true" />收起</> : <><ChevronDown size={14} aria-hidden="true" />展开全部</>}
+        </button>
+      )}
+    </section>
+  );
+}
+
 /** 右栏：这道题的提交、这道题用到的知识点。 */
 export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; onDiff: (a: string, b: string) => void; onAsk: (submissionKey: string) => void }) {
   const subs = detail.submissions;
@@ -133,6 +186,7 @@ export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; on
   const canAsk = latest && latest.result !== "AC" && latest.result !== "PENDING";
   return (
     <div className="side">
+      <Statement text={detail.statement ?? ""} />
       <section className="side-card" aria-labelledby="side-subs">
         <h2 id="side-subs"><History size={16} aria-hidden="true" />这道题的提交</h2>
         {subs.length === 0 && <p className="note">还没提交。在 XDOJ 上交一次，这里几秒钟后就能看到。</p>}
@@ -147,6 +201,7 @@ export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; on
               {latest.grid && <span className="note num">{gridLabel(latest.grid)}</span>}
             </div>
             {latest.grid && <Cells grid={latest.grid} large />}
+            {subs.length > 1 && <ChangeNote change={detail.changes?.[latest.key]} onDiff={() => onDiff(subs[1].key, latest.key)} />}
             {canAsk && (
               <button type="button" className="btn btn-primary" onClick={() => onAsk(latest.key)}>
                 <MessageCircle size={16} aria-hidden="true" />问问为什么错
@@ -156,21 +211,21 @@ export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; on
         )}
         {subs.length > 1 && (
           <div className="timeline">
-            {subs.slice(1, 6).map((sub) => (
+            {subs.slice(1, 6).map((sub, i) => (
               <div key={sub.key} className="tl-item">
                 <span className={sub.result === "AC" ? "tl-dot ok" : sub.result === "PENDING" ? "tl-dot wait" : "tl-dot"} aria-hidden="true" />
-                <span>第 {sub.attemptNo} 次，{sub.resultText}{sub.grid && sub.result !== "AC" ? `，过 ${sub.grid.filter(Boolean).length} 组` : ""}</span>
-                <span className="side-time">{shortTime(sub.time)}</span>
+                <span className="tl-main">
+                  <span className="tl-top">
+                    <span>第 {sub.attemptNo} 次，{sub.resultText}{sub.grid && sub.result !== "AC" ? `，过 ${sub.grid.filter(Boolean).length} 组` : ""}</span>
+                    <span className="side-time">{shortTime(sub.time)}</span>
+                  </span>
+                  {subs[i + 2] && <ChangeNote change={detail.changes?.[sub.key]} onDiff={() => onDiff(subs[i + 2].key, sub.key)} />}
+                </span>
               </div>
             ))}
           </div>
         )}
         {subs.length > 6 && <p className="note">更早的 {subs.length - 6} 次在“提交”页里</p>}
-        {subs.length >= 2 && (
-          <button type="button" className="link side-link" onClick={() => onDiff(subs[1].key, subs[0].key)}>
-            <GitCompare size={15} aria-hidden="true" />看第 {subs[1].attemptNo} 次到第 {subs[0].attemptNo} 次改了什么
-          </button>
-        )}
       </section>
       <section className="side-card" aria-labelledby="side-kp">
         <h2 id="side-kp"><Layers size={16} aria-hidden="true" />用到的知识点</h2>

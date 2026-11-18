@@ -36,12 +36,28 @@ export interface KnowledgeLevel {
   segments: number;
 }
 
+/** 一次提交和上一次比：改了哪几行、修好了什么、还剩什么（只有他自己的代码和错误的名称）。 */
+export interface SubmissionChange {
+  from: number;
+  available: boolean;
+  changed: number;
+  big: boolean;
+  lines: { from: number; to: number }[];
+  excerpt: { type: "add" | "del"; n: number; text: string }[];
+  fixed: string[];
+  still: string[];
+  new: string[];
+  passedNow: boolean;
+}
+
 export interface ProblemDetail {
   key: string;
   title: string;
   brief: string;
   homeworkKey: string | null;
+  statement: string;
   submissions: SubmissionView[]; // 新的在前
+  changes: Record<string, SubmissionChange>;
   knowledge: KnowledgeLevel[];
 }
 

@@ -117,9 +117,9 @@
 
   /* 随屏幕变化的尺寸 */
   --sidebar-w: 236px;
-  --rail-w: 76px;
+  --rail-w: 68px;
   --list-w: 300px;
-  --side-w: 312px;
+  --side-w: 420px;  /* 学生端右栏：题目、提交、知识点 */
   --control-h: 36px;
   --input-h: 40px;
   --code-fs: 13px;

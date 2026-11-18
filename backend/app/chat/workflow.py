@@ -198,7 +198,7 @@ def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool 
 def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history: list[tuple[str, str]],
              prior: m.StuckPoint | None, prior_ref: str, kind: str,
              visible_titles: dict[str, str]) -> tuple[validate.Draft, str, dict, int]:
-    testcases = (ctx.evidence or {}).get("testCases", [])
+    testcases = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)   # 全部测试点都不能出现在回复里
 
     def run_check(d: validate.Draft) -> list[str]:
         return validate.check(

@@ -5,7 +5,7 @@ import Progress from "./pages/Progress";
 import Review from "./pages/Review";
 import Submissions from "./pages/Submissions";
 import Workbench from "./pages/Workbench";
-import { SessionProvider, StatusProvider, useSession } from "./session";
+import { HomeworksProvider, SessionProvider, StatusProvider, useSession } from "./session";
 
 const Teacher = lazy(() => import("./pages/teacher"));
 
@@ -25,6 +25,7 @@ function Routed() {
   }
   return (
     <StatusProvider>
+      <HomeworksProvider>
       <Routes>
         <Route path="/chat" element={<Workbench />} />
         <Route path="/chat/:key" element={<Workbench />} />
@@ -33,6 +34,7 @@ function Routed() {
         <Route path="/progress" element={<Progress />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Routes>
+      </HomeworksProvider>
     </StatusProvider>
   );
 }

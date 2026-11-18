@@ -24,15 +24,19 @@ interface Loaded<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  /** keep 时：deps 变了、新数据还没到，data 还是上一份（用来避免切换时页面闪一下） */
+  stale: boolean;
   reload: () => void;
   setData: (value: T) => void;
 }
 
-/** 取数据。deps 变了重新取；pollMs 设了就在页面可见时定时刷新（刷新失败不清掉已有的数据）。 */
-export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0): Loaded<T> {
+/** 取数据。deps 变了重新取；pollMs 设了就在页面可见时定时刷新（刷新失败不清掉已有的数据）。
+ *  keep：deps 变了不先清空，新数据到了再换（切换题目、作业时不闪）。 */
+export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, keep = false): Loaded<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [stale, setStale] = useState(false);
   const fnRef = useRef(fn);
   fnRef.current = fn;
   const seq = useRef(0);
@@ -44,6 +48,7 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0): L
       .then((value) => {
         if (mine !== seq.current) return;
         setData(value);
+        setStale(false);
         setError(null);
       })
       .catch((err: Error) => {
@@ -56,7 +61,8 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0): L
   }, []);
 
   useEffect(() => {
-    setData(null);
+    if (keep) setStale(true);
+    else setData(null);
     setError(null);
     run(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -71,7 +77,7 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0): L
   }, [pollMs, run]);
 
   const reload = useCallback(() => run(true), [run]);
-  return { data, error, loading, reload, setData };
+  return { data, error, loading, stale, reload, setData };
 }
 
 /** 按 Esc 关闭。 */

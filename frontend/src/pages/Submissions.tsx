@@ -1,24 +1,25 @@
 // 提交页：一道题一张卡片，卡片里是这道题的每一次提交。
 import { Fragment, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronDown, ChevronUp, CircleCheck, Code2, GitCompare, Inbox, MessageCircle } from "lucide-react";
+import { ChevronDown, ChevronUp, CircleCheck, Code2, Inbox, MessageCircle } from "lucide-react";
 import { api } from "../api";
 import DiffOverlay from "../components/Diff";
-import { HomeworkPicker, homeworkSummary } from "../components/Lists";
+import { ChangeNote, HomeworkPicker, homeworkSummary } from "../components/Lists";
 import { StudentShell } from "../components/Shell";
 import { Cells, CodeBlock, Empty, Loading, Problem, ResultPill } from "../components/ui";
 import { useLoad } from "../lib/hooks";
 import { fullTime } from "../lib/time";
 import { useHomeworks } from "../session";
-import type { ProblemRow, SubmissionView } from "../types";
+import type { ProblemRow, SubmissionChange, SubmissionView } from "../types";
 
-type Row = ProblemRow & { submissions: SubmissionView[] };
+type Row = ProblemRow & { submissions: SubmissionView[]; changes: Record<string, SubmissionChange> };
 
 export default function Submissions() {
   const { homeworks, current, pick, loading } = useHomeworks();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
-  const data = useLoad(() => (current ? api.homeworkSubmissions(current.key) : Promise.resolve(null)), [current?.key], 15000);
+  const data = useLoad(() => (current ? api.homeworkSubmissions(current.key) : Promise.resolve(null)), [current?.key], 15000, true);
+  const fresh = !!data.data && data.data.homework.key === current?.key;
   const [open, setOpen] = useState<string | null>(null);
   const [source, setSource] = useState<{ key: string; lines?: string[]; error?: string } | null>(null);
 
@@ -46,7 +47,7 @@ export default function Submissions() {
   const untried = problems.filter((p) => p.submissions.length === 0);
   const total = tried.reduce((n, p) => n + p.submissions.length, 0);
 
-  const ops = (p: Row, sub: SubmissionView, i: number) => (
+  const ops = (p: Row, sub: SubmissionView) => (
     <span className="sub-ops">
       {sub.result !== "AC" && sub.result !== "PENDING" && (
         <button type="button" className="btn btn-sm btn-ghost" onClick={() => navigate(`/chat/${p.key}?ask=${sub.key}`)}>
@@ -57,11 +58,6 @@ export default function Submissions() {
         <Code2 size={15} aria-hidden="true" />{open === sub.key ? "收起代码" : "看代码"}
         {open === sub.key ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
       </button>
-      {i < p.submissions.length - 1 && (
-        <button type="button" className="btn btn-sm btn-ghost" onClick={() => openDiff(p.key, p.submissions[i + 1].key, sub.key)}>
-          <GitCompare size={15} aria-hidden="true" />和上一次比
-        </button>
-      )}
     </span>
   );
   const sourceView = (sub: SubmissionView) =>
@@ -95,7 +91,7 @@ export default function Submissions() {
             </div>
           )}
 
-          <div className="stack">
+          <div className={fresh ? "stack fade-swap" : "stack fade-swap is-stale"}>
             {tried.map((p) => (
               <section key={p.key} className="card sub-card" aria-labelledby={`sub-${p.key}`}>
                 <div className="sub-card-head">
@@ -118,8 +114,13 @@ export default function Submissions() {
                           {sub.grid ? <Cells grid={sub.grid} /> : <span className="note">{sub.result === "CE" ? "没有运行" : ""}</span>}
                         </span>
                         <span className="sub-time note">{fullTime(sub.time)}</span>
-                        {ops(p, sub, i)}
+                        {ops(p, sub)}
                       </div>
+                      {i < p.submissions.length - 1 && (
+                        <div className="sub-change">
+                          <ChangeNote change={p.changes?.[sub.key]} onDiff={() => openDiff(p.key, p.submissions[i + 1].key, sub.key)} />
+                        </div>
+                      )}
                       {sourceView(sub)}
                     </Fragment>
                   ))}
