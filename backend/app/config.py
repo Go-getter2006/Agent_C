@@ -78,6 +78,8 @@ XDOJ_PASS = _env("XDOJ_PASS", "")
 XDOJ_SERVER_CODE = _env("XDOJ_SERVER_CODE", "c")
 XDOJ_SERVER_NAME = _env("XDOJ_SERVER_NAME", "C 语言")
 XDOJ_TERM = _env("XDOJ_TERM", "")
+# 数据结构那台 XDOJ 的地址（还没给出时留空：登录页只有 C 语言）
+XDOJ_DS_URL = _env("XDOJ_DS_URL", "").rstrip("/")
 XDOJ_MIN_INTERVAL_FLOOR = 0.2
 XDOJ_MIN_INTERVAL = max(XDOJ_MIN_INTERVAL_FLOOR, _env_float("XDOJ_MIN_INTERVAL", 0.2))
 XDOJ_CONNECT_TIMEOUT = 10.0

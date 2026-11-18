@@ -2,6 +2,8 @@
 
 这里返回的就是学生能看到的全部。测试点只有“过没过”，没有输入、输出、编号和说明；
 对话步骤（chat_steps）、内部编码、概率数值都不返回。
+
+只看这次登录的课程（user.course）：C 语言里看不到数据结构的任何东西，反过来也一样。
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from sqlalchemy.orm import Session
 from .. import accounts, catalog, db, llm, progress, quiz, review
 from .. import models as m
 from ..chat import workflow
-from ..taxonomy import UI_EVENTS
+from ..taxonomy import UI_EVENTS, course_of
 from ..xdoj import api as sync_api
 from ..xdoj import store
 from ..xdoj.assemble import source_text
@@ -28,7 +30,7 @@ NOT_FOUND = "没有这道题，或者它不在你的作业里。"
 # ------------------------------------------------------------ 小工具
 def _problem(s: Session, user: m.User, key: str) -> catalog.ProblemInfo:
     parsed = catalog.parse_key(key, "p")
-    if parsed is None or not catalog.is_visible(s, user.student_id, *parsed):
+    if parsed is None or not catalog.is_visible(s, user.student_id, *parsed, course=user.course):
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     info = catalog.problem_info(s, *parsed)
     if info is None:
@@ -46,7 +48,8 @@ def _thread(s: Session, user: m.User, key: str) -> tuple[int, int] | None:
 def _own_submission(s: Session, user: m.User, key: str) -> m.Submission:
     parsed = catalog.parse_key(key, "s")
     sub = s.get(m.Submission, parsed) if parsed else None
-    if sub is None or sub.user_id != user.student_id or not catalog.is_visible(s, user.student_id, sub.server_id, sub.problem_id):
+    if sub is None or sub.user_id != user.student_id or \
+            not catalog.is_visible(s, user.student_id, sub.server_id, sub.problem_id, course=user.course):
         raise HTTPException(status_code=404, detail="没有这条提交。")
     return sub
 
@@ -63,8 +66,8 @@ def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
 
 
 def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None) -> list[dict]:
-    msgs = workflow.thread_messages(s, user.student_id, thread)
-    rnd = workflow.open_round(s, user.student_id)
+    msgs = workflow.thread_messages(s, user.student_id, thread, user.course)
+    rnd = workflow.open_round(s, user.student_id, user.course)
     out = []
     for i, msg in enumerate(msgs):
         # 求助按钮只出现在智能体最新一条回复下面，而且这个回合还没结束
@@ -94,7 +97,7 @@ def _sorted_contests(s: Session, user: m.User) -> list[m.Contest]:
     now = db.now()
     far = now.replace(year=now.year + 50)
     # 按截止时间排序；已过截止的放在后面
-    return sorted(catalog.visible_contests(s, user.student_id),
+    return sorted(catalog.visible_contests(s, user.student_id, user.course),
                   key=lambda c: (bool(c.end_time and c.end_time < now), c.end_time or far, c.contest_id))
 
 
@@ -117,7 +120,7 @@ def homeworks(user: m.User = Depends(student), s: Session = Depends(get_session)
 @router.get("/homeworks/{key}")
 def homework_detail(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     parsed = catalog.parse_key(key, "h")
-    contest = next((c for c in catalog.visible_contests(s, user.student_id)
+    contest = next((c for c in catalog.visible_contests(s, user.student_id, user.course)
                     if parsed == (c.server_id, c.contest_id)), None)
     if contest is None:
         raise HTTPException(status_code=404, detail="没有这个作业，或者它没有布置给你的班级。")
@@ -143,7 +146,7 @@ def homework_submissions(key: str, user: m.User = Depends(student), s: Session =
 def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     info = _problem(s, user, key)
     views = catalog.submissions_view(s, user.student_id, info.server_id, info.problem_id)
-    contest = catalog.visible_problems(s, user.student_id).get((info.server_id, info.problem_id))
+    contest = catalog.visible_problems(s, user.student_id, user.course).get((info.server_id, info.problem_id))
     return {"key": info.key, "title": info.title, "brief": info.brief,
             "homeworkKey": catalog.homework_key(*contest) if contest else None,
             "submissions": views[::-1],
@@ -225,13 +228,13 @@ def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session =
     if not body.action and not body.text.strip():
         raise HTTPException(status_code=400, detail="消息是空的。")
     try:
-        workflow.handle(s, user.student_id, th, body.text, body.action, body.submissionKey)
+        workflow.handle(s, user.student_id, th, body.text, body.action, body.submissionKey, course=user.course)
     except llm.LLMUnavailable:
         raise HTTPException(status_code=502, detail="这条没发出去，再发一次试试。")
     if body.action in ("think", "hint", "tell"):
-        s.add(m.UiEvent(user_id=user.student_id, kind=f"help_{body.action}", target=key))
+        s.add(m.UiEvent(user_id=user.student_id, kind=f"help_{body.action}", target=key, course=user.course))
     elif body.submissionKey:
-        s.add(m.UiEvent(user_id=user.student_id, kind="ask_why", target=body.submissionKey))
+        s.add(m.UiEvent(user_id=user.student_id, kind="ask_why", target=body.submissionKey, course=user.course))
     return {"messages": _thread_view(s, user, th)}
 
 
@@ -252,7 +255,7 @@ class RunBody(BaseModel):
 
 def _attempt(s: Session, user: m.User, attempt_id: int) -> m.QuizAttempt:
     attempt = s.get(m.QuizAttempt, attempt_id)
-    if attempt is None or attempt.user_id != user.student_id:
+    if attempt is None or attempt.user_id != user.student_id or course_of(attempt.skill_code or "C") != user.course:
         raise HTTPException(status_code=404, detail="没有这道小题。")
     return attempt
 
@@ -291,14 +294,14 @@ def quiz_skip(attempt_id: int, user: m.User = Depends(student), s: Session = Dep
 # ------------------------------------------------------------ 学情
 @router.get("/progress")
 def progress_page(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    return progress.build(s, user.student_id)
+    return progress.build(s, user.student_id, user.course)
 
 
 # ------------------------------------------------------------ 复习
 @router.get("/review")
 def review_page(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    s.add(m.UiEvent(user_id=user.student_id, kind="open_review", target=""))
-    out = review.summary(s, user.student_id)
+    s.add(m.UiEvent(user_id=user.student_id, kind="open_review", target="", course=user.course))
+    out = review.summary(s, user.student_id, course=user.course)
     current = next((d for d in out["due"] if d["pending"]), None)
     if current is not None:
         item = s.get(m.ReviewItem, current["id"])
@@ -312,12 +315,12 @@ def review_page(user: m.User = Depends(student), s: Session = Depends(get_sessio
 
 @router.post("/review/{item_id}/start")
 def review_start(item_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    item, attempt = review.start(s, user.student_id, item_id)
+    item, attempt = review.start(s, user.student_id, item_id, course=user.course)
     if item is None:
         raise HTTPException(status_code=404, detail="没有这个复习项。")
     if attempt is None:
         raise HTTPException(status_code=409, detail="这一项今天不用复习，或者今天的复习已经做够了。")
-    s.add(m.UiEvent(user_id=user.student_id, kind="review_start", target=str(item_id)))
+    s.add(m.UiEvent(user_id=user.student_id, kind="review_start", target=str(item_id), course=user.course))
     q = s.get(m.QuizItem, attempt.item_id)
     return {"itemId": item.id, "lead": review.lead_for(s, user.student_id, item, q), "quiz": quiz.view(s, attempt)}
 
@@ -332,14 +335,15 @@ class EventBody(BaseModel):
 def ui_event(body: EventBody, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     if body.kind not in UI_EVENTS:
         raise HTTPException(status_code=400, detail="不认识的事件。")
-    s.add(m.UiEvent(user_id=user.student_id, kind=body.kind, target=body.target))
+    s.add(m.UiEvent(user_id=user.student_id, kind=body.kind, target=body.target, course=user.course))
     return {"ok": True}
 
 
 @router.get("/status")
 def status(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     """XDOJ 连得上吗、数据是什么时候的。连不上时页面顶部显示一条细横幅。"""
-    servers = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id)}
+    servers = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id)
+               if catalog.server_course(s, sid) == user.course}
     worst = {"ok": True, "dataTime": None, "demo": False}
     for sid in servers:
         source = s.scalar(select(m.DataSource).where(m.DataSource.server_id == sid, m.DataSource.enabled.is_(True)))
@@ -352,4 +356,5 @@ def status(user: m.User = Depends(student), s: Session = Depends(get_session)) -
         if failures >= 3 or stale:
             worst["ok"] = False
             worst["dataTime"] = last_ok.isoformat() if last_ok else None
-    return {"xdoj": worst, "dueReviews": len(review.due_items(s, user.student_id)), "llm": llm.available()}
+    return {"xdoj": worst, "dueReviews": len(review.due_items(s, user.student_id, course=user.course)),
+            "llm": llm.available(), "course": user.course}

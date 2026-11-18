@@ -29,26 +29,32 @@ _PUSHBACK = re.compile(r"(没关系|不影响|没问题吧|不对吧|不是吧|�
 
 
 # ------------------------------------------------------------ 线程和回合
-def thread_filter(user_id: str, thread: tuple[int, int] | None):
+def thread_filter(user_id: str, thread: tuple[int, int] | None, course: str | None = None):
+    """一个对话线程里的消息。没绑定题的“综合”对话两门课各有一个，按课程分开。"""
     cond = [m.ChatMessage.user_id == user_id]
     if thread is None:
-        cond += [m.ChatMessage.server_id.is_(None), m.ChatMessage.problem_id.is_(None)]
+        cond += [m.ChatMessage.server_id.is_(None), m.ChatMessage.problem_id.is_(None),
+                 m.ChatMessage.course == (course or "C")]
     else:
         cond += [m.ChatMessage.server_id == thread[0], m.ChatMessage.problem_id == thread[1]]
     return cond
 
 
-def thread_messages(s: Session, user_id: str, thread: tuple[int, int] | None) -> list[m.ChatMessage]:
-    return list(s.scalars(select(m.ChatMessage).where(*thread_filter(user_id, thread)).order_by(m.ChatMessage.id)).all())
+def thread_messages(s: Session, user_id: str, thread: tuple[int, int] | None,
+                    course: str | None = None) -> list[m.ChatMessage]:
+    return list(s.scalars(select(m.ChatMessage).where(*thread_filter(user_id, thread, course))
+                          .order_by(m.ChatMessage.id)).all())
 
 
 def message_text(msg: m.ChatMessage) -> str:
     return "\n".join(b.get("text", "") for b in (msg.content or {}).get("blocks", []) if b.get("t") == "p")
 
 
-def open_round(s: Session, user_id: str) -> m.ChatRound | None:
-    return s.scalars(select(m.ChatRound).where(m.ChatRound.user_id == user_id, m.ChatRound.status == "open")
-                     .order_by(m.ChatRound.id.desc())).first()
+def open_round(s: Session, user_id: str, course: str | None = None) -> m.ChatRound | None:
+    q = select(m.ChatRound).where(m.ChatRound.user_id == user_id, m.ChatRound.status == "open")
+    if course is not None:
+        q = q.where(m.ChatRound.course == course)  # 两门课的回合各算各的
+    return s.scalars(q.order_by(m.ChatRound.id.desc())).first()
 
 
 def close_round(s: Session, rnd: m.ChatRound, reason: str, at: dt.datetime) -> None:
@@ -113,8 +119,9 @@ def refresh_rounds(s: Session, user_id: str, now: dt.datetime | None = None) -> 
             close_round(s, rnd, "超时", rnd.last_message_at)
 
 
-def _round_for(s: Session, user_id: str, key: tuple[int, int] | None, now: dt.datetime) -> m.ChatRound:
-    rnd = open_round(s, user_id)
+def _round_for(s: Session, user_id: str, key: tuple[int, int] | None, now: dt.datetime,
+               course: str = "C") -> m.ChatRound:
+    rnd = open_round(s, user_id, course)
     current = (rnd.server_id, rnd.problem_id) if rnd is not None and rnd.problem_id is not None else None
     if rnd is not None and current != key:
         if current is None and key is not None and rnd.help_count == 0:
@@ -124,7 +131,7 @@ def _round_for(s: Session, user_id: str, key: tuple[int, int] | None, now: dt.da
         rnd = None
     if rnd is None:
         rnd = m.ChatRound(user_id=user_id, server_id=key[0] if key else None, problem_id=key[1] if key else None,
-                          started_at=now, last_message_at=now)
+                          course=course, started_at=now, last_message_at=now)
         s.add(rnd)
         s.flush()
     return rnd
@@ -139,7 +146,7 @@ def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool 
     rs = ctx.round_stuck
     if rs is None:
         nth = len(ctx.prior_stuck) + 1
-        rs = m.StuckPoint(user_id=ctx.user_id, course="C", server_id=ctx.problem.server_id if ctx.problem else None,
+        rs = m.StuckPoint(user_id=ctx.user_id, course=ctx.course, server_id=ctx.problem.server_id if ctx.problem else None,
                           problem_id=ctx.problem.problem_id if ctx.problem else None, skill_code=ctx.root_skill,
                           error_code=ctx.root_error, nth=nth, round_id=rnd.id, created_at=now)
         s.add(rs)
@@ -208,9 +215,14 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
 
 # ------------------------------------------------------------ 入口
 def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str = "", action: str | None = None,
-           submission_key: str | None = None, now: dt.datetime | None = None) -> list[m.ChatMessage]:
-    """处理学生的一条消息（或一次按钮点击）。返回新增的消息：学生这一条和智能体的回复。"""
+           submission_key: str | None = None, now: dt.datetime | None = None,
+           course: str | None = None) -> list[m.ChatMessage]:
+    """处理学生的一条消息（或一次按钮点击）。返回新增的消息：学生这一条和智能体的回复。
+
+    course：这次登录的课程。绑定了题的线程按题所在的服务器定；综合对话按登录的课程。
+    """
     now = now or db.now()
+    course = catalog.server_course(s, thread[0]) if thread is not None else (course or "C")
     t0 = time.monotonic()
     if action not in (None, *BUTTONS):
         action = None
@@ -224,7 +236,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         sync_api.request_priority(s, picked[0], picked[1])
 
     prose, pasted = (text, "") if action else split_message(text)
-    last_agent = next((x for x in reversed(thread_messages(s, user_id, thread)) if x.role == "agent"), None)
+    last_agent = next((x for x in reversed(thread_messages(s, user_id, thread, course)) if x.role == "agent"), None)
     last_agent_text = message_text(last_agent) if last_agent is not None and last_agent.kind == "text" else ""
     awaiting = last_agent_text.rstrip().endswith(("？", "?"))
     if awaiting and thread is not None and last_agent is not None:
@@ -236,8 +248,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     since_reply = (now - last_agent.created_at).total_seconds() if last_agent is not None else None
 
     # 第 2 步 绑定 → 回合
-    key, _sub, _by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now)
-    rnd = _round_for(s, user_id, key, now)
+    key, _sub, _by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now, course)
+    rnd = _round_for(s, user_id, key, now, course)
     awaiting = awaiting or rnd.recall_stage in ("asked", "blanked")  # 让他回忆时也在等他回答
     if not awaiting and not action and rnd.help_count > 0 and _PUSHBACK.search(prose or text):
         awaiting = True
@@ -245,13 +257,13 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     if pasted:
         blocks.append({"t": "code", "caption": "我贴的代码", "start": 1, "lines": pasted.split("\n"), "mark": []})
     student_msg = m.ChatMessage(user_id=user_id, round_id=rnd.id, server_id=thread[0] if thread else None,
-                                problem_id=thread[1] if thread else None, role="student", kind="text",
+                                problem_id=thread[1] if thread else None, course=course, role="student", kind="text",
                                 content={"blocks": blocks}, created_at=now)
     s.add(student_msg)
     s.flush()
 
     # 第 3~5 步 取证、诊断、状态
-    ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now)
+    ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course)
     ctx._located = bool(rnd.located)
     hint = ctx.hint()
 
@@ -311,11 +323,11 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
 
     # 第 7 步 生成与校验
     visible_titles = {}
-    for (sid, pid) in catalog.visible_problems(s, user_id):
+    for (sid, pid) in catalog.visible_problems(s, user_id, course):
         info = catalog.problem_info(s, sid, pid)
         if info is not None:
             visible_titles[info.title] = info.brief
-    history = [(x.role, message_text(x)) for x in thread_messages(s, user_id, thread)[-6:] if x.kind == "text"]
+    history = [(x.role, message_text(x)) for x in thread_messages(s, user_id, thread, course)[-6:] if x.kind == "text"]
     draft, source, check_result, retries = _produce(ctx, decision, flow, text, history, prior, prior_ref,
                                                     decision.kind, visible_titles)
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
@@ -325,7 +337,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         actions = list(reply.HELP_ACTIONS)
     content = {"blocks": reply.to_blocks(draft, ctx), "actions": actions}
     agent_msg = m.ChatMessage(user_id=user_id, round_id=rnd.id, server_id=thread[0] if thread else None,
-                              problem_id=thread[1] if thread else None, role="agent", kind="text",
+                              problem_id=thread[1] if thread else None, course=course, role="agent", kind="text",
                               content=content, created_at=now + dt.timedelta(milliseconds=1))
     s.add(agent_msg)
     s.flush()
@@ -363,7 +375,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         message_id=student_msg.id, round_id=rnd.id, user_id=user_id,
         intent=analysis.intent, skill_code=analysis.skill_code or ctx.root_skill, has_attempt=analysis.has_attempt,
         has_code=bool(pasted), icap=analysis.icap, analysis_source=analysis.source,
-        course_id="C" if ctx.problem is not None else "", server_id=ctx.problem.server_id if ctx.problem else None,
+        course_id=course, server_id=ctx.problem.server_id if ctx.problem else None,
         problem_id=ctx.problem.problem_id if ctx.problem else None,
         submission_id=ctx.submission.submission_id if ctx.submission else None, bind_by=ctx.bind_by,
         evidence_card=context.evidence_card(ctx),

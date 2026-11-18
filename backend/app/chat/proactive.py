@@ -174,12 +174,12 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
     from .workflow import _round_for
 
     thread = (sub.server_id, sub.problem_id)
-    rnd = _round_for(s, sub.user_id, thread, now)
+    rnd = _round_for(s, sub.user_id, thread, now, _course(s, sub.server_id))
     rnd.submission_id, rnd.last_message_at = sub.submission_id, now
     if label is not None and label.skill_code:
         rnd.skill_code, rnd.error_code = label.skill_code, label.error_code
     msg = m.ChatMessage(user_id=sub.user_id, round_id=rnd.id, server_id=sub.server_id, problem_id=sub.problem_id,
-                        role="agent", kind="text", created_at=now,
+                        course=_course(s, sub.server_id), role="agent", kind="text", created_at=now,
                         content={"blocks": blocks, "actions": list(HELP_ACTIONS),
                                  "proactive": {"kind": kind, "submission": sub.submission_id}})
     s.add(msg)

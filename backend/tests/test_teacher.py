@@ -32,7 +32,7 @@ def test_roles_are_separated(client):
                  "/api/teacher/classes/c1-31/overview", "/api/teacher/classes/c1-31/graph"):
         assert client.get(path).status_code == 403, path
     client.post("/api/auth/logout")
-    assert login(client, "demo-teacher").json() == {"role": "teacher", "name": "演示教师"}
+    assert login(client, "demo-teacher").json() == {"role": "teacher", "name": "演示教师", "course": "C"}
     for path in ("/api/homeworks", "/api/progress", "/api/threads/general"):
         assert client.get(path).status_code == 403, path
 
@@ -209,25 +209,28 @@ def test_overview_kpis_trend_attention(client, demo):
     assert all(r for r in names.values())
 
 
-def test_knowledge_map_two_courses_and_cross_links(client, demo):
+def test_knowledge_map_of_c_class_has_no_data_structures(client, demo):
+    """C 语言的班只有 C 语言这张图：没有数据结构的知识点、没有跨课程的边。"""
     login(client, "demo-teacher")
     key = f"c{demo['server_id']}-31"
     g = client.get(f"/api/teacher/classes/{key}/knowledge-map").json()
-    courses = {n["course"] for n in g["nodes"]}
-    assert courses == {"C", "D"} and len(g["nodes"]) == 95
-    cross = [e for e in g["edges"] if e["cross"]]
-    assert cross and all(e["from"].startswith("C") and e["to"].startswith("D") for e in cross)
+    assert {n["course"] for n in g["nodes"]} == {"C"} and [c["code"] for c in g["courses"]] == ["C"]
+    assert g["edges"] and not any(e["cross"] for e in g["edges"])
+    assert all(t["course"] == "C" for t in g["topics"])
     node = {n["code"]: n for n in g["nodes"]}
     assert node["C06.03"]["covered"] and sum(node["C06.03"]["dist"]) == 12 and node["C06.03"]["mean"] is not None
-    assert not node["D02.02"]["covered"] and node["D02.02"]["mean"] is None
-    assert node["D02.01"]["readiness"] is not None   # 数据结构：由 C 语言推出来的准备度
     one = client.get(f"/api/teacher/classes/{key}/knowledge-map", params={"student": UID}).json()
     me = {n["code"]: n for n in one["nodes"]}
     assert me["C06.03"]["student"]["level"] in ("基本掌握", "待加强")
     assert client.get(f"/api/teacher/classes/{key}/knowledge-map", params={"student": "2500000101"}).status_code == 404
     d = client.get(f"/api/teacher/classes/{key}/knowledge-map/C06.03").json()
     assert d["name"] == "最值、求和、统计" and {p["title"] for p in d["problems"]} >= {"成绩最高分", "最大差值"}
-    assert any(x["cross"] for x in client.get(f"/api/teacher/classes/{key}/knowledge-map/C10.01").json()["next"])
+    assert not any(x["cross"] for x in client.get(f"/api/teacher/classes/{key}/knowledge-map/C10.01").json()["next"])
+    assert client.get(f"/api/teacher/classes/{key}/knowledge-map/D02.02").status_code == 404
+    detail = client.get(f"/api/teacher/students/{UID}").json()
+    assert detail["readiness"] == [] and detail["foundation"] == []
+    assert all(k["code"].startswith("C") for k in detail["knowledge"])
+    assert "数据结构" not in json.dumps(detail, ensure_ascii=False)
 
 
 # ------------------------------------------------------------ 按需申请学生日志
@@ -322,7 +325,7 @@ def test_student_login_through_xdoj(client, monkeypatch):
     # 演示口令不能冒充真实名单里的学生
     assert client.post("/api/auth/login", json={"loginName": "2599000001", "password": "test-pass"}).status_code == 401
     r = client.post("/api/auth/login", json={"loginName": "2599000001", "password": "stu-xdoj-pw"})
-    assert r.status_code == 200 and r.json() == {"role": "student", "name": "测试生"}
+    assert r.status_code == 200 and r.json() == {"role": "student", "name": "测试生", "course": "C"}
     assert client.get("/api/auth/me").json()["loginName"] == "2599000001"
     with db.session_scope() as s:
         for table in db.Base.metadata.sorted_tables:
@@ -357,49 +360,126 @@ def test_teacher_login_checks_role_and_reads_name(client, monkeypatch):
     assert r.status_code == 200 and r.json()["name"] == "李老师"
 
 
-def test_teacher_links_accounts_of_both_courses(client, monkeypatch):
-    """C 语言和数据结构是两台 XDOJ，同一位老师的账号密码可能不同：关联以后用哪个账号登录都进同一个账号。"""
+def _two_courses(monkeypatch):
+    """两台假的 XDOJ：C 语言（c.test）和数据结构（ds.test），同一位老师在两边的账号密码不同。"""
     import httpx
+
+    from app import accounts
 
     c_fx = FakeXdoj(teacher_id="t-zhang", password="c-pass")
     ds_fx = FakeXdoj(teacher_id="zhang-ds", password="ds-pass")
-    stu = FakeXdoj(teacher_id="t-other", password="other-pass")
+    for fx in (c_fx, ds_fx):
+        fx.student_passwords["2599000003"] = "both-pw"
+    c_fx.student_passwords["2599000004"] = "c-only-pw"
     hosts = {"c.test": c_fx, "ds.test": ds_fx}
-    monkeypatch.setattr(teacher_api, "_test_transport",
-                        httpx.MockTransport(lambda req: hosts.get(req.url.host, stu).handle(req)))
+    monkeypatch.setattr(teacher_api, "_test_transport", httpx.MockTransport(lambda req: hosts[req.url.host].handle(req)))
     with db.session_scope() as s:
-        sources.ensure_server(s, "c-test", "C 语言（测试）", "http://c.test/xdoj-ssm")
-        sources.ensure_server(s, "ds-test", "数据结构（测试）", "http://ds.test/xdoj-ssm", "D")
-        sources.ensure_server(s, "o-test", "另一台（测试）", "http://other.test/xdoj-ssm")
+        c_srv = sources.ensure_server(s, "c-test", "C 语言（测试）", "http://c.test/xdoj-ssm")
+        d_srv = sources.ensure_server(s, "ds-test", "数据结构（测试）", "http://ds.test/xdoj-ssm", "D")
+        for uid, name in (("2599000003", "两门都上"), ("2599000004", "只上C")):
+            s.add(m.Student(user_id=uid, name=name))
+            s.flush()
+            accounts.ensure_student_user(s, uid, name)
+        for srv, cid, title, pid, ptitle in ((c_srv, 501, "C 语言第 1 次作业", 9001, "求最大值"),
+                                             (d_srv, 601, "数据结构第 1 次作业", 9101, "单链表逆置")):
+            s.add(m.XClass(server_id=srv.id, class_id=cid, class_name=f"{srv.name}一班"))
+            s.add(m.Contest(server_id=srv.id, contest_id=cid, title=title))
+            s.add(m.ContestClass(server_id=srv.id, contest_id=cid, class_id=cid))
+            s.add(m.Problem(server_id=srv.id, problem_id=pid, title=ptitle))
+            s.add(m.ContestProblem(server_id=srv.id, contest_id=cid, problem_id=pid, seq=1))
+            s.add(m.Enrollment(user_id="2599000003", server_id=srv.id, class_id=cid))
+        s.add(m.Enrollment(user_id="2599000004", server_id=c_srv.id, class_id=501))
+        return c_srv.id, d_srv.id
 
+
+def _own_class(server_id: int, class_id: int) -> None:
+    """名单同步的结果：这个班挂到登录的这位老师在这台服务器上的数据源下。"""
+    with db.session_scope() as s:
+        src = s.scalar(select(m.DataSource).where(m.DataSource.server_id == server_id))
+        if s.get(m.ClassSource, (server_id, class_id, src.id)) is None:
+            s.add(m.ClassSource(data_source_id=src.id, server_id=server_id, class_id=class_id))
+
+
+def test_courses_are_logged_in_and_shown_separately(client, monkeypatch):
+    """C 语言和数据结构分开登录：各看各的，C 语言里不出现数据结构；数据结构里没有 C 语言的答题记录。"""
+    c_id, d_id = _two_courses(monkeypatch)
+    info = client.get("/api/auth/info").json()
+    assert [c["code"] for c in info["courses"]] == ["C", "D"]
+
+    # 老师：用 C 语言的账号登录，只有 C 语言
     r = client.post("/api/teacher/login", json={"server": "c-test", "userId": "t-zhang", "password": "c-pass"})
-    assert r.status_code == 200
-    # 关联数据结构那台的账号（密码不同）；密码错不行
-    bad = {"server": "ds-test", "userId": "zhang-ds", "password": "wrong"}
-    assert client.post("/api/teacher/sources/link", json=bad).status_code == 401
-    r = client.post("/api/teacher/sources/link", json={**bad, "password": "ds-pass"})
-    assert r.status_code == 200
-    codes = sorted(x["serverCode"] for x in client.get("/api/teacher/sources").json()["sources"])
-    assert codes == ["c-test", "ds-test"]
+    assert r.status_code == 200 and r.json()["course"] == "C"
+    _own_class(c_id, 501)
+    assert client.get("/api/auth/me").json()["course"] == "C"
+    classes = client.get("/api/teacher/classes").json()
+    assert [c["name"] for c in classes["classes"]] == ["C 语言（测试）一班"] and classes["course"] == "C"
+    srcs = client.get("/api/teacher/sources").json()
+    assert [x["serverCode"] for x in srcs["sources"]] == ["c-test"] and all(k["course"] == "C" for k in srcs["known"])
+    # 关联另一门课的入口没有了
+    assert client.post("/api/teacher/sources/link", json={"server": "ds-test", "userId": "zhang-ds",
+                                                           "password": "ds-pass"}).status_code in (404, 405)
 
-    # 换用数据结构的账号登录：进的是同一个账号，两门课都在
+    # 用数据结构的账号登录（密码不同）：只有数据结构
     client.post("/api/auth/logout")
-    r = client.post("/api/teacher/login", json={"server": "ds-test", "userId": "zhang-ds", "password": "ds-pass"})
-    assert r.status_code == 200
-    assert sorted(x["serverCode"] for x in client.get("/api/teacher/sources").json()["sources"]) == ["c-test", "ds-test"]
-    with db.session_scope() as s:
-        assert s.scalar(select(func.count()).select_from(m.User).where(m.User.role == "teacher",
-                                                                      m.User.login_name.like("%zhang%"))) == 1
+    bad = {"server": "ds-test", "userId": "zhang-ds", "password": "c-pass"}
+    assert client.post("/api/teacher/login", json=bad).status_code == 401
+    r = client.post("/api/teacher/login", json={**bad, "password": "ds-pass"})
+    assert r.status_code == 200 and r.json()["course"] == "D"
+    _own_class(d_id, 601)
+    classes = client.get("/api/teacher/classes").json()["classes"]
+    assert [c["name"] for c in classes] == ["数据结构（测试）一班"]
+    assert [x["serverCode"] for x in client.get("/api/teacher/sources").json()["sources"]] == ["ds-test"]
+    assert client.get(f"/api/teacher/classes/c{c_id}-501/overview").status_code == 404
+    g = client.get(f"/api/teacher/classes/c{d_id}-601/knowledge-map").json()
+    assert {c["code"] for c in g["courses"]} == {"C", "D"} and any(e["cross"] for e in g["edges"])
+    node = {n["code"]: n for n in g["nodes"]}
+    assert node["C10.01"]["foundation"] and not node["D02.02"]["foundation"]
+    c_node = client.get(f"/api/teacher/classes/c{d_id}-601/knowledge-map/C10.01").json()
+    assert c_node["foundation"] and c_node["errors"] == [] and c_node["problems"] == []   # 只有掌握程度
+    detail = client.get("/api/teacher/students/2599000003").json()
+    assert detail["course"] == "D" and detail["foundation"] and detail["submissions"] == []
+    assert all(k["code"].startswith("D") for k in detail["knowledge"])
+    assert client.get("/api/teacher/students/2599000004").status_code == 404   # 只上 C 的学生不在数据结构的班里
 
-    # 别的老师不能把已经关联的账号拿走
+    # 学生：两门都上的，选哪门进哪门
     client.post("/api/auth/logout")
-    assert client.post("/api/teacher/login", json={"server": "o-test", "userId": "t-other", "password": "other-pass"}).status_code == 200
-    r = client.post("/api/teacher/sources/link", json={"server": "ds-test", "userId": "zhang-ds", "password": "ds-pass"})
-    assert r.status_code == 409
+    r = client.post("/api/auth/login", json={"loginName": "2599000003", "password": "both-pw", "course": "D"})
+    assert r.status_code == 200 and r.json()["course"] == "D"
+    assert [h["title"] for h in client.get("/api/homeworks").json()["homeworks"]] == ["数据结构第 1 次作业"]
+    assert client.get(f"/api/problems/p{c_id}-9001").status_code == 404     # C 语言的题在数据结构里打不开
+    assert client.get(f"/api/problems/p{d_id}-9101").status_code == 200
+    assert client.post("/api/threads/general/messages", json={"text": "链表逆置要注意什么？"}).status_code == 200
+    assert client.get("/api/threads/general").json()["messages"]
+    prog = client.get("/api/progress").json()
+    assert prog["knowledge"] and "C 语言" not in json.dumps(prog["knowledge"], ensure_ascii=False)
 
-    # 取消关联：至少留一个
     client.post("/api/auth/logout")
-    client.post("/api/teacher/login", json={"server": "c-test", "userId": "t-zhang", "password": "c-pass"})
-    srcs = {x["serverCode"]: x["id"] for x in client.get("/api/teacher/sources").json()["sources"]}
-    assert client.post(f"/api/teacher/sources/{srcs['ds-test']}/unlink").status_code == 200
-    assert client.post(f"/api/teacher/sources/{srcs['c-test']}/unlink").status_code == 409
+    r = client.post("/api/auth/login", json={"loginName": "2599000003", "password": "both-pw", "course": "C"})
+    assert r.status_code == 200 and r.json()["course"] == "C"
+    assert [h["title"] for h in client.get("/api/homeworks").json()["homeworks"]] == ["C 语言第 1 次作业"]
+    assert client.get(f"/api/problems/p{d_id}-9101").status_code == 404
+    assert client.get("/api/threads/general").json()["messages"] == []       # 综合对话两门课各一个
+    page = json.dumps([client.get(p).json() for p in ("/api/progress", "/api/review", "/api/status", "/api/homeworks")],
+                      ensure_ascii=False)
+    assert "数据结构" not in page and "链表" not in page
+
+    # 只上 C 的学生选了数据结构：说清楚是选错了课程
+    client.post("/api/auth/logout")
+    r = client.post("/api/auth/login", json={"loginName": "2599000004", "password": "c-only-pw", "course": "D"})
+    assert r.status_code == 401 and "选错了课程" in r.json()["error"]
+    assert client.post("/api/auth/login", json={"loginName": "2599000004", "password": "c-only-pw",
+                                                "course": "X"}).status_code == 400
+
+
+def test_old_session_tokens_need_login_again(client):
+    """旧格式（不带课程）的登录凭证不再认，重新登录一次就好。"""
+    import hashlib
+    import hmac
+    import time
+
+    body = f"1.{int(time.time()) + 3600}"
+    sig = hmac.new(crypto._derive("session"), body.encode("ascii"), hashlib.sha256).hexdigest()
+    client.cookies.set("pda_session", f"{body}.{sig}")
+    assert client.get("/api/auth/me").status_code == 401
+    assert crypto.verify_session(crypto.sign_session(5, "D")) == (5, "D")
+    assert crypto.verify_session(crypto.sign_session(5, "C")[:-1] + "x") is None

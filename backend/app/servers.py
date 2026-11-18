@@ -58,17 +58,25 @@ def check_course_url(course: str, base_url: str | None, code: str = "") -> None:
 
 
 def ensure_known(s: Session) -> dict[str, m.Server]:
-    """把已知的服务器写进库。地址还没给的（数据结构）也登记一行，但不能用来登录或同步。"""
+    """把已知的服务器写进库。地址还没给的（数据结构）也登记一行，但不能用来登录或同步。
+
+    数据结构的地址给出以后写在 .env 的 XDOJ_DS_URL 里，重启就生效。
+    """
+    from . import config
+
     out = {}
     for known in KNOWN.values():
+        url = known.base_url or (config.XDOJ_DS_URL if known.code == "ds" else "")
+        if url:
+            check_course_url(known.course, url, known.code)
         row = s.scalar(select(m.Server).where(m.Server.code == known.code))
         if row is None:
-            row = m.Server(code=known.code, name=known.name, course=known.course, base_url=known.base_url or "")
+            row = m.Server(code=known.code, name=known.name, course=known.course, base_url=url or "")
             s.add(row)
             s.flush()
         else:
             row.name, row.course = known.name, known.course
-            if known.base_url:
-                row.base_url = known.base_url
+            if url:
+                row.base_url = url
         out[known.code] = row
     return out

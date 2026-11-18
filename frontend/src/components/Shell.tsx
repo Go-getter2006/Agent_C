@@ -58,12 +58,13 @@ function UserFoot() {
   const { me, logout } = useSession();
   if (!me) return null;
   const role = me.role === "student" ? me.loginName : me.role === "admin" ? "管理员" : "教师";
+  const course = me.course === "D" ? "数据结构" : "C 语言";
   return (
     <div className="side-foot">
       <Avatar name={me.name} dark />
       <span className="side-user">
         <strong>{me.name}</strong>
-        <small>{role}</small>
+        <small>{role} · {course}</small>
       </span>
       <button type="button" className="side-logout" onClick={() => void logout()} aria-label="退出登录" title="退出登录">
         <LogOut size={18} />

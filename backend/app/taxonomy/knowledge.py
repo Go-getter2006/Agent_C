@@ -93,6 +93,15 @@ KNOWLEDGE_POINTS.update(DS_KNOWLEDGE_POINTS)
 COURSE_NAMES = {"C": "C 语言程序设计", "D": "数据结构"}
 
 
+# 写进大模型提示里的课程说法。数据结构课的代码也是 C 写的
+COURSE_PROMPT = {"C": "C 语言课程", "D": "数据结构课程（代码用 C 语言写）"}
+
+
+def course_prompt(text: str, course: str) -> str:
+    """把提示里的“C 语言课程”换成这门课的说法。"""
+    return text.replace("C 语言课程", COURSE_PROMPT.get(course, COURSE_PROMPT["C"]))
+
+
 def course_of(code: str) -> str:
     """编码属于哪门课：C 或 D。"""
     return "D" if code.startswith("D") else "C"

@@ -1,7 +1,7 @@
-// 数据源：已知的两台 XDOJ 服务器、每个数据源的同步状态、标注用的表。
-import { useState, type FormEvent } from "react";
-import { Database, Link2, RefreshCw, Server, Unlink } from "lucide-react";
-import { api, get, post } from "../../api";
+// 数据源：这门课的 XDOJ 账号的同步状态、标注用的表。两门课分开登录，这里只有登录的这门课。
+import { useState } from "react";
+import { Database, RefreshCw, Server } from "lucide-react";
+import { get, post } from "../../api";
 import { Card, Empty, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { shortTime } from "../../lib/time";
@@ -27,55 +27,6 @@ function sourceState(src: SourceRow): { text: string; cls: string } {
   return { text: "正常", cls: "pill pill-pass" };
 }
 
-/** 关联另一门课的 XDOJ 教师账号：两门课是两台服务器，账号密码可能不同。只在还有没关联的课程时出现。 */
-function LinkCard({ linked, onDone }: { linked: string[]; onDone: () => void }) {
-  const servers = useLoad(() => api.teacherServers().then((r) => r.servers), []);
-  const options = (servers.data ?? []).filter((x) => !linked.includes(x.code));
-  const [server, setServer] = useState("");
-  const [userId, setUserId] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (options.length === 0) return null;
-  const chosen = server || options[0].code;
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await post("/api/teacher/sources/link", { server: chosen, userId: userId.trim(), password });
-      setUserId("");
-      setPassword("");
-      onDone();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Card title="关联另一门课的 XDOJ 账号" sub="两门课的 XDOJ 是分开的，账号密码可能不一样。关联以后两门课的班级都在这里，用哪个账号登录都行">
-      <form className="link-form" onSubmit={submit}>
-        {options.length > 1 && (
-          <label className="label">课程
-            <select className="field" value={chosen} onChange={(e) => setServer(e.target.value)}>
-              {options.map((o) => <option key={o.code} value={o.code}>{o.name}</option>)}
-            </select>
-          </label>
-        )}
-        <label className="label">{options.length === 1 ? `${options[0].name}的 XDOJ 账号` : "XDOJ 账号"}
-          <input className="field" value={userId} onChange={(e) => setUserId(e.target.value)} autoComplete="off" required />
-        </label>
-        <label className="label">密码
-          <input className="field" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
-        </label>
-        <button type="submit" className="btn btn-primary" disabled={busy}><Link2 size={15} aria-hidden="true" />{busy ? "正在核对" : "关联"}</button>
-      </form>
-      {error && <p className="error-text" role="alert">{error}</p>}
-    </Card>
-  );
-}
-
 export default function Sources() {
   const data = useLoad(() => get<SourcesData>("/api/teacher/sources"), [], 30000);
   const [note, setNote] = useState<{ id: number; text: string } | null>(null);
@@ -87,16 +38,6 @@ export default function Sources() {
       await post(`/api/teacher/sources/${id}/sync`);
       data.reload();
       window.setTimeout(reloadClasses, 20000); // 名单一般十几秒到一两分钟同步完；之后还有定时刷新
-    } catch (err) {
-      setNote({ id, text: (err as Error).message });
-    }
-  };
-  const unlink = async (id: number) => {
-    if (!window.confirm("取消关联后，这门课的班级和提交不再同步。确定吗？")) return;
-    try {
-      await post(`/api/teacher/sources/${id}/unlink`);
-      data.reload();
-      reloadClasses();
     } catch (err) {
       setNote({ id, text: (err as Error).message });
     }
@@ -127,16 +68,11 @@ export default function Sources() {
             </div>
             <div className="form-actions">
               <button type="button" className="btn" disabled={!src.enabled} onClick={() => void sync(src.id)}><RefreshCw size={15} aria-hidden="true" />立即同步名单和作业</button>
-              {real.length > 1 && (
-                <button type="button" className="btn btn-ghost" onClick={() => void unlink(src.id)}><Unlink size={15} aria-hidden="true" />取消关联</button>
-              )}
               {note?.id === src.id && <span className="error-text" role="alert">{note.text}</span>}
             </div>
           </Card>
         );
       })}
-
-      {real.length > 0 && <LinkCard linked={real.map((x) => x.serverCode)} onDone={() => { data.reload(); window.setTimeout(reloadClasses, 20000); }} />}
 
       {d.candidates.length > 0 && (
         <Card title="候选的新错误类型" sub="自动标注时库里没有合适编码的情况" bodyClass="">

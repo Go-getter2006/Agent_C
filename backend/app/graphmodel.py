@@ -195,9 +195,11 @@ def edge_stats(per_student: dict[str, dict[str, float]]) -> list[dict]:
     return rows
 
 
-def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6) -> list[dict]:
+def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6, course: str | None = None) -> list[dict]:
     """按周统计两个模型的预测准确度（概率 ≥ 0.5 算预测“能做对”），以及 Brier 分数（越小越好）。"""
     rows = s.scalars(select(m.PredictionLog).where(m.PredictionLog.user_id.in_(user_ids))).all() if user_ids else []
+    if course is not None:
+        rows = [r for r in rows if r.skill_code and r.skill_code[0] == course]
     now = db.now().astimezone(db.BEIJING)
     monday = (now - dt.timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     buckets: dict[int, list[m.PredictionLog]] = defaultdict(list)

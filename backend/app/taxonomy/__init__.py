@@ -4,5 +4,6 @@
 """
 from .enums import *  # noqa: F401,F403
 from .errors import ERRORS, error_name, errors_for_course, is_error_code  # noqa: F401
-from .knowledge import COURSE_NAMES, KNOWLEDGE_POINTS, TOPICS, course_of, kp_name, kp_of_skill  # noqa: F401
+from .knowledge import (COURSE_NAMES, KNOWLEDGE_POINTS, TOPICS, course_of, course_prompt, kp_name,  # noqa: F401
+                        kp_of_skill)
 from .skills import SKILLS, is_skill_code, skill_name, skills_for_course, skills_of_kp  # noqa: F401

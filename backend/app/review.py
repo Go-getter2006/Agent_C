@@ -21,6 +21,7 @@ Leitner 盒子；半衰期回归（Settles 和 Meeder 2016）。
 6. 不打扰：不弹窗，不往正在聊的对话里插题。导航上显示到期的个数；复习页一次一道；
    每天最多 daily_limit 道，同一个技能一天最多一道；到期的里面先做记得最不牢的。
 7. 出什么题：第一次复习用他自己当时那道题的代码回忆；之后换一个场景（迁移）；刚答错过就降一级，出判断题。
+8. 两门课分开：复习项按技能编码属于哪门课，C 语言登录只看 C 语言的，数据结构只看数据结构的；每天的上限也各算各的。
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from . import catalog, config, db
 from . import models as m
-from .taxonomy import KNOWLEDGE_POINTS, kp_of_skill, skill_name
+from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill, skill_name
 
 ACTIVE = "active"
 GRADUATED = "graduated"
@@ -40,6 +41,10 @@ GRADUATED = "graduated"
 
 def cfg() -> dict:
     return config.REVIEW
+
+
+def _in_course(skill_code: str, course: str | None) -> bool:
+    return course is None or (bool(skill_code) and course_of(skill_code) == course)
 
 
 def retention(item: m.ReviewItem, at: dt.datetime | None = None) -> float:
@@ -179,7 +184,10 @@ def on_recurrence(s: Session, sub: m.Submission, error_code: str, skill: str) ->
               & (m.SubmissionLabel.submission_id == m.Submission.submission_id))
         .where(m.Submission.user_id == sub.user_id, m.SubmissionLabel.error_code == error_code,
                m.SubmissionLabel.is_current.is_(True), m.Submission.submission_id < sub.submission_id)).all()
+    course = catalog.server_course(s, sub.server_id)
     for server_id, problem_id, sid in earlier:
+        if catalog.server_course(s, server_id) != course:
+            continue   # 只和同一门课里的比
         fixed = s.scalar(select(m.Submission.submission_id).where(
             m.Submission.server_id == server_id, m.Submission.user_id == sub.user_id,
             m.Submission.problem_id == problem_id, m.Submission.judgement == "AC",
@@ -190,22 +198,24 @@ def on_recurrence(s: Session, sub: m.Submission, error_code: str, skill: str) ->
 
 
 # ------------------------------------------------------------ 学生看到的
-def _today_count(s: Session, user_id: str, at: dt.datetime) -> tuple[int, set[str]]:
+def _today_count(s: Session, user_id: str, at: dt.datetime, course: str | None = None) -> tuple[int, set[str]]:
     local = at.astimezone(db.BEIJING)
     start = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(db.UTC)
     rows = s.scalars(select(m.QuizAttempt).where(
         m.QuizAttempt.user_id == user_id, m.QuizAttempt.reason == "review", m.QuizAttempt.created_at >= start)).all()
+    rows = [r for r in rows if _in_course(r.skill_code, course)]
     return len(rows), {r.skill_code for r in rows}
 
 
-def due_items(s: Session, user_id: str, at: dt.datetime | None = None) -> list[m.ReviewItem]:
+def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None) -> list[m.ReviewItem]:
     """今天可以做的：到期的、今天还没做过这个技能的，记得最不牢的在前，最多 daily_limit 个。"""
     at = at or db.now()
-    done, skills_today = _today_count(s, user_id, at)
+    done, skills_today = _today_count(s, user_id, at, course)
     room = max(0, cfg()["daily_limit"] - done)
     rows = s.scalars(select(m.ReviewItem).where(
         m.ReviewItem.user_id == user_id, m.ReviewItem.state == ACTIVE, m.ReviewItem.due_at <= at)).all()
-    rows = [r for r in rows if r.skill_code not in skills_today or r.attempt_id is not None]
+    rows = [r for r in rows if _in_course(r.skill_code, course)
+            and (r.skill_code not in skills_today or r.attempt_id is not None)]
     rows.sort(key=lambda r: (r.attempt_id is None, retention(r, at)))
     pending = [r for r in rows if r.attempt_id is not None]
     return (pending + [r for r in rows if r.attempt_id is None])[:max(room, len(pending))]
@@ -236,13 +246,14 @@ def item_view(s: Session, user_id: str, item: m.ReviewItem, at: dt.datetime) -> 
     }
 
 
-def summary(s: Session, user_id: str, at: dt.datetime | None = None) -> dict:
+def summary(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None) -> dict:
     at = at or db.now()
-    due = due_items(s, user_id, at)
+    due = due_items(s, user_id, at, course)
     due_ids = {d.id for d in due}
-    rows = s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)).all()
+    rows = [r for r in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)).all()
+            if _in_course(r.skill_code, course)]
     upcoming = sorted([r for r in rows if r.state == ACTIVE and r.id not in due_ids], key=lambda r: r.due_at)
-    done_today, _ = _today_count(s, user_id, at)
+    done_today, _ = _today_count(s, user_id, at, course)
     return {
         "due": [item_view(s, user_id, r, at) for r in due],
         "upcoming": [item_view(s, user_id, r, at) for r in upcoming[:12]],
@@ -252,19 +263,19 @@ def summary(s: Session, user_id: str, at: dt.datetime | None = None) -> dict:
     }
 
 
-def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None):
+def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None, course: str | None = None):
     """开始复习一项：用出题器给他出一道题。返回 (复习项, 小题作答)；出不了题返回 (复习项, None)。"""
     from . import quiz, quizgen
 
     at = at or db.now()
     item = s.get(m.ReviewItem, item_id)
-    if item is None or item.user_id != user_id or item.state != ACTIVE:
+    if item is None or item.user_id != user_id or item.state != ACTIVE or not _in_course(item.skill_code, course):
         return None, None
     if item.attempt_id is not None:
         attempt = s.get(m.QuizAttempt, item.attempt_id)
         if attempt is not None and attempt.state != "done":
             return item, attempt
-    if item.id not in {d.id for d in due_items(s, user_id, at)}:
+    if item.id not in {d.id for d in due_items(s, user_id, at, course)}:
         return item, None
     q = quizgen.generate(s, user_id, item.skill_code, "review",
                          origin=(item.origin_server_id, item.origin_problem_id) if item.origin_problem_id else None,
@@ -285,9 +296,10 @@ def lead_for(s: Session, user_id: str, item: m.ReviewItem, q: m.QuizItem) -> str
     return "换个场景，看看还记不记得："
 
 
-def teacher_stats(s: Session, user_ids: list[str], at: dt.datetime | None = None) -> dict:
+def teacher_stats(s: Session, user_ids: list[str], at: dt.datetime | None = None, course: str | None = None) -> dict:
     at = at or db.now()
     rows = s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id.in_(user_ids))).all() if user_ids else []
+    rows = [r for r in rows if _in_course(r.skill_code, course)]
     active = [r for r in rows if r.state == ACTIVE]
     return {"active": len(active), "due": sum(1 for r in active if r.due_at <= at),
             "graduated": sum(1 for r in rows if r.state == GRADUATED), "lapses": sum(r.lapses for r in rows),

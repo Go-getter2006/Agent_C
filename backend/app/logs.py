@@ -16,6 +16,7 @@
 3. 留痕：每次申请都记一条（谁、什么时候、要了谁的、什么时间段、哪几类、用途、导出了多少条、下载了几次）。
 4. 有时限：下载链接 7 天后失效，可以随时作废；文件不落盘，下载时按申请时定下的范围现生成。
 5. 限量：一次最多 500 个学号、时间段最长 366 天、每人每天最多 20 次申请。
+6. 分课程：只导出申请时登录的那门课的记录（C 语言和数据结构分开登录）。
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from . import db
 from . import models as m
-from .taxonomy import JUDGEMENTS, error_name, skill_name
+from .taxonomy import JUDGEMENTS, course_of, error_name, skill_name
 
 KINDS: dict[str, str] = {
     "login": "登录",
@@ -97,12 +98,13 @@ def _problem_title(s: Session, cache: dict, server_id: int | None, problem_id: i
 
 
 def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt.datetime, kinds: list[str],
-            include_text: bool) -> list[Row]:
-    """按申请的范围把日志收齐，按时间排好。"""
+            include_text: bool, course: str | None = None) -> list[Row]:
+    """按申请的范围把日志收齐，按时间排好。course：只要这门课的。"""
     if not user_ids:
         return []
     names = dict(s.execute(select(m.Student.user_id, m.Student.name).where(m.Student.user_id.in_(user_ids))).all())
     courses = {sv.id: sv.course for sv in s.scalars(select(m.Server)).all()}
+    servers = [sid for sid, c in courses.items() if course is None or c == course] or [-1]
     titles: dict = {}
     rows: list[Row] = []
 
@@ -111,7 +113,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
 
     if "submission" in kinds:
         subs = s.scalars(select(m.Submission).where(
-            m.Submission.user_id.in_(user_ids), m.Submission.submit_time >= date_from,
+            m.Submission.user_id.in_(user_ids), m.Submission.server_id.in_(servers), m.Submission.submit_time >= date_from,
             m.Submission.submit_time <= date_to).order_by(m.Submission.submission_id)).all()
         attempt_no: dict = {}
         for sub in s.scalars(select(m.Submission).where(m.Submission.user_id.in_(user_ids))
@@ -148,7 +150,10 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                       "errors": [lab.error_code for lab in labels]})
 
     if {"ask", "reply"} & set(kinds):
-        msgs = s.scalars(select(m.ChatMessage).where(
+        q = select(m.ChatMessage)
+        if course is not None:
+            q = q.where(m.ChatMessage.course == course)
+        msgs = s.scalars(q.where(
             m.ChatMessage.user_id.in_(user_ids), m.ChatMessage.created_at >= date_from,
             m.ChatMessage.created_at <= date_to, m.ChatMessage.kind == "text").order_by(m.ChatMessage.id)).all()
         steps = {st.message_id: st for st in s.scalars(select(m.ChatStep).where(
@@ -171,7 +176,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                     detail = f"意图 {st.intent}，规则 {st.rule_id}，帮助级别 {st.help_level}" + (
                         f"，诊断 {st.root_error_code}" if st.root_error_code else "")
                 add(user_id=msg.user_id, time=msg.created_at, kind="ask", action=action,
-                    course=courses.get(msg.server_id, "") if msg.server_id else "", problem_id=msg.problem_id,
+                    course=msg.course, problem_id=msg.problem_id,
                     problem=title, submission_id=st.submission_id if st else None, detail=detail,
                     text=text if include_text else "",
                     data={"round": msg.round_id, "intent": st.intent if st else None,
@@ -181,7 +186,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                 st = last_step.get(msg.user_id)
                 example = [b for b in codes if b.get("caption") in ("示例", "上次给你的那段")]
                 add(user_id=msg.user_id, time=msg.created_at, kind="reply", action="智能体回复",
-                    course=courses.get(msg.server_id, "") if msg.server_id else "", problem_id=msg.problem_id,
+                    course=msg.course, problem_id=msg.problem_id,
                     problem=title, samples="给了示例代码" if example else "",
                     detail=(HELP_TEXT.get(st.help_level, "") if st else "") + (
                         f"，回复来源 {st.reply_source}" if st and st.reply_source else ""),
@@ -195,13 +200,13 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             m.QuizAttempt.created_at <= date_to).order_by(m.QuizAttempt.id)).all()
         for a in attempts:
             kind = "review" if a.reason == "review" else "quiz"
-            if kind not in kinds:
+            if kind not in kinds or (course is not None and course_of(a.skill_code or "C") != course):
                 continue
             item = s.get(m.QuizItem, a.item_id)
             result = {"right": "改对了", "right_judge": "判断对", "right_second": "第二次改对",
                       "right_bypass": "绕开原错误改对", "wrong_fix": "两次没改对", "wrong_judge": "判断错",
                       "skipped": "跳过"}.get(a.outcome, "没做完")
-            add(user_id=a.user_id, time=a.created_at, kind=kind,
+            add(user_id=a.user_id, time=a.created_at, kind=kind, course=course_of(a.skill_code or "C"),
                 action="复习题" if kind == "review" else "小题",
                 problem_id=item.source_problem_id if item else None,
                 problem=_problem_title(s, titles, item.source_server_id if item else None,
@@ -216,12 +221,15 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
 
     ui_kinds = {k for k, (kind, _t) in UI_KIND.items() if kind in kinds}
     if ui_kinds:
-        events = s.scalars(select(m.UiEvent).where(
+        q = select(m.UiEvent)
+        if course is not None:
+            q = q.where(m.UiEvent.course == course)
+        events = s.scalars(q.where(
             m.UiEvent.user_id.in_(user_ids), m.UiEvent.ts >= date_from, m.UiEvent.ts <= date_to,
             m.UiEvent.kind.in_(ui_kinds)).order_by(m.UiEvent.id)).all()
         for e in events:
             kind, action = UI_KIND[e.kind]
-            add(user_id=e.user_id, time=e.ts, kind=kind, action=action, detail=e.target or "",
+            add(user_id=e.user_id, time=e.ts, kind=kind, action=action, detail=e.target or "", course=e.course,
                 data={"event": e.kind, "target": e.target})
 
     rows.sort(key=lambda r: (r.time, r.user_id))
@@ -229,7 +237,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
 
 
 def allowed_students(s: Session, user: m.User) -> set[str] | None:
-    """申请人能要哪些学生的日志。None 表示不限（管理员）。现在不在班上、以前在过的也算。"""
+    """申请人能要哪些学生的日志：他名下这门课的班里的。None 表示不限（管理员）。现在不在班上、以前在过的也算。"""
     if user.role == "admin":
         return None
     from .accounts import teacher_source_ids
@@ -237,8 +245,9 @@ def allowed_students(s: Session, user: m.User) -> set[str] | None:
     ids = teacher_source_ids(s, user)
     if not ids:
         return set()
+    servers = list(s.scalars(select(m.Server.id).where(m.Server.course == user.course)).all()) or [-1]
     classes = s.execute(select(m.ClassSource.server_id, m.ClassSource.class_id).where(
-        m.ClassSource.data_source_id.in_(ids))).all()
+        m.ClassSource.data_source_id.in_(ids), m.ClassSource.server_id.in_(servers))).all()
     out: set[str] = set()
     for server_id, class_id in classes:
         out |= set(s.scalars(select(m.Enrollment.user_id).where(
@@ -247,7 +256,8 @@ def allowed_students(s: Session, user: m.User) -> set[str] | None:
 
 
 def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_from: dt.datetime,
-           date_to: dt.datetime, kinds: list[str], include_text: bool, fmt: str, purpose: str) -> m.LogRequest:
+           date_to: dt.datetime, kinds: list[str], include_text: bool, fmt: str, purpose: str,
+           course: str = "C") -> m.LogRequest:
     now = db.now()
     kinds = [k for k in dict.fromkeys(kinds) if k in KINDS]
     if not kinds:
@@ -285,12 +295,12 @@ def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_f
     granted = [u for u in wanted if u in known and (allowed is None or u in allowed)]
     denied = [u for u in wanted if u not in granted]
     req = m.LogRequest(
-        requester_id=user.id, requester_name=user.display_name or user.login_name, requested_ids=requested,
+        requester_id=user.id, requester_name=user.display_name or user.login_name, requested_ids=requested, course=course,
         granted_ids=granted, denied_ids=denied, class_keys=list(class_ids), date_from=date_from,
         date_to=min(date_to, now), kinds=kinds, include_text=bool(include_text), fmt=fmt,
         purpose=purpose.strip()[:200], token=secrets.token_urlsafe(24), status="ready", created_at=now,
         expires_at=now + dt.timedelta(days=TTL_DAYS))
-    req.rows = len(collect(s, granted, req.date_from, req.date_to, kinds, include_text))
+    req.rows = len(collect(s, granted, req.date_from, req.date_to, kinds, include_text, course))
     s.add(req)
     s.flush()
     return req
@@ -309,7 +319,7 @@ COLUMNS = [("user_id", "学号"), ("name", "姓名"), ("time", "时间"), ("kind
 
 def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:
     """按申请时定下的范围现生成文件。返回 (内容, MIME 类型, 文件名)。"""
-    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text)
+    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text, req.course)
     stamp = req.created_at.astimezone(db.BEIJING).strftime("%Y%m%d-%H%M")
     cols = [c for c in COLUMNS if c[0] != "text" or req.include_text]
 
