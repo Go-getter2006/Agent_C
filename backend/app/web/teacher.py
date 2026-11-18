@@ -47,27 +47,39 @@ def servers(s: Session = Depends(get_session)) -> dict:
     return {"servers": [{"code": r.code, "name": r.name} for r in rows]}
 
 
+class NotTeacher(Exception):
+    """XDOJ 登录成功，但这不是教师账号（userType 不是 1）。"""
+
+
+def verify_on(server: m.Server, user_id: str, password: str, key: str) -> str | None:
+    """去这台 XDOJ 试登教师账号，返回姓名（可能读不到）。不是教师抛 NotTeacher；密码错、连不上抛 HTTPException。"""
+    client = XdojClient(server.base_url, user_id, password, limiter=limiter_for(server.base_url),
+                        transport=_test_transport, max_retries=1)
+    try:
+        client.login()
+        if client.user_type is not None and str(client.user_type) != "1":
+            raise NotTeacher()
+        return client.teacher_name()
+    except SessionError:
+        record_failure(key)
+        raise HTTPException(status_code=401, detail="账号或密码不对。用的是 XDOJ 的账号和密码。")
+    except XdojError:
+        raise HTTPException(status_code=502, detail="XDOJ 暂时连不上，过一会儿再试。")
+    finally:
+        client.close()
+
+
 def _verify_teacher(s: Session, body: TeacherLogin, key: str) -> tuple[m.Server, str, str | None]:
     """去 XDOJ 试登这个教师账号。返回 (服务器, XDOJ 账号, 姓名)。不是教师账号、密码错、连不上都抛出。"""
     user_id = body.userId.strip()
     server = s.scalar(select(m.Server).where(m.Server.code == body.server, m.Server.code != "demo"))
     if server is None or not server.base_url:
         raise HTTPException(status_code=400, detail="没有这台 XDOJ 服务器，请联系管理员先登记。")
-    client = XdojClient(server.base_url, user_id, body.password, limiter=limiter_for(server.base_url),
-                        transport=_test_transport, max_retries=1)
     try:
-        client.login()
-        if client.user_type is not None and str(client.user_type) != "1":
-            record_failure(key)
-            raise HTTPException(status_code=403, detail="这不是 XDOJ 的教师账号。学生请在登录页选“学生”。")
-        return server, user_id, client.teacher_name()
-    except SessionError:
+        return server, user_id, verify_on(server, user_id, body.password, key)
+    except NotTeacher:
         record_failure(key)
-        raise HTTPException(status_code=401, detail="XDOJ 账号或密码不对。")
-    except XdojError:
-        raise HTTPException(status_code=502, detail="XDOJ 暂时连不上，过一会儿再试。")
-    finally:
-        client.close()
+        raise HTTPException(status_code=403, detail="这不是 XDOJ 的教师账号。学生直接用学号登录。")
 
 
 def _save_source(s: Session, server: m.Server, user_id: str, password: str) -> m.DataSource:
@@ -93,14 +105,20 @@ def _link(s: Session, user: m.User, source: m.DataSource) -> None:
 
 @router.post("/login")
 def login(body: TeacherLogin, request: Request, response: Response, s: Session = Depends(get_session)) -> dict:
-    """教师用某一门课的 XDOJ 账号登录：系统去那台 XDOJ 试登，成功后进入这门课。
-
-    两门课是两台 XDOJ，账号密码可能不同，分开登录：登录 C 语言就只看 C 语言，登录数据结构就只看数据结构。
-    """
+    """教师用某一门课的 XDOJ 账号登录（登录页的统一入口在 auth.login，这个接口保留给脚本和旧页面）。"""
     key = f"t:{request.client.host if request.client else ''}:{body.userId.strip()}"
     throttle(key)
     server, user_id, name = _verify_teacher(s, body, key)
-    source = _save_source(s, server, user_id, body.password)
+    return finish_login(s, server, user_id, body.password, name, response)
+
+
+def finish_login(s: Session, server: m.Server, user_id: str, password: str, name: str | None,
+                 response: Response) -> dict:
+    """XDOJ 已经确认是这台服务器的教师：登记数据源、建账号、马上同步名下的班级，进入这门课。
+
+    两门课是两台 XDOJ，账号密码可能不同，分开登录：登录 C 语言就只看 C 语言，登录数据结构就只看数据结构。
+    """
+    source = _save_source(s, server, user_id, password)
     user = accounts.owner_of_source(s, source.id)
     if user is None:
         login_name = f"{server.code}:{user_id}"

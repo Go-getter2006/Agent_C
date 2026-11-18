@@ -4,10 +4,11 @@
 XDOJ 试登一次，成功就放行；密码只在这一次请求里用，不保存、不写日志（《总说明》第 11 节第 1 条的做法）。
 演示数据里的学生连不了真实的 XDOJ，用服务器上配置的演示口令（DEV_LOGIN_PASSWORD）。
 AUTH_MODE=dev 时，真实名单里的学生也可以用演示口令登录，只用于开发调试，正式环境不要这样配。
-教师登录见 teacher.py：用自己的 XDOJ 账号，由系统去 XDOJ 试登。
+教师和学生是同一个入口（学号 / 工号）：不在名单里的账号去这门课的 XDOJ 试登一次，XDOJ 说是教师（userType 1）
+就进入教师端（teacher.finish_login），说是学生就是名单还没同步到。
 
-C 语言和数据结构分开登录：登录时选课程，登录凭证里记着这门课，之后各页面只看这门课的东西。
-数据结构那台 XDOJ 还没配地址时，登录页不出现课程选择，只有 C 语言。
+C 语言和数据结构分开登录：首页用滑动开关选课程（两个选项一直都在），登录凭证里记着这门课，之后各页面只看这门课的东西。
+数据结构那台 XDOJ 还没配地址（.env 的 XDOJ_DS_URL）时，首页照样能切过去，但表单说明还没接入、不能登录。
 """
 from __future__ import annotations
 
@@ -76,12 +77,29 @@ def check_course(course: str) -> str:
     return course
 
 
+def all_courses(s: Session) -> list[dict]:
+    """首页一直显示 C 语言和数据结构两个选项（两台 XDOJ，账号不通用）。
+
+    available：这门课能不能登录。有地址的 XDOJ（.env 的 XDOJ_DS_URL 填上以后数据结构就有了），
+    或者库里已经有这门课的班级（演示、测试数据）。还不能登录的，首页照样能切过去，表单说明还没接入。
+    """
+    ready = {c["code"]: c for c in courses(s)}
+    out = []
+    for code, name in COURSE_NAMES.items():
+        has_classes = s.scalar(select(m.XClass.class_id).join(m.Server, m.Server.id == m.XClass.server_id)
+                               .where(m.Server.course == code).limit(1)) is not None
+        out.append({"code": code, "name": name, "server": (ready.get(code) or {}).get("server"),
+                    "available": code in ready or has_classes})
+    return out
+
+
 @router.get("/info")
 def info(s: Session = Depends(get_session)) -> dict:
     """登录页要显示什么。不返回任何口令。"""
     demo = s.scalar(select(m.Server.id).where(m.Server.code == "demo")) is not None
     return {"mode": config.AUTH_MODE, "ready": bool(config.DEV_LOGIN_PASSWORD) or _real_servers(s), "demo": demo,
-            "demoAccount": "2500000001" if demo else None, "teacherLogin": True, "courses": courses(s)}
+            "demoAccount": "2500000001" if demo else None, "teacherLogin": True, "courses": courses(s),
+            "allCourses": all_courses(s)}
 
 
 def _dev_password_ok(password: str) -> bool:
@@ -118,23 +136,14 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
     throttle(key)
     user = s.scalar(select(m.User).where(m.User.login_name == name))
     if user is None:
+        # 不在名单里的账号：去这门课的 XDOJ 试登一次，看是不是教师（userType 1）。是教师就登记、进入教师端；
+        # 是学生就是还没同步进名单的新生。密码只用这一次：教师的加密保存给后台同步用，学生的不保存。
+        real = list(s.scalars(select(m.Server).where(m.Server.course == course, m.Server.code != "demo",
+                                                     m.Server.base_url != "").order_by(m.Server.id)).all())
+        if real:
+            return _teacher_or_new_student(s, real, name, body.password, key, response)
         record_failure(key)
-        # 名单每两小时自动同步一次；有人用不认识的学号登录，多半是刚加进班的：马上自动再同步一次
-        asked = False
-        if name.isdigit():
-            from .. import db
-            from ..xdoj.api import request_meta_sync_if_stale
-
-            servers = [srv.id for srv in s.scalars(select(m.Server).where(
-                m.Server.course == course, m.Server.code != "demo", m.Server.base_url != "")).all()
-                if s.scalar(select(m.DataSource.id).where(m.DataSource.server_id == srv.id,
-                                                          m.DataSource.enabled.is_(True))) is not None]
-            with db.session_scope() as s2:   # 单独提交：下面要报错返回，这个请求自己的事务会回滚
-                for sid in servers:
-                    asked = request_meta_sync_if_stale(s2, sid) or asked
-        raise HTTPException(status_code=401, detail=(
-            "名单里还没有这个学号，系统正在自动重新同步名单，一两分钟后再试一次。" if asked else
-            "这个学号还不在班级名单里。名单会自动同步；如果你刚换了班，请联系任课老师。老师请在登录页选“教师”。"))
+        raise HTTPException(status_code=401, detail="这个账号还不在班级名单里。名单会自动同步；如果你刚换了班，请联系任课老师。")
     if user.status != "active":
         raise HTTPException(status_code=403, detail="这个账号已经不在班级名单里了，请联系老师。")
 
@@ -166,7 +175,7 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
             record_failure(key)
             raise HTTPException(status_code=401, detail="学号或密码不对。用的是 XDOJ 的学号和密码。")
     else:
-        # 管理员、演示教师用演示口令；真实的老师在登录页选“教师”，用 XDOJ 账号登录（teacher.py）
+        # 管理员、演示教师用演示口令；真实的老师不在用户表里叫这个名字（是“服务器:工号”），走上面的 XDOJ 试登
         if not _dev_password_ok(body.password):
             record_failure(key)
             raise HTTPException(status_code=401, detail="账号或密码不对。")
@@ -176,6 +185,33 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
         s.add(m.UiEvent(user_id=user.student_id, kind="login", target="", course=course))
     set_login_cookie(response, user, course)
     return {"role": user.role, "name": user.display_name, "course": course}
+
+
+def _teacher_or_new_student(s: Session, servers: list[m.Server], name: str, password: str, key: str,
+                            response: Response) -> dict:
+    from .. import db
+    from ..xdoj.api import request_meta_sync_if_stale
+    from . import teacher as teacher_api
+
+    student_on: list[m.Server] = []
+    for srv in servers:
+        try:
+            display = teacher_api.verify_on(srv, name, password, key)
+        except teacher_api.NotTeacher:
+            student_on.append(srv)
+            continue
+        return teacher_api.finish_login(s, srv, name, password, display, response)
+    # XDOJ 上确有这个学生、密码也对，只是名单还没同步到：马上自动再同步一次
+    record_failure(key)
+    asked = False
+    with db.session_scope() as s2:   # 单独提交：下面要报错返回，这个请求自己的事务会回滚
+        for srv in student_on:
+            if s2.scalar(select(m.DataSource.id).where(m.DataSource.server_id == srv.id,
+                                                       m.DataSource.enabled.is_(True))) is not None:
+                asked = request_meta_sync_if_stale(s2, srv.id) or asked
+    raise HTTPException(status_code=401, detail=(
+        "名单里还没有这个学号，系统正在自动重新同步名单，一两分钟后再试一次。" if asked else
+        "这个学号还不在班级名单里。要等任课老师登录本系统、同步完名单以后才能登录。"))
 
 
 @router.post("/logout")

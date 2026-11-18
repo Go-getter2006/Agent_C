@@ -26,6 +26,19 @@ config.DEV_LOGIN_PASSWORD = "test-pass"
 config.SYNC_IN_WEB = False
 
 
+@pytest.fixture(autouse=True)
+def _no_real_xdoj(monkeypatch):
+    """测试不连真实的 XDOJ：登录时没注入假 XDOJ 的，一律当作连不上（代码里写着 C 语言那台的真实地址）。"""
+    import httpx
+
+    from app.web import teacher as teacher_api
+
+    def refuse(request):
+        raise httpx.ConnectError("tests do not reach the real XDOJ")
+
+    monkeypatch.setattr(teacher_api, "_test_transport", httpx.MockTransport(refuse))
+
+
 @pytest.fixture()
 def database():
     url = os.environ.get("TEST_DATABASE_URL", "sqlite:///:memory:")

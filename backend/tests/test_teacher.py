@@ -340,7 +340,10 @@ def test_student_login_through_xdoj(client, monkeypatch):
         s.add(m.Enrollment(user_id="2599000001", server_id=srv.id, class_id=77))
 
     r = client.post("/api/auth/login", json={"loginName": "2599000099", "password": "x"})
-    assert r.status_code == 401 and "名单" in r.json()["error"]          # 不在任何名单里
+    assert r.status_code == 401 and "不对" in r.json()["error"]          # 不在名单里，XDOJ 也登不上
+    fx.student_passwords["2599000099"] = "new-pw"
+    r = client.post("/api/auth/login", json={"loginName": "2599000099", "password": "new-pw"})
+    assert r.status_code == 401 and "名单" in r.json()["error"]          # XDOJ 上有、名单还没同步到
     assert client.post("/api/auth/login", json={"loginName": "2599000001", "password": "wrong"}).status_code == 401
     # 演示口令不能冒充真实名单里的学生
     assert client.post("/api/auth/login", json={"loginName": "2599000001", "password": "test-pass"}).status_code == 401
@@ -378,6 +381,46 @@ def test_teacher_login_checks_role_and_reads_name(client, monkeypatch):
         assert s.scalar(select(m.DataSource).where(m.DataSource.teacher_user_id == "2599000002")) is None
     r = client.post("/api/teacher/login", json={"server": "c-test", "userId": "t-li", "password": "pw"})
     assert r.status_code == 200 and r.json()["name"] == "李老师"
+
+
+def test_one_entry_for_teachers_and_students(client, monkeypatch):
+    """登录页只有一个入口（学号 / 工号）：不在名单里的账号去这门课的 XDOJ 试登，XDOJ 说是教师就进教师端。"""
+    fx = FakeXdoj(teacher_id="t-zhao", password="t-pw")
+    fx.teacher_name = "赵老师"
+    monkeypatch.setattr(teacher_api, "_test_transport", fx.transport())
+    with db.session_scope() as s:
+        sources.ensure_server(s, "c-test", "C 语言（测试用的假服务器）", "http://fake.test/xdoj-ssm")
+    assert client.post("/api/auth/login", json={"loginName": "t-zhao", "password": "nope"}).status_code == 401
+    r = client.post("/api/auth/login", json={"loginName": "t-zhao", "password": "t-pw", "course": "C"})
+    assert r.status_code == 200 and r.json() == {"role": "teacher", "name": "赵老师", "course": "C"}
+    me = client.get("/api/auth/me").json()
+    assert me["role"] == "teacher" and me["course"] == "C"
+    with db.session_scope() as s:
+        src = s.scalar(select(m.DataSource).where(m.DataSource.teacher_user_id == "t-zhao"))
+        assert src.enabled and crypto.decrypt_secret(src.password_enc) == "t-pw"   # 后台同步要用，加密保存
+        assert s.scalar(select(m.User).where(m.User.login_name.like("%:t-zhao"))).role == "teacher"
+    # 第二次登录还是同一个账号，不重复建
+    client.post("/api/auth/logout")
+    assert client.post("/api/auth/login", json={"loginName": "t-zhao", "password": "t-pw"}).status_code == 200
+    with db.session_scope() as s:
+        assert len(s.scalars(select(m.User).where(m.User.role == "teacher", m.User.login_name.like("%t-zhao"))).all()) == 1
+    # 数据结构还没接入：同一个工号登录数据结构，不去 C 语言那台试
+    client.post("/api/auth/logout")
+    r = client.post("/api/auth/login", json={"loginName": "t-zhao", "password": "t-pw", "course": "D"})
+    assert r.status_code == 401
+
+
+def test_all_courses_always_listed(client):
+    """首页一直有 C 语言和数据结构两个选项；数据结构没接入时标成还不能登录。"""
+    info = client.get("/api/auth/info").json()
+    assert [(c["code"], c["name"]) for c in info["allCourses"]] == [("C", "C 语言程序设计"), ("D", "数据结构")]
+    avail = {c["code"]: c["available"] for c in info["allCourses"]}
+    assert avail == {"C": True, "D": False}
+    with db.session_scope() as s:
+        sources.ensure_server(s, "ds", "数据结构", "http://10.1.2.3/xdoj-ssm", "D")   # .env 填上 XDOJ_DS_URL 以后
+    info = client.get("/api/auth/info").json()
+    d = next(c for c in info["allCourses"] if c["code"] == "D")
+    assert d["available"] and d["server"] == "ds"
 
 
 def _two_courses(monkeypatch):
