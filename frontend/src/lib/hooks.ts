@@ -65,6 +65,7 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
     else setData(null);
     setError(null);
     run(false);
+    return () => { seq.current += 1; }; // 切换或卸载后，丢弃旧请求的响应。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 

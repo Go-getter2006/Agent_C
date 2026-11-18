@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { Check, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
 import { useEscape } from "../lib/hooks";
 import { deadline, shortTime } from "../lib/time";
+import { sortProblems } from "../lib/problems";
 import type { Homework, ProblemDetail, ProblemRow, SubmissionChange } from "../types";
 import { Cells, Meter, ResultPill, gridLabel } from "./ui";
 
@@ -80,7 +81,8 @@ export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
   problems: ProblemRow[]; currentKey: string | null; dueReviews: number; onNavigate?: () => void;
 }) {
   const box = useRef<HTMLElement>(null);
-  const slider = useSlider("plist", box, '.prow[aria-current="true"]', `${currentKey}:${problems.length}`);
+  const ordered = sortProblems(problems);
+  const slider = useSlider("plist", box, '.prow[aria-current="true"]', `${currentKey}:${ordered.map(p => p.key).join(",")}`);
   return (
     <>
       {dueReviews > 0 && (
@@ -98,7 +100,7 @@ export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
           <span>题目</span>
           <span className="num">{problems.filter((p) => p.passed).length}/{problems.length} 通过</span>
         </div>
-        {problems.map((p) => (
+        {ordered.map((p) => (
           <Link key={p.key} to={`/chat/${p.key}`} className="prow" aria-current={p.key === currentKey ? "true" : undefined} onClick={onNavigate}>
             <RowIcon p={p} />
             <span className="prow-main">
@@ -109,7 +111,6 @@ export function ProblemList({ problems, currentKey, dueReviews, onNavigate }: {
               {p.last ? (
                 <span className="prow-bottom">
                   <span className="prow-state">第 {p.last.attemptNo} 次，{p.last.resultText}</span>
-                  {p.last.grid ? <Cells grid={p.last.grid} /> : null}
                 </span>
               ) : (
                 <span className="prow-state">还没提交</span>
@@ -278,7 +279,7 @@ export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; on
           </div>
         )}
         {subs.length > 1 && (
-          <div className="timeline">
+          <details className="submission-history"><summary>之前的 {subs.length - 1} 次提交</summary><div className="timeline">
             {subs.slice(1, 6).map((sub, i) => (
               <div key={sub.key} className="tl-item">
                 <span className={sub.result === "AC" ? "tl-dot ok" : sub.result === "PENDING" ? "tl-dot wait" : "tl-dot"} aria-hidden="true" />
@@ -291,7 +292,7 @@ export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; on
                 </span>
               </div>
             ))}
-          </div>
+          </div></details>
         )}
         {subs.length > 6 && <p className="note">更早的 {subs.length - 6} 次在“提交”页里</p>}
       </section>

@@ -195,10 +195,10 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
     if sub is not None:
         subs = catalog.user_submissions(s, user_id, sub.server_id, sub.problem_id, until=now)
         ctx.attempt_no = [x.submission_id for x in subs].index(sub.submission_id) + 1
+        ctx.evidence = assemble_submission(s, sub.server_id, sub.submission_id)
+        ctx.source = ctx.evidence.get("sourceCode")
+        ctx.source_kind = "submission"
         if sub.detail_status == "done":
-            ctx.evidence = assemble_submission(s, sub.server_id, sub.submission_id)
-            ctx.source = ctx.evidence.get("sourceCode")
-            ctx.source_kind = "submission"
             ctx.labels = labeler.label_submission(s, sub.server_id, sub.submission_id)  # 还没标的，立即标
         fails = [x for x in subs if x.judgement not in ("AC", "PENDING")]
         last5 = subs[-config.CHAT["no_progress_submissions"]:]
@@ -288,7 +288,8 @@ def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
                             .order_by(m.Testcase.seq, m.Testcase.testcase_id)).all():
             inp = decode_bytes(tc.input_bytes, tc.input_encoding)[0] if tc.input_bytes is not None else None
             out = decode_bytes(tc.output_bytes, tc.output_encoding)[0] if tc.output_bytes is not None else None
-            ctx.all_tests.append({"standardInput": inp, "standardOutput": out})
+            ctx.all_tests.append({"testcaseId": tc.testcase_id, "standardInput": inp, "standardOutput": out,
+                                  "standardInputAvailable": inp is not None, "standardOutputAvailable": out is not None})
         subs = catalog.user_submissions(s, ctx.user_id, sid, pid, until=now)
         prev_lines = None
         for i, sub in enumerate(subs[-8:], start=max(1, len(subs) - 7)):

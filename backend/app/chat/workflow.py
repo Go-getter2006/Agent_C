@@ -13,7 +13,7 @@ from .. import catalog, config, db, llm, mastery, quiz, quizgen, review
 from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
-from . import context, hints, reply, validate
+from . import context, hints, reply, teaching, validate
 from .analyze import Analysis, analyze, dialogue_act
 from .policy import Decision, PolicyInput, decide, willingness_of
 from .text import split_message
@@ -310,7 +310,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         answer_correct=analysis.answer_correct, understood=analysis.understood, willingness=willingness,
         base_level=ctx.level, last_help=rnd.last_help_level, help_count=rnd.help_count,
         failed_replies=rnd.failed_replies, located=bool(rnd.located),
-        same_error_resubmit=ctx.same_error_resubmit, no_progress=ctx.no_progress))
+        same_error_resubmit=ctx.same_error_resubmit, no_progress=ctx.no_progress,
+        needs_example=action != "think" and teaching.needs_example(prose or text)))
     flow = decision.kind
     prior: m.StuckPoint | None = None
     stuck_point: m.StuckPoint | None = None
@@ -318,19 +319,24 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         decision = Decision("R07", "H3", "乙", "stuck")
         flow = "stuck"
     if ctx.problem is not None and flow not in ("other", "concept", "task", "ack"):
-        if ctx.submission is not None and ctx.submission.detail_status != "done":
+        if ctx.submission is not None and ctx.submission.detail_status != "done" and not ctx.source:
             decision, flow = Decision("R00", "NA", "甲", "pending"), "pending"
         elif ctx.submission is not None and ctx.submission.judgement == "AC" and not pasted \
                 and flow not in ("affirm",):
             decision, flow = Decision("R00", "NA", "甲", "passed"), "passed"
     if flow == "stuck":
         if not ctx.root_skill:
-            decision, flow = Decision(decision.rule_id, "H2", "乙", "help"), "help"
+            decision, flow = Decision(decision.rule_id, "H3", "乙", "help"), "example"
         else:
             ok = analysis.answer_correct if analysis.intent == "REPLY" else False
             if rnd.recall_stage == "asked" and analysis.intent == "REPLY" and analysis.answer_correct is None:
                 ok = analysis.has_attempt
             flow, level, stuck_point, prior = _stuck_step(s, ctx, rnd, ok, now)
+            if teaching.needs_example(prose or text) and flow in ("recall", "blank"):
+                flow, level = "example", "H3"
+                rnd.recall_stage = "done"
+                if stuck_point is not None:
+                    stuck_point.resolution = "example_given"
             decision = Decision(decision.rule_id, level, "乙", "stuck")
     prior_ref = ""
     if prior is not None and prior.problem_id is not None and catalog.is_visible(s, user_id, prior.server_id, prior.problem_id):

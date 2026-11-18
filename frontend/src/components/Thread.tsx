@@ -207,7 +207,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
             <ArrowUp size={20} strokeWidth={2.2} />
           </button>
         </div>
-        <p className="composer-hint">回车发送，Shift + 回车换行。智能体不会直接给出整题答案。</p>
+        <p className="composer-hint">回车发送，Shift + 回车换行。</p>
       </form>
     </>
   );

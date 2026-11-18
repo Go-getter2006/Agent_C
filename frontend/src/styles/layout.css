@@ -101,7 +101,11 @@
 
 .nav-item.active {
   color: var(--ink);
+  background: var(--surface);
+  transition: none;
 }
+
+.nav-item.active:hover { background: var(--surface-2); color: var(--ink); }
 
 .nav-item:focus-visible {
   outline-color: var(--brand);
@@ -1495,7 +1499,7 @@
 }
 
 .nav-slider {
-  background: var(--surface);
+  display: none; /* 选中底色跟随按钮，避免滑块尚未到位时深底深字。 */
 }
 
 .nav-item,

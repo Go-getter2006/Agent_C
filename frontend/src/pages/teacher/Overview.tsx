@@ -1,6 +1,6 @@
 // 班级总览：几个数、两张趋势图、需要留意的学生、常见错误、知识点分布、作业完成情况。
 import { Link } from "react-router-dom";
-import { Activity, ArrowRight, CircleAlert, CircleCheck, Copy, Hourglass, RotateCcw, Send, Target, Users, Waypoints } from "lucide-react";
+import { Activity, ArrowRight, CircleAlert, CircleCheck, Copy, Hourglass, Send, Target, Users, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { BarList, ColumnChart, LineChart, StackedBar } from "../../components/charts";
 import { Avatar, Card, Empty, LevelLegend, Loading, Problem, Stat } from "../../components/ui";
@@ -38,29 +38,16 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
   let topic = "";
 
   return (
-    <div className="stack">
-      <div className="stats stats-5">
+    <div className="stack overview-desktop">
+      <div className="stats stats-3 overview-stats">
         <Stat icon={Users} label="本周交过题" value={k.active} unit={`/${k.students} 人`} delta={k.activeDelta} deltaText=" 比上周" />
         <Stat icon={Target} label="平均几次改对" value={k.avgToPass ?? "—"} unit={k.avgToPass === null ? "" : "次"}
           delta={k.avgToPassDelta} deltaText=" 次" goodWhenUp={false} foot={`本周通过 ${k.passed} 道题，平均交到第几次通过`} />
-        <Stat icon={Send} label="本周提交" value={k.submissions} unit="次" delta={k.submissionsDelta} deltaText=" 比上周"
+        <Stat icon={Send} label="本周提交" value={k.submissions} unit="次"
           foot={k.suspicious ? <span className="warn-text"><Copy size={13} aria-hidden="true" />{k.suspicious} 次通过和同学代码雷同</span> : undefined} />
-        <Stat icon={CircleAlert} label="本周卡点" value={k.stuckThisWeek} unit="次" goodWhenUp={false}
-          foot={<Link to="/teacher/stuck" className="link">看卡点名单<ArrowRight size={13} aria-hidden="true" /></Link>} />
-        <Stat icon={RotateCcw} label="正在复习" value={k.review.active} unit="项"
-          foot={`${k.review.students} 人 · ${k.review.due} 项到期 · ${k.review.graduated} 项已巩固`} />
       </div>
 
-      <div className="grid-2">
-        <Card title="每周提交" sub="全班在 XDOJ 上的提交次数，最近八周">
-          <ColumnChart label="最近八周全班每周的提交次数" labels={d.trend.map((w) => w.label)}
-            series={[{ name: "提交次数", color: "var(--series-1)" }]} values={[d.trend.map((w) => w.submissions)]} unit=" 次" emphasizeLast />
-        </Card>
-        <Card title="平均几次改对" sub="每周通过的题，平均交到第几次才通过。比“第一次就通过”更能看出改错的能力：OJ 上先交上去看看很正常">
-          <LineChart label="最近八周通过的题平均交几次" labels={d.trend.map((w) => w.label)} min={0} format={(v) => v.toFixed(1)} unit=" 次"
-            series={[{ name: "平均几次改对", color: "var(--series-1)", values: d.trend.map((w) => w.avgToPass) }]} />
-        </Card>
-      </div>
+      <div className="overview-status"><Link className="link" to="/teacher/stuck">本周卡点 {k.stuckThisWeek} 次<ArrowRight size={13} /></Link><span>正在复习 {k.review.active} 项 · {k.review.due} 项到期 · {k.review.graduated} 项已巩固</span></div>
 
       <div className="grid-main">
         <Card title="需要留意的学生" sub="按透明的规则列出，每人附上理由；不是预测模型"
@@ -69,7 +56,7 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
             <Empty icon={CircleCheck} title="目前没有需要特别留意的学生">规则：反复卡住、三个以上知识点待加强、一周没交题、通过一道题要交的次数明显比全班多等。</Empty>
           ) : (
             <ul className="attn-list">
-              {d.attention.map((a) => (
+              {d.attention.slice(0, 5).map((a) => (
                 <li key={a.userId}>
                   <Avatar name={a.name} />
                   <div className="attn-main">
@@ -86,32 +73,12 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
         </Card>
         <Card title="最常见的错误" sub="最近 30 天，按出现的提交次数">
           {d.errors.length === 0 ? <Empty icon={CircleCheck} title="最近 30 天没有标注到错误" /> : (
-            <BarList unit=" 次" rows={d.errors.slice(0, 8).map((e) => ({
+            <BarList unit=" 次" rows={d.errors.slice(0, 5).map((e) => ({
               key: e.code, label: <>{e.name} <Code>{e.code}</Code></>, value: e.count, sub: `${e.students} 人`,
             }))} />
           )}
         </Card>
       </div>
-
-      <Card title="知识点掌握分布" sub="这个班布置过的题涉及到的知识点；每一条是全班的人数分布"
-        action={<Link to="/teacher/map" className="btn btn-sm"><Waypoints size={15} aria-hidden="true" />在知识图谱里看</Link>}>
-        <LevelLegend levels={d.levels} />
-        <div className="dist-table" role="table" aria-label="知识点掌握分布">
-          {covered.map((kp) => {
-            const head = kp.topic !== topic ? ((topic = kp.topic), <div key={`t-${kp.topic}`} className="dist-topic" role="row"><span role="rowheader">{kp.topic}</span></div>) : null;
-            return [
-              head,
-              <div key={kp.code} className="dist-row" role="row">
-                <span className="dist-name" role="cell">{kp.name} <Code>{kp.code}</Code></span>
-                <span className="dist-bar" role="cell"><StackedBar counts={kp.counts} colors={LEVEL_COLORS} names={d.levels} total={total} /></span>
-                <span className="dist-nums num" role="cell" aria-label={d.levels.map((l, i) => `${l} ${kp.counts[i]} 人`).join("，")}>
-                  {kp.counts.map((n, i) => <span key={i} className={i === 2 && n > 0 ? "dist-weak" : undefined}>{n}</span>)}
-                </span>
-              </div>,
-            ];
-          })}
-        </div>
-      </Card>
 
       <div className="grid-2">
         <Card title="作业完成情况">
@@ -142,6 +109,37 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
           )}
         </Card>
       </div>
+      <div className="grid-2">
+        <Card title="每周提交" sub="全班在 XDOJ 上的提交次数，最近八周">
+          <ColumnChart label="最近八周全班每周的提交次数" labels={d.trend.map((w) => w.label)}
+            series={[{ name: "提交次数", color: "var(--series-1)" }]} values={[d.trend.map((w) => w.submissions)]} unit=" 次" emphasizeLast />
+        </Card>
+        <Card title="平均几次改对" sub="每周通过的题，平均交到第几次才通过。用于了解修改过程，不能单凭次数判断掌握情况">
+          <LineChart label="最近八周通过的题平均交几次" labels={d.trend.map((w) => w.label)} min={0} format={(v) => v.toFixed(1)} unit=" 次"
+            series={[{ name: "平均几次改对", color: "var(--series-1)", values: d.trend.map((w) => w.avgToPass) }]} />
+        </Card>
+      </div>
+
+      <Card title="知识点掌握分布" sub="这个班布置过的题涉及到的知识点；每一条是全班的人数分布"
+        action={<Link to="/teacher/map" className="btn btn-sm"><Waypoints size={15} aria-hidden="true" />在知识图谱里看</Link>}>
+        <LevelLegend levels={d.levels} />
+        <div className="dist-table overview-distribution" role="table" aria-label="知识点掌握分布">
+          {covered.map((kp) => {
+            const head = kp.topic !== topic ? ((topic = kp.topic), <div key={`t-${kp.topic}`} className="dist-topic" role="row"><span role="rowheader">{kp.topic}</span></div>) : null;
+            return [
+              head,
+              <div key={kp.code} className="dist-row" role="row">
+                <span className="dist-name" role="cell">{kp.name} <Code>{kp.code}</Code></span>
+                <span className="dist-bar" role="cell"><StackedBar counts={kp.counts} colors={LEVEL_COLORS} names={d.levels} total={total} /></span>
+                <span className="dist-nums num" role="cell" aria-label={d.levels.map((l, i) => `${l} ${kp.counts[i]} 人`).join("，")}>
+                  {kp.counts.map((n, i) => <span key={i} className={i === 2 && n > 0 ? "dist-weak" : undefined}>{n}</span>)}
+                </span>
+              </div>,
+            ];
+          })}
+        </div>
+      </Card>
+
     </div>
   );
 }
