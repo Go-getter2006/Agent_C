@@ -137,6 +137,8 @@ export interface ProgressData {
     levels: Record<string, number>;
   };
   knowledge: { topic: string; items: KnowledgeItem[] }[];
+  // 只在数据结构这边有：作业要用到、还薄弱的 C 语言基础（只有档位）
+  foundation: { name: string; level: string; segments: number; supports: string[]; text: string }[];
   errors: { name: string; count: number; last: ProblemRef; lastTime: string; status: string }[];
   activity: {
     homeworks: Homework[];

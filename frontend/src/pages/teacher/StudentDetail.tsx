@@ -31,6 +31,7 @@ interface Detail {
   readiness: { code: string; name: string; p: number }[];
   course: "C" | "D";
   foundation: { code: string; name: string; level: string; p: number | null; supports: { code: string; name: string }[] }[];
+  joint: { code: string; name: string; pD: number | null; pC: number | null; eta: number | null; p: number | null; level: string; predicted: boolean }[];
   profile: ProfileRow[];
   assessments: Assessment[];
   dialogue: { total: number; constructive: number | null; answerSeeking: number | null; acts: { code: string; name: string; n: number }[] };
@@ -205,6 +206,28 @@ export default function StudentDetail() {
               </Card>
 
               <AgentCard d={d} userId={d.student.userId} onDone={data.reload} />
+
+              {d.course === "D" && d.joint.length > 0 && (
+                <Card title="联合状态" sub="数据结构每个知识点：自己的证据、C 语言基础给的先验，和两者各占多少（η）。做的题越多，η 越小" bodyClass="">
+                  <div className="table-scroll">
+                    <table className="table table-dims">
+                      <thead><tr><th scope="col">知识点</th><th scope="col">档位</th><th scope="col">数据结构自己的证据</th><th scope="col">C 语言基础</th><th scope="col" className="num">η</th><th scope="col">合起来</th></tr></thead>
+                      <tbody>
+                        {d.joint.map((j) => (
+                          <tr key={j.code}>
+                            <td><span className="cell-title">{j.name}</span> <Code>{j.code}</Code></td>
+                            <td><LevelPill level={j.predicted ? "还没练到" : j.level} /></td>
+                            <td><DimCell v={j.pD} /></td>
+                            <td><DimCell v={j.pC} /></td>
+                            <td className="num">{j.eta === null ? "—" : j.eta.toFixed(2)}</td>
+                            <td><DimCell v={j.p} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
 
               <div className="grid-main">
                 <Card title="知识点" sub="档位来自掌握程度算法 v2（学生端和智能体用的）；括号里是 v1 的档位，作对照" bodyClass="">

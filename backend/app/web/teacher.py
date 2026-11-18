@@ -173,6 +173,16 @@ def class_problems(s: Session, cls: m.XClass) -> list[tuple[int, int]]:
     return list(dict.fromkeys((r[0], r[1]) for r in rows))
 
 
+def class_kps(s: Session, cls: m.XClass) -> set[str]:
+    """这个班布置过的题涉及的知识点。"""
+    out: set[str] = set()
+    for server_id, problem_id in class_problems(s, cls):
+        label = current_problem_label(s, server_id, problem_id)
+        if label is not None:
+            out |= {kp_of_skill(c) for c in [label.primary_skill, *(label.secondary_skills or [])]}
+    return out
+
+
 def _student_in_my_classes(s: Session, user: m.User, user_id: str) -> tuple[m.Student, m.XClass]:
     for cls in my_classes(s, user):
         e = s.scalar(select(m.Enrollment.id).where(
@@ -225,6 +235,7 @@ class _ClassData:
                        for uid in self.ids}
         self.kps = {uid: {c: v for c, v in mastery.kp_states(s, uid).items() if in_course(c, course)}
                     for uid in self.ids}
+        self.focus = class_kps(s, cls)   # 这个班作业涉及的知识点
 
     def stuck_points(self, since: dt.datetime | None = None) -> list[m.StuckPoint]:
         """这个班的学生在这门课上的卡点。"""
@@ -390,6 +401,10 @@ def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
         gaps = [kp for kp, d in profile.kp_profile(s, st.user_id, data.course).items() if "explain_gap" in d.flags]
         if len(gaps) >= 2:
             reasons.append(f"{len(gaps)} 个知识点会做但讲不清为什么（智能体评估）")
+        if data.course == "D":
+            weak_c = cross.weak_foundation(cross.c_foundation(s, st.user_id), data.focus or None)
+            if weak_c:
+                reasons.append("C 语言基础薄弱：" + "、".join(r["name"] for r in weak_c[:3]))
         if reasons:
             out.append({"userId": st.user_id, "name": st.name, "reasons": reasons})
     out.sort(key=lambda r: -len(r["reasons"]))
@@ -567,6 +582,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     return {"student": {"userId": student.user_id, "name": student.name,
                         "class": {"key": class_key(cls.server_id, cls.class_id), "name": cls.class_name}},
             "course": course, "foundation": cross.c_foundation(s, user_id) if course == "D" else [],
+            "joint": cross.joint_state(s, user_id) if course == "D" else [],
             "profile": profile.teacher_view(s, user_id, course),
             "assessments": [assess.view(s, a) for a in s.scalars(select(m.AgentAssessment).where(
                 m.AgentAssessment.user_id == user_id, m.AgentAssessment.course == course,
@@ -771,7 +787,7 @@ def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(t
     cls = _class(s, user, key)
     course = _course_of_class(s, cls)
     shown = {"C"} if course == "C" else {"C", "D"}
-    linked_c = set(cross.feeds()) if course == "D" else set()
+    linked_c = set(cross.feeds(s)) if course == "D" else set()
     people = class_students(s, cls)
     ids = [p.user_id for p in people]
     if student is not None and student not in ids:
@@ -809,7 +825,10 @@ def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(t
     shown_codes = {n["code"] for n in nodes}
     topics = [{"code": c, "name": n, "course": course_of(c)} for c, n in TOPICS.items()
               if any(x["topic"] == c for x in nodes)]
-    edges = [{"from": a, "to": b, "n": n, "cross": is_x} for a, b, n, is_x in kp_edges()
+    # 课内的边来自知识图；跨课程的边来自采用的联系（老师可以增删，见“跨课程”页）
+    within = [(a, b, n, False) for a, b, n, is_x in kp_edges() if not is_x]
+    crossing = [(a, b, n, True) for a, b, n in cross.kp_cross_edges(s)] if course == "D" else []
+    edges = [{"from": a, "to": b, "n": n, "cross": is_x} for a, b, n, is_x in within + crossing
              if a in shown_codes and b in shown_codes]
     return {"class": {"key": key, "name": cls.class_name, "course": course},
             "courses": [{"code": c, "name": n} for c, n in COURSE_NAMES.items() if c in shown],
@@ -861,7 +880,8 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
             prob = s.get(m.Problem, (server_id, problem_id))
             problems.append({"problemId": problem_id, "title": prob.title if prob else "", "brief": label.brief,
                              "primary": kp_of_skill(label.primary_skill) == kp})
-    edges = [e for e in kp_edges() if course == "D" or not e[3]]
+    edges = [e for e in kp_edges() if not e[3]] + \
+        ([(a, b, n, True) for a, b, n in cross.kp_cross_edges(s)] if course == "D" else [])
     ref = lambda c, is_x: {"code": c, "name": KNOWLEDGE_POINTS.get(c, ""), "course": course_of(c), "cross": is_x}  # noqa: E731
     return {"code": kp, "name": KNOWLEDGE_POINTS[kp], "course": course_of(kp), "topicName": TOPICS.get(kp[:3], ""),
             "foundation": other,
@@ -869,6 +889,80 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
                                                        for c, n in errs.most_common(6)],
             "problems": problems, "prereqs": [ref(a, is_x) for a, b, _n, is_x in edges if b == kp],
             "next": [ref(b, is_x) for a, b, _n, is_x in edges if a == kp], "levels": list(LEVELS)}
+
+
+# ------------------------------------------------------------ 跨课程（只在数据结构这边）
+def _ds(user: m.User) -> None:
+    if user.course != "D":
+        raise HTTPException(status_code=404, detail="没有这个页面。")
+
+
+@router.get("/classes/{key}/cross")
+def cross_page(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """跨课程页：C 基础预警（按这个班作业涉及的知识点）、全部联系和它们的数据检验。"""
+    _ds(user)
+    cls = _class(s, user, key)
+    cross.ensure_seed(s)
+    people = [(st.user_id, st.name) for st in class_students(s, cls)]
+    focus = class_kps(s, cls)
+    links = s.scalars(select(m.CrossLink).order_by(m.CrossLink.d_skill, m.CrossLink.c_skill)).all()
+    d_kps = sorted({code for code in KNOWLEDGE_POINTS if code.startswith("D")})
+    return {"class": {"key": key, "name": cls.class_name}, "focus": [{"code": c, "name": KNOWLEDGE_POINTS.get(c, "")}
+                                                                    for c in sorted(focus) if c.startswith("D")],
+            "warning": cross.class_warning(s, people, {c for c in focus if c.startswith("D")}),
+            "links": [cross.link_view(x) for x in links],
+            "relations": [{"code": k, "name": v[0], "weight": v[1]} for k, v in config.CROSS["relation"].items()],
+            "params": {"n0": config.CROSS["n0"], "mastered": config.CROSS["mastered"], "minN": config.CROSS["min_n"],
+                       "supportProb": config.CROSS["support_prob"], "reliability": config.CROSS["reliability"]},
+            "dKps": [{"code": c, "name": KNOWLEDGE_POINTS.get(c, "")} for c in d_kps]}
+
+
+class ProposeBody(BaseModel):
+    kp: str
+
+
+@router.post("/cross/propose")
+def cross_propose(body: ProposeBody, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """让智能体给一个数据结构知识点提出新的跨课程联系，存成“待审”。"""
+    from .. import llm
+
+    _ds(user)
+    if not body.kp.startswith("D") or body.kp not in KNOWLEDGE_POINTS:
+        raise HTTPException(status_code=400, detail="请选一个数据结构的知识点。")
+    if not llm.available():
+        raise HTTPException(status_code=409, detail="没有配置大模型（DEEPSEEK_API_KEY），智能体提不了。")
+    try:
+        rows = cross.propose_links(s, body.kp)
+    except llm.LLMUnavailable:
+        raise HTTPException(status_code=502, detail="智能体这次没给出合格的结果，过一会儿再试。")
+    return {"links": [cross.link_view(x) for x in rows]}
+
+
+class ReviewLinkBody(BaseModel):
+    action: str
+
+
+@router.post("/cross/{link_id}/review")
+def cross_review(link_id: int, body: ReviewLinkBody, user: m.User = Depends(teacher),
+                 s: Session = Depends(get_session)) -> dict:
+    """采用或不用一条联系。采用的进入数据结构的先验；不用的不再参与。"""
+    _ds(user)
+    link = s.get(m.CrossLink, link_id)
+    if link is None:
+        raise HTTPException(status_code=404, detail="没有这条联系。")
+    if body.action not in ("accept", "reject"):
+        raise HTTPException(status_code=400, detail="只能采用或不用。")
+    link.status = "accepted" if body.action == "accept" else "rejected"
+    link.reviewed_by, link.reviewed_at = user.id, db.now()
+    return cross.link_view(link)
+
+
+@router.post("/cross/validate")
+def cross_validate(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """现在就用数据检验一遍（平时每天夜里做）。"""
+    _ds(user)
+    cross.ensure_seed(s)
+    return {"checked": cross.validate_links(s)}
 
 
 # ------------------------------------------------------------ 按需申请学生日志（参考 DBEDU 的做法，见 app/logs.py）

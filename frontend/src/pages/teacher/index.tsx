@@ -1,6 +1,7 @@
 // 教师端的路由。只看自己名下的班。
 import { Navigate, Route, Routes } from "react-router-dom";
 import { ClassesProvider, TeacherPage, useClasses } from "./common";
+import Cross from "./Cross";
 import KnowledgeMap from "./KnowledgeMap";
 import Logs from "./Logs";
 import Models from "./Models";
@@ -16,7 +17,7 @@ const MAP_SUB = {
 };
 
 function Routed() {
-  const { course } = useClasses();
+  const { course, loading } = useClasses();
   return (
       <Routes>
         <Route path="class" element={<TeacherPage title="班级总览" sub="这周全班的练习情况，和前几周比">{(cls) => cls && <ClassOverview cls={cls} />}</TeacherPage>} />
@@ -24,6 +25,10 @@ function Routed() {
         <Route path="students/:id" element={<StudentDetail />} />
         <Route path="stuck" element={<TeacherPage title="卡点" sub="智能体判断学生卡住、给了示例代码的地方">{(cls) => cls && <Stuck cls={cls} />}</TeacherPage>} />
         <Route path="map" element={<TeacherPage title="知识图谱" wide sub={MAP_SUB[course]}>{(cls) => cls && <KnowledgeMap cls={cls} />}</TeacherPage>} />
+        {/* 只在数据结构这边有（导航里也只在那边出现）；登录 C 语言时打开这个地址会回到总览 */}
+        <Route path="cross" element={course === "D" || loading
+          ? <TeacherPage title="跨课程" sub="这门课要用到的 C 语言基础：预警、联系和联系的数据检验。只有掌握程度，不含 C 语言的答题记录">{(cls) => cls && !loading && <Cross cls={cls} />}</TeacherPage>
+          : <Navigate to="/teacher/class" replace />} />
         <Route path="models" element={<TeacherPage title="模型对比" sub="掌握程度怎么算才更准：用学生之后的真实表现来检验">{(cls) => cls && <Models cls={cls} />}</TeacherPage>} />
         <Route path="graph" element={<Navigate to="/teacher/models" replace />} />
         <Route path="logs" element={<TeacherPage title="日志申请" withClass={false} sub="按需取自己学生的使用记录：哪些学号、什么时候、用了哪些样例、做了哪些交互">{() => <Logs />}</TeacherPage>} />

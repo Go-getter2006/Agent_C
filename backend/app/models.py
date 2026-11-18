@@ -814,3 +814,35 @@ class ModelWeights(Base):
     brier: Mapped[float | None] = mapped_column(Float, nullable=True)
     learned: Mapped[bool] = mapped_column(Boolean, default=False)  # 数据不够时用的是默认权重
     updated_at: Mapped[Dt] = _ts()
+
+
+# ============================================================ 跨课程的联系（数据结构这边用）
+class CrossLink(Base):
+    """C 语言的技能和数据结构的技能之间带类型的联系。
+
+    来源：seed 人工初稿（taxonomy/prereq.py 的跨课程边）、llm 智能体提出、teacher 老师加的。
+    状态：proposed 待审、accepted 采用、rejected 不用。只有采用的联系进入数据结构的先验（mastery v2）。
+    数据检验（每天夜里）：C 那头掌握了（估计 ≥ 0.6）和没掌握的学生，数据结构这头新题一次做对的比例，
+    以及“前者更高”的后验概率；结论 supported / unsupported / unknown 决定这条联系在先验里的分量。
+    """
+
+    __tablename__ = "cross_links"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    c_skill: Mapped[str] = mapped_column(String(16), index=True)
+    d_skill: Mapped[str] = mapped_column(String(16), index=True)
+    relation: Mapped[str] = mapped_column(String(16), default="prerequisite")
+    source: Mapped[str] = mapped_column(String(8), default="seed")
+    status: Mapped[str] = mapped_column(String(10), default="accepted")
+    rationale: Mapped[str] = mapped_column(String(120), default="")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[Dt] = _ts()
+    reviewed_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
+    n_with: Mapped[int] = mapped_column(Integer, default=0)       # C 那头掌握了的学生的新题次数
+    n_without: Mapped[int] = mapped_column(Integer, default=0)
+    rate_with: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rate_without: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prob_support: Mapped[float | None] = mapped_column(Float, nullable=True)
+    verdict: Mapped[str] = mapped_column(String(12), default="unknown")
+    checked_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
+    __table_args__ = (UniqueConstraint("c_skill", "d_skill", name="uq_cross_link"),)

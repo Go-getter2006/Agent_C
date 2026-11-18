@@ -120,6 +120,22 @@ export default function Progress() {
                     )}
                   </Card>
 
+                  {p.foundation && p.foundation.length > 0 && (
+                    <Card title="要补的 C 语言基础" sub="作业里要学的内容会用到这些，按你在 C 语言课上的情况看还薄弱">
+                      <ul className="found-list">
+                        {p.foundation.map((f) => (
+                          <li key={f.name}>
+                            <div className="kp-tile-top">
+                              <strong>{f.name}</strong>
+                              <Meter level={f.level} segments={f.segments} />
+                            </div>
+                            <span className="note">{f.text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </Card>
+                  )}
+
                   <Card title="知识点掌握" sub={`作业里涉及到的知识点。${all ? "" : uncovered ? `还有 ${uncovered} 个作业里没练到，先收起来了。` : ""}`}
                     action={uncovered > 0 ? (
                       <button type="button" className="btn btn-sm" aria-pressed={all} onClick={() => setAll(!all)}>

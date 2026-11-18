@@ -36,7 +36,6 @@ from . import config, db, llm, mastery, review
 from . import models as m
 from .chat.analyze import ACTS, CONSTRUCTIVE_ACTS
 from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, course_of, course_prompt, kp_of_skill
-from .taxonomy.prereq import parents_of
 
 log = logging.getLogger("profile")
 
@@ -113,6 +112,9 @@ class Sources:
             m.QuizAttempt.confidence != "")).all() if q.correct is not None and q.created_at <= self.at]
         self.graph = {r.skill_code: r.p for r in s.scalars(select(m.GraphPosterior).where(
             m.GraphPosterior.user_id == user_id)).all()} if with_graph else {}
+        from .cross import weighted_parents
+
+        self.parents, _ = weighted_parents(s)   # 数据结构的技能带上采用的跨课程联系（按类型和数据检验加权）
 
 
 def _understanding(src: Sources, skill: str) -> tuple[float | None, int]:
@@ -162,9 +164,9 @@ def _calibration(src: Sources, skill: str) -> tuple[float | None, float | None, 
     return (1 - sum(abs(c - y) for c, y in pairs) / len(pairs), sum(c - y for c, y in pairs) / len(pairs), len(pairs))
 
 
-def _prereq(src: Sources, skill: str, include_cross: bool) -> float | None:
-    ps = [src.states[p].p for p in parents_of(include_cross).get(skill, []) if p in src.states]
-    return sum(ps) / len(ps) if ps else None
+def _prereq(src: Sources, skill: str) -> float | None:
+    ps = [(src.states[p].p, w) for p, w in src.parents.get(skill, []) if p in src.states and w > 0]
+    return sum(v * w for v, w in ps) / sum(w for _v, w in ps) if ps else None
 
 
 def skill_dims(src: Sources, skill: str) -> Dims:
@@ -177,7 +179,7 @@ def skill_dims(src: Sources, skill: str) -> Dims:
     d.independence, d.n_pass = _independence(src, skill)
     d.retention, d.n_review = _retention(src, skill)
     d.calibration, d.bias, d.n_quiz = _calibration(src, skill)
-    d.prereq = _prereq(src, skill, include_cross=course_of(skill) == "D")
+    d.prereq = _prereq(src, skill)
     d.graph = src.graph.get(skill)
     return d
 

@@ -192,7 +192,7 @@ def test_review_flow_over_api(client, demo):
 def test_progress_page(client):
     login(client)
     p = client.get("/api/progress").json()
-    assert set(p) == {"summary", "knowledge", "errors", "activity", "next"}
+    assert set(p) == {"summary", "knowledge", "errors", "activity", "next", "foundation"} and p["foundation"] == []
     names = [i["name"] for g in p["knowledge"] for i in g["items"]]
     assert "最值、求和、统计" in names and len(names) == len(set(names)) and len(names) == 65
     assert all(not n.startswith("D") for n in names) and "单链表" not in names   # 跨课程的内容学生看不到

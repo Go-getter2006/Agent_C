@@ -10,8 +10,10 @@ v2（默认）：在 v1 上加四处改动。
        依据：Qu 等（2019，Entropy 21:1216）发现快速提交、抄袭和成绩明显相关；Alexandron 等（2017）的 CAMEO 研究。
     2. 个体化遗忘：每个学生每个技能一个证据半衰期 H。隔天（间隔开）的独立成功越多 H 越长，失败越多 H 越短；
        证据按 0.5^(Δt/H) 衰减。依据：间隔效应；Settles 和 Meeder（2016）的半衰期回归。
-    3. 图先验：起点 Beta(1+m, 1+(1-m))，m 是先修技能（包括跨课程的先修）的掌握程度均值。
+    3. 图先验：起点 Beta(1+κm, 1+κ(1-m))，m 是先修技能（包括跨课程的先修）的掌握程度的加权平均。
        没有证据的技能也能由先修推出一个“准备度”，数据结构的技能因此能在开课前由 C 语言的情况预测。
+       跨课程的先修（cross.py）按联系的类型和数据检验的结论加权；有跨课程先修的技能，先验的分量 κ 更大
+       （相当于 n0 次作答），所以数据结构的估计 = η·C 那头给的先验 + (1−η)·自己的证据，η 随自己的证据变多而变小。
     4. 按不确定度定档：后验 Beta 的 80% 区间。“已掌握”要求区间下限也不低于 0.6，证据少时不会轻易给高档；
        “还没练到”看有没有真实的作答，不再被遗忘拉回去。
     5. 智能体评估的“理解”（app/assess.py）也是证据：会 / 不会按等级记，分量乘大模型的置信度。
@@ -204,7 +206,7 @@ def half_life_days(rows: list[m.SkillEvidence]) -> float:
 
 def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                      with_predicted: bool, include_agent: bool = True) -> dict[str, SkillState]:
-    from .taxonomy.prereq import parents_of
+    from .cross import weighted_parents
 
     cfg = config.MASTERY_V2
     by_skill: dict[str, list[m.SkillEvidence]] = {}
@@ -242,12 +244,13 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
         out[code] = st
 
     # 图先验：按先修顺序走一遍，先修（有证据或能推出来的）的均值决定起点
-    parents = parents_of()
-    kappa = cfg["prior_strength"]
+    parents, strength = weighted_parents(s)
+    base = cfg["prior_strength"]
     informative: dict[str, float] = {}
     for code in topo_order():
-        ps = [informative[p] for p in parents.get(code, []) if p in informative]
-        m_k = sum(ps) / len(ps) if ps else None
+        ps = [(informative[p], w) for p, w in parents.get(code, []) if p in informative and w > 0]
+        m_k = sum(v * w for v, w in ps) / sum(w for _v, w in ps) if ps else None
+        kappa = strength.get(code, base) if m_k is not None else base
         st = out.get(code)
         if st is not None:
             mean = 0.5 if m_k is None else m_k

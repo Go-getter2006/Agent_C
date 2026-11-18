@@ -1,6 +1,6 @@
 // 教师端共用：导航、班级选择、页面骨架、几个对照表。
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { CircleAlert, Database, FileDown, GitCompare, LayoutDashboard, Users, Waypoints } from "lucide-react";
+import { CircleAlert, Database, FileDown, GitCompare, LayoutDashboard, Link2, Users, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { Empty, Loading, Problem } from "../../components/ui";
@@ -15,6 +15,12 @@ export const NAV: NavItem[] = [
   { to: "/teacher/logs", label: "日志申请", icon: FileDown, section: "数据" },
   { to: "/teacher/sources", label: "数据源", icon: Database, section: "数据" },
 ];
+
+/** 数据结构这边多一页“跨课程”（C 语言这边不出现）。 */
+export const navFor = (course: "C" | "D"): NavItem[] =>
+  course === "D"
+    ? NAV.flatMap((n) => (n.to === "/teacher/map" ? [n, { to: "/teacher/cross", label: "跨课程", icon: Link2, section: "班级" }] : [n]))
+    : NAV;
 
 export interface ClassInfo {
   key: string;
@@ -114,9 +120,9 @@ interface PageProps {
 }
 
 export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide = false, children }: PageProps) {
-  const { current, loading, error } = useClasses();
+  const { current, loading, error, course } = useClasses();
   return (
-    <Shell nav={NAV} kind="teacher">
+    <Shell nav={navFor(course)} kind="teacher">
       <main className="page">
         <div className={wide ? "page-inner page-wide" : "page-inner"}>
           {crumb}

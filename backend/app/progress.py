@@ -224,6 +224,21 @@ def next_block(snap: Snapshot, errors: list[dict]) -> list[dict]:
     return out[:3]
 
 
+def foundation_block(snap: Snapshot) -> list[dict]:
+    """数据结构这边：作业里要学的知识点用到的 C 语言基础里，还薄弱的。只有档位，不出现 C 语言的答题记录。"""
+    if snap.course != "D":
+        return []
+    from . import cross
+
+    covered = {kp for key in snap.info for kp in snap.kps_of(key)}
+    out = []
+    for r in cross.weak_foundation(cross.c_foundation(snap.s, snap.user_id), covered or None):
+        supports = [x["name"] for x in r["supports"] if not covered or x["code"] in covered]
+        out.append({"name": r["name"], **level_view(r["level"]), "supports": supports,
+                    "text": f"学「{'」「'.join(supports[:2])}」要用到，C 语言里这块还要再练练"})
+    return out[:6]
+
+
 def build(s: Session, user_id: str, course: str = "C") -> dict:
     snap = Snapshot(s, user_id, course=course)
     errors = error_block(snap)
@@ -243,7 +258,8 @@ def build(s: Session, user_id: str, course: str = "C") -> dict:
             "reviewDue": len(rv["due"]), "reviewActive": rv["active"],
             "levels": {lv: levels.count(lv) for lv in (LEVEL_MASTERED, LEVEL_BASIC, LEVEL_WEAK)},
         },
-        "knowledge": knowledge_block(snap), "errors": errors, "activity": activity, "next": nxt}
+        "knowledge": knowledge_block(snap), "errors": errors, "activity": activity, "next": nxt,
+        "foundation": foundation_block(snap)}
 
 
 def problem_knowledge(s: Session, user_id: str, server_id: int, problem_id: int, limit: int = 4) -> list[dict]:

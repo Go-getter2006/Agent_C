@@ -25,6 +25,9 @@ def create_app() -> FastAPI:
             from ..servers import ensure_known
 
             ensure_known(s)  # C 语言那台的地址写在代码里，教师登录页可以直接选
+            from ..cross import ensure_seed
+
+            ensure_seed(s)   # 跨课程联系的人工初稿
             if s.scalar(select(m.QuizItem.id).limit(1)) is None:
                 quiz.load_bank(s)
         if config.SYNC_IN_WEB:
