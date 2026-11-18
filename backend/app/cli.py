@@ -104,6 +104,51 @@ def xdoj_probe() -> None:
                 shape = {k: type(v).__name__ for k, v in scrub(srows[0]).items()} if srows else {}
                 total = sb.get("totalCount") if isinstance(sb, dict) else None
                 typer.echo(f"/user/listStudents.do 按班级的 {label} 筛  共 {total} 人\n  {json.dumps(shape, ensure_ascii=False)}")
+        _probe_judging(c)
+
+
+def _probe_judging(c) -> None:
+    """评测详情这一段：结果的取值（文字和数字的对应）、测试点运行记录的字段、getRunOutput 的字段名。
+
+    只打印字段名、类型和评测结果的取值；测试点的输入输出、程序输出、源码一律不打印（只打印有没有、多长）。
+    """
+    from collections import Counter
+
+    from .xdoj.util import pick, scrub
+
+    def text_of(r: dict) -> str:   # 和 endpoints.py 取文字结果的顺序一样
+        return str(pick(r, "judgementText", "judgementStr", "resultText", "resultStr", default="") or "")
+
+    def rows_of(body):
+        rows = body.get("data") if isinstance(body, dict) else body
+        return rows if isinstance(rows, list) else []
+
+    subs = rows_of(c.post_json("/submission/list.do", {"page": 1, "rows": 100, "sidx": "s.id", "sord": "desc"}))
+    seen = Counter((text_of(r), r.get("judgement"), r.get("result")) for r in subs)
+    typer.echo("提交的评测结果（文字, judgement, result）：")
+    for (text, j, res), n in seen.most_common():
+        typer.echo(f"  {text!r:12} judgement={j!r:6} result={res!r:6} × {n}")
+    bad = next((r for r in subs if text_of(r) not in ("正确", "未评判", "")), None)
+    if bad is None:
+        typer.echo("最近 100 条里没有没通过的提交，评测详情跳过")
+        return
+    judges = rows_of(c.get_json("/submission/listJudge.do", {"submissionId": bad.get("id"), "page": 1, "rows": 20}))
+    if not judges:
+        typer.echo("/submission/listJudge.do  没有评测记录")
+        return
+    typer.echo(f"/submission/listJudge.do\n  {json.dumps({k: type(v).__name__ for k, v in scrub(judges[0]).items()}, ensure_ascii=False)}")
+    runs = rows_of(c.post_json("/submission/listAllJudgeRun.do", {"judgeId": judges[0].get("id")}))
+    if runs:
+        typer.echo(f"/submission/listAllJudgeRun.do\n  {json.dumps({k: type(v).__name__ for k, v in scrub(runs[0]).items()}, ensure_ascii=False)}")
+        values = Counter((r.get("result"), text_of(r)) for r in runs)
+        typer.echo("  测试点运行结果（result, 文字）：" + "；".join(f"{a!r} {b!r} × {n}" for (a, b), n in values.items()))
+        failed = next((r for r in runs if r.get("result") not in ("正确", 1)), runs[0])
+        out = c.post_json("/submission/getRunOutput.do", {"id": failed.get("id")})
+        body = out.get("data") if isinstance(out, dict) and isinstance(out.get("data"), dict) else out
+        if isinstance(body, dict):
+            # 只说有哪些字段、是不是空、有多长；内容是测试数据，不打印
+            desc = {k: (f"{type(v).__name__}，长度 {len(v)}" if isinstance(v, str) else type(v).__name__) for k, v in body.items()}
+            typer.echo(f"/submission/getRunOutput.do（只列字段，不打印内容）\n  {json.dumps(desc, ensure_ascii=False)}")
 
 
 @cli.command("sync-meta")
