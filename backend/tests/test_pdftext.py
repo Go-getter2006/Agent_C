@@ -172,21 +172,32 @@ def test_old_statements_are_extracted_again(ctx, fake, fake_llm):
         assert pdftext.redo_stored(s) == 0
 
 
-def test_student_sees_figures_and_original(demo):
+def test_student_sees_the_statement_directly(demo, monkeypatch):
+    """学生端直接显示题目：文字整理得出来就显示文字和示意图；整理不出来（乱码、没有大模型）就显示 PDF 的各页。
+    不需要学生点开 PDF。"""
     sid = demo["server_id"]
     pdf = make_pdf(LINES, drawing=True)
     with db.session_scope() as s:
         row = s.get(m.ProblemText, (sid, 406))
-        row.content_type, row.file_bytes = "application/pdf", pdf
+        row.content_type, row.file_bytes, row.file_hash = "application/pdf", pdf, "x1"
         pdftext.store(s, row, "application/pdf", pdf)
     key = f"p{sid}-406"
     with TestClient(create_app()) as c:
         c.post("/api/auth/login", json={"loginName": "2500000001", "password": "test-pass"})
         d = c.get(f"/api/problems/{key}").json()
-        assert "[图1]" in d["statement"] and d["figures"][0]["n"] == 1 and d["original"]
+        assert "[图1]" in d["statement"] and d["figures"][0]["n"] == 1 and d["pages"] == []
         fig = c.get(d["figures"][0]["url"])
         assert fig.status_code == 200 and fig.headers["content-type"] == "image/png"
-        original = c.get(d["original"])
-        assert original.status_code == 200 and original.content[:5] == b"%PDF-"
-        assert c.get(f"/api/problems/p{sid}-999999/original").status_code == 404     # 看不到的题
         assert c.get(f"/api/problems/{key}/figures/9").status_code == 404
+        assert c.get(f"/api/problems/{key}/original").status_code == 404     # 不再有“点开 PDF”
+
+        monkeypatch.setattr(pdftext, "read_pdf", lambda data: ("(cid:3)(cid:45)(cid:88)(cid:12)(cid:9)(cid:7)", []))
+        with db.session_scope() as s:
+            row = s.get(m.ProblemText, (sid, 406))
+            pdftext.store(s, row, "application/pdf", pdf)
+        d = c.get(f"/api/problems/{key}").json()
+        assert d["statement"] == "" and d["pages"] == [f"/api/problems/{key}/pages/1"]
+        page = c.get(d["pages"][0])
+        assert page.status_code == 200 and page.content[:8] == b"\x89PNG\r\n\x1a\n"
+        assert c.get(f"/api/problems/{key}/pages/2").status_code == 404
+        assert c.get(f"/api/problems/p{sid}-999999/pages/1").status_code == 404     # 看不到的题
