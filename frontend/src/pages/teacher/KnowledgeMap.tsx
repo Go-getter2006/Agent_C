@@ -7,7 +7,7 @@ import { StackedBar } from "../../components/charts";
 import KnowledgeGraph, { hasData, type KMEdge, type KMNode, type KMTopic } from "../../components/KnowledgeGraph";
 import { Card, LEVELS, Loading, Problem, Segmented, levelClass } from "../../components/ui";
 import { useEscape, useLayout, useLoad } from "../../lib/hooks";
-import { Code, type ClassInfo } from "./common";
+import { Code, ScoreBadge, type ClassInfo } from "./common";
 
 interface MapData {
   class: { key: string; name: string; course: "C" | "D" };
@@ -24,6 +24,8 @@ interface KpDetail {
   code: string; name: string; course: string; topicName: string; foundation: boolean;
   skills: { code: string; name: string; kp: string; dist: number[] }[];
   weak: { userId: string; name: string; level: string; p: number; predicted: boolean }[];
+  summary: string;   // 全班一句话
+  students: { userId: string; name: string; level: string; p: number | null; score: number | null; predicted: boolean; text: string }[];
   errors: { code: string; name: string; count: number }[];
   problems: { problemId: number; title: string; brief: string; primary: boolean }[];
   prereqs: { code: string; name: string; course: string; cross: boolean }[];
@@ -33,8 +35,8 @@ interface KpDetail {
 
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
 
-function Panel({ cls, node, home, studentName, onSelect, onClose }: {
-  cls: ClassInfo; node: KMNode; home: "C" | "D"; studentName: string | null;
+function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
+  cls: ClassInfo; node: KMNode; home: "C" | "D"; studentId: string; studentName: string | null;
   onSelect: (code: string) => void; onClose: () => void;
 }) {
   const detail = useLoad(() => get<KpDetail>(`/api/teacher/classes/${cls.key}/knowledge-map/${node.code}`), [cls.key, node.code]);
@@ -53,11 +55,14 @@ function Panel({ cls, node, home, studentName, onSelect, onClose }: {
       </div>
       <div className="kg-panel-body">
         {studentName && node.student && (
-          <div className="kg-panel-student">
-            <span className="note">{studentName}</span>
-            <span className={`lvpill ${levelClass(node.student.level)}`}><i />{node.student.predicted ? "还没练到（推算）" : node.student.level}</span>
-            <span className="num">{node.student.p.toFixed(2)}</span>
-          </div>
+          <section className="kg-panel-me">
+            <div className="kg-panel-student">
+              <span className="note">{studentName}</span>
+              <span className={`lvpill ${levelClass(node.student.level)}`}><i />{node.student.predicted ? "还没练到（推算）" : node.student.level}</span>
+              {node.student.score !== null ? <ScoreBadge score={node.student.score} /> : <span className="num">{node.student.p.toFixed(2)}</span>}
+            </div>
+            {node.student.text && <p className="kg-panel-text">{node.student.text}</p>}
+          </section>
         )}
         {hasData(node) ? (
             <section>
@@ -99,14 +104,24 @@ function Panel({ cls, node, home, studentName, onSelect, onClose }: {
                 </div>
               </section>
             )}
-            {d.weak.length > 0 && (
+            {d.summary && (
               <section>
-                <h3>需要留意的学生</h3>
-                <ul className="kg-weak">
-                  {d.weak.slice(0, 8).map((w) => (
-                    <li key={w.userId}>
-                      <Link to={`/teacher/students/${w.userId}`} className="link">{w.name}</Link>
-                      <span className="note">{w.predicted ? "推算" : w.level} · {w.p.toFixed(2)}</span>
+                <h3>全班</h3>
+                <p className="kg-panel-text">{d.summary}</p>
+              </section>
+            )}
+            {d.students.length > 0 && (
+              <section>
+                <h3>每个学生</h3>
+                <ul className="kg-people">
+                  {d.students.map((w) => (
+                    <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
+                      <div className="kg-people-top">
+                        <Link to={`/teacher/students/${w.userId}`} className="link">{w.name}</Link>
+                        <span className={`lvpill ${levelClass(w.level)}`}><i />{w.predicted ? "推算" : w.level}</span>
+                        {w.score !== null ? <ScoreBadge score={w.score} /> : w.p !== null && <span className="note num">{w.p.toFixed(2)}</span>}
+                      </div>
+                      {w.text && <p className="kg-people-text">{w.text}</p>}
                     </li>
                   ))}
                 </ul>
@@ -268,7 +283,7 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
             showCross={showCross} selected={selected} search={search} topic={topic} mode={student ? "student" : "class"}
             onSelect={setSelected} onLayout={onLayout} fitKey={`${scope}-${layoutKind}-${showCross}`} />
           {node && courses.includes(node.course) && (
-            <Panel cls={cls} node={node} home={home} studentName={studentName}
+            <Panel cls={cls} node={node} home={home} studentId={student} studentName={studentName}
               onSelect={setSelected} onClose={() => setSelected(null)} />
           )}
           <p className="kg-hint note">从左到右是学习的先后。点一个知识点：整条前置链和后续链亮起来，右边看详情。拖动移动，Ctrl + 滚轮缩放。</p>

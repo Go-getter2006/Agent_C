@@ -128,13 +128,13 @@ def test_v2_weak_needs_failure_evidence(database):
 def test_v2_mastered_needs_narrow_interval(database):
     now = db.now() - dt.timedelta(hours=1)
     with db.session_scope() as s:
-        for i in range(3):
+        for i in range(2):
             mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, f"p{i}", now, True)
         st = mastery.skill_states(s, UID, at=now, model="v2")[SKILL]
-        assert st.level == LEVEL_BASIC and st.interval[0] < 0.6, "三次成功，区间下限还不够高"
-        assert mastery.skill_states(s, UID, at=now, model="v1")[SKILL].level == LEVEL_MASTERED   # v1 这时已经给了“已掌握”
-        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p3", now, True)
-        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p4", now, True)
+        assert st.level == LEVEL_BASIC and st.interval[0] < 0.5, "两次成功，区间下限还不够高"
+        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p2", now, True)
+        assert mastery.skill_states(s, UID, at=now, model="v1")[SKILL].level == LEVEL_MASTERED
+        # 三道题都一次做对：已掌握（以前要五道，几乎没人能到）
         assert mastery.skill_states(s, UID, at=now, model="v2")[SKILL].level == LEVEL_MASTERED
 
 

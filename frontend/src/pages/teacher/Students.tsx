@@ -6,17 +6,19 @@ import { get } from "../../api";
 import { Avatar, Card, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { shortTime } from "../../lib/time";
-import type { ClassInfo } from "./common";
+import { ScoreBadge, type ClassInfo } from "./common";
 
 interface StudentRow {
   userId: string; name: string; tried: number; passed: number; submissions: number; avgToPass: number | null;
   weak: number; mastered: number; stuck: number; stubborn: number; rounds: number; lastActive: string | null;
   orderPct: number | null; copies: number; activeDays: number;
+  score: number | null;   // 掌握分：练过的知识点的掌握程度估计的平均（做题和会话都算），0~100
 }
 type SortKey = keyof StudentRow;
 
 const COLUMNS: { key: SortKey; label: string; num: boolean; title?: string }[] = [
   { key: "name", label: "学生", num: false },
+  { key: "score", label: "掌握分", num: true, title: "练过的知识点的掌握程度平均，0~100。做题（一次做对、交几次改对、还没过）和会话里智能体评的理解都算在里面" },
   { key: "passed", label: "已通过", num: true },
   { key: "submissions", label: "提交", num: true },
   { key: "avgToPass", label: "平均几次改对", num: true },
@@ -88,6 +90,7 @@ export default function Students({ cls }: { cls: ClassInfo }) {
                     </span>
                   </Link>
                 </td>
+                <td className="num">{r.score === null ? <span className="muted">—</span> : <ScoreBadge score={r.score} />}</td>
                 <td className="num">
                   <span className="mini-progress">
                     <span className="num">{r.passed}/{total}</span>

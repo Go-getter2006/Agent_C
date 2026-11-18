@@ -20,8 +20,9 @@ export interface KMNode {
   mean: number | null;
   withEvidence: number;
   readiness: number | null;
+  score: number | null; // 全班练过的同学的平均掌握分（0~100）
   foundation?: boolean; // 数据结构的班里带上的 C 语言知识点
-  student?: { level: string; p: number; predicted: boolean };
+  student?: { level: string; p: number; predicted: boolean; score: number | null; text: string };
 }
 
 /** 这个知识点在这个班有没有可以显示的分布：作业涉及了，或者有人有证据。 */
@@ -327,6 +328,9 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
                 if (!suppressClick.current) onSelect(selected === n.code ? null : n.code);
               }}>
               <span className="kg-node-name">{n.name}</span>
+              {(stu ? stu.score : n.score) !== null && (stu ? stu.score : n.score) !== undefined && (
+                <span className="kg-node-score num" aria-hidden="true">{stu ? stu.score : n.score}</span>
+              )}
               {mode === "class" && shown && (
                 <span className="kg-node-dist" aria-hidden="true">
                   {n.dist.map((v, i) => v > 0 && <span key={i} style={{ flexGrow: v / total, background: LEVEL_COLORS[i] }} />)}
@@ -349,13 +353,20 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
           <span className="kg-tip-topic">{hovered.topic} {topicName.get(hovered.topic) ?? hovered.topicName}</span>
           <b>{hovered.name}</b>
           {mode === "student" && hovered.student ? (
-            <div className="tip-row"><span>{hovered.student.predicted ? "推算的准备度" : hovered.student.level}</span><b className="num">{hovered.student.p.toFixed(2)}</b></div>
+            <>
+              <div className="tip-row"><span>{hovered.student.predicted ? "推算的准备度" : hovered.student.level}</span>
+                <b className="num">{hovered.student.score ?? hovered.student.p.toFixed(2)}</b></div>
+              {hovered.student.text && <p className="kg-tip-text">{hovered.student.text}</p>}
+            </>
           ) : !hasData(hovered) && hovered.course === "D" ? (
             <div className="tip-row"><span>全班平均准备度（推算）</span><b className="num">{hovered.readiness === null ? "—" : hovered.readiness.toFixed(2)}</b></div>
           ) : hasData(hovered) ? (
-            ["已掌握", "基本掌握", "待加强", "还没练到"].map((l, i) => (
-              <div key={l} className="tip-row"><span><i className="swatch" style={{ background: LEVEL_COLORS[i] }} />{l}</span><b className="num">{hovered.dist[i]} 人</b></div>
-            ))
+            <>
+              {hovered.score !== null && <div className="tip-row"><span>平均掌握分</span><b className="num">{hovered.score}</b></div>}
+              {["已掌握", "基本掌握", "待加强", "还没练到"].map((l, i) => (
+                <div key={l} className="tip-row"><span><i className="swatch" style={{ background: LEVEL_COLORS[i] }} />{l}</span><b className="num">{hovered.dist[i]} 人</b></div>
+              ))}
+            </>
           ) : (
             <div className="tip-row"><span>作业还没涉及</span></div>
           )}
