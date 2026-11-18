@@ -1,9 +1,12 @@
 // 知识图谱画布：登录的这门课一张图。数据结构的班还可以带上它要用到的 C 语言知识点（“基础”，只有掌握程度），
-// 中间连着跨课程的前置关系关系。
-// 排法：一章一行（从上到下是课本的顺序），同一章的知识点从左到右；C 语言在上，数据结构在下。
-// 交互：拖动平移，Ctrl + 滚轮或按钮缩放，滚轮上下移动；悬停一个点，它的前置知识和后续知识亮起来，其他变淡；点一下打开右边的详情。
+// 中间连着跨课程的前置关系。
+// 排法（lib/layered.ts）：从左到右是学习的先后，前置知识在左、后续知识在右；连线只走列与列之间的空隙，
+// 不从知识点底下穿过；能由别的路径推出来的连线不画；和谁都不连的知识点放在下面。两门课一起看时 C 语言在左。
+// 交互：拖动平移，Ctrl + 滚轮或按钮缩放，滚轮上下移动；悬停一个点，它直接的前置知识和后续知识亮起来；
+// 点一下选中，整条前置链和后续链亮起来、其他退到后面，右边打开详情。位置不随着色、搜索、选中改变。
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Maximize2, Minus, Plus } from "lucide-react";
+import { layeredLayout, type LayoutOpts } from "../lib/layered";
 
 export interface KMNode {
   code: string;
@@ -37,84 +40,16 @@ export interface KMTopic {
   course: "C" | "D";
 }
 
-const LABEL_W = 128;
-const CHIP_W = 116;
+const CHIP_W = 124;
 const CHIP_H = 46;
-const GAP_X = 10;
-const ROW_H = 64;
-const HEAD_H = 60;
-const BAND_GAP = 56;
-const PAD = 16;
+const OPTS: LayoutOpts = { nodeW: CHIP_W, nodeH: CHIP_H, colGap: 76, rowGap: 14, dummyGap: 8, bandGap: 44, padX: 28, top: 64, isoGap: 12 };
 
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
 // 箭头颜色和边的样式对应：普通、跨课程、指向它的前置知识、它通向的后续
-const ARROWS: Record<string, string> = { base: "#b4bac3", cross: "#eb6834", in: "#2a78d6", out: "#111318" };
+const ARROWS: Record<string, string> = { base: "#aab1bb", cross: "#eb6834", in: "#2a78d6", out: "#111318" };
 const LEVEL_CLS: Record<string, string> = { 已掌握: "mastered", 基本掌握: "basic", 待加强: "weak", 还没练到: "none" };
 
-interface Placed extends KMNode {
-  x: number;
-  y: number;
-}
-
-interface Layout {
-  nodes: Placed[];
-  byCode: Map<string, Placed>;
-  rows: { topic: KMTopic; y: number }[];
-  bands: { course: "C" | "D"; y: number; height: number; count: number }[];
-  width: number;
-  height: number;
-}
-
-function layout(nodes: KMNode[], topics: KMTopic[], courses: ("C" | "D")[]): Layout {
-  const placed: Placed[] = [];
-  const rows: Layout["rows"] = [];
-  const bands: Layout["bands"] = [];
-  let y = PAD;
-  let maxCols = 1;
-  for (const course of courses) {
-    const ts = topics.filter((t) => t.course === course);
-    const start = y;
-    y += HEAD_H;
-    let count = 0;
-    for (const t of ts) {
-      const mine = nodes.filter((n) => n.topic === t.code).sort((a, b) => (a.code < b.code ? -1 : 1));
-      if (mine.length === 0) continue;
-      rows.push({ topic: t, y });
-      mine.forEach((n, i) => placed.push({ ...n, x: PAD + LABEL_W + i * (CHIP_W + GAP_X), y }));
-      maxCols = Math.max(maxCols, mine.length);
-      count += mine.length;
-      y += ROW_H;
-    }
-    bands.push({ course, y: start, height: y - start, count });
-    y += BAND_GAP;
-  }
-  const width = PAD * 2 + LABEL_W + maxCols * (CHIP_W + GAP_X) - GAP_X;
-  return { nodes: placed, byCode: new Map(placed.map((n) => [n.code, n])), rows, bands, width, height: y - BAND_GAP + PAD };
-}
-
-function edgePath(a: Placed, b: Placed): string {
-  if (a.y === b.y) {
-    const adjacent = Math.abs(a.x - b.x) <= CHIP_W + GAP_X + 1;
-    if (adjacent) {
-      const [l, r] = a.x < b.x ? [a, b] : [b, a];
-      const yy = a.y + CHIP_H / 2;
-      return a.x < b.x ? `M${l.x + CHIP_W},${yy}L${r.x - 3},${yy}` : `M${r.x},${yy}L${l.x + CHIP_W + 3},${yy}`;
-    }
-    const ax = a.x + CHIP_W / 2, bx = b.x + CHIP_W / 2;
-    const lift = Math.min(26, 10 + Math.abs(bx - ax) / 18);
-    return `M${ax},${a.y}C${ax},${a.y - lift} ${bx},${b.y - lift} ${bx},${b.y - 3}`;
-  }
-  if (b.y > a.y) {
-    const ax = a.x + CHIP_W / 2, ay = a.y + CHIP_H, bx = b.x + CHIP_W / 2, by = b.y;
-    const dy = (by - ay) * 0.5;
-    return `M${ax},${ay}C${ax},${ay + dy} ${bx},${by - dy} ${bx},${by - 3}`;
-  }
-  const ax = a.x + CHIP_W / 2, ay = a.y, bx = b.x + CHIP_W / 2, by = b.y + CHIP_H;
-  const dy = (ay - by) * 0.5;
-  return `M${ax},${ay}C${ax},${ay - dy} ${bx},${by + dy} ${bx},${by + 3}`;
-}
-
-function closure(start: string, edges: KMEdge[], dir: "up" | "down"): Set<string> {
+function closure(start: string, edges: { from: string; to: string }[], dir: "up" | "down"): Set<string> {
   const out = new Set<string>();
   const stack = [start];
   while (stack.length) {
@@ -138,45 +73,49 @@ interface Props {
   courseNames: Record<string, string>;
   home: "C" | "D"; // 这个班是哪门课的
   showCross: boolean;
-  chain: boolean;
   selected: string | null;
   search: string;
+  topic: string; // 只看这一章（其他变淡），空是全部
   mode: "class" | "student";
   onSelect: (code: string | null) => void;
+  onLayout?: (info: { hidden: number; isolated: number }) => void;
   fitKey: string; // 变了就重新适应宽度
 }
 
-export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNames, home, showCross, chain, selected, search, mode, onSelect, fitKey }: Props) {
+export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNames, home, showCross, selected, search, topic, mode, onSelect, onLayout, fitKey }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const [hover, setHover] = useState<string | null>(null);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean; id: number } | null>(null);
   const suppressClick = useRef(false);
+  const touch = useRef(false);
 
-  const L = useMemo(() => layout(nodes, topics, courses), [nodes, topics, courses]);
-  const visibleEdges = useMemo(
-    () => edges.filter((e) => L.byCode.has(e.from) && L.byCode.has(e.to) && (showCross || !e.cross)),
-    [edges, L, showCross],
+  const byCode = useMemo(() => new Map(nodes.map((n) => [n.code, n])), [nodes]);
+  const L = useMemo(
+    () => layeredLayout(nodes, edges.filter((e) => showCross || !e.cross), courses, OPTS),
+    [nodes, edges, courses, showCross],
   );
+  useEffect(() => onLayout?.({ hidden: L.hidden.length, isolated: L.isolated.length }), [L, onLayout]);
+  const topicName = useMemo(() => new Map(topics.map((t) => [t.code, t.name])), [topics]);
 
-  // 高亮：悬停优先，其次是选中的点
+  // 聚焦：悬停时亮起直接的前置（蓝）和后续（黑）；选中时亮起整条链，其他的退到后面
   const focus = hover ?? selected;
   const lit = useMemo(() => {
     if (!focus) return null;
-    const useChain = chain && focus === selected;
+    const whole = focus === selected; // 鼠标停在选中的点上也看整条链
     const up = new Set<string>([focus]);
     const down = new Set<string>([focus]);
-    if (useChain) {
-      closure(focus, visibleEdges, "up").forEach((c) => up.add(c));
-      closure(focus, visibleEdges, "down").forEach((c) => down.add(c));
+    if (whole) {
+      closure(focus, L.edges, "up").forEach((c) => up.add(c));
+      closure(focus, L.edges, "down").forEach((c) => down.add(c));
     } else {
-      for (const e of visibleEdges) {
+      for (const e of L.edges) {
         if (e.from === focus) down.add(e.to);
         if (e.to === focus) up.add(e.from);
       }
     }
-    const edgeKind = (e: KMEdge): "in" | "out" | null => {
-      if (useChain) {
+    const edgeKind = (e: { from: string; to: string }): "in" | "out" | null => {
+      if (whole) {
         if (up.has(e.from) && up.has(e.to)) return "in";
         if (down.has(e.from) && down.has(e.to)) return "out";
         return null;
@@ -184,10 +123,23 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
       return e.to === focus ? "in" : e.from === focus ? "out" : null;
     };
     return { nodes: new Set([...up, ...down]), edgeKind };
-  }, [focus, chain, selected, visibleEdges]);
+  }, [focus, selected, L]);
 
   const needle = search.trim();
-  const matches = useMemo(() => (needle ? new Set(L.nodes.filter((n) => n.name.includes(needle) || n.code.includes(needle.toUpperCase())).map((n) => n.code)) : null), [needle, L]);
+  const matches = useMemo(() => {
+    if (!needle && !topic) return null;
+    return new Set(nodes.filter((n) => (!topic || n.topic === topic) &&
+      (!needle || n.name.includes(needle) || n.code.includes(needle.toUpperCase()))).map((n) => n.code));
+  }, [needle, topic, nodes]);
+
+  // 亮起的线画在最上面
+  const drawn = useMemo(() => {
+    const rows = L.edges.map((e) => {
+      const on = lit ? lit.edgeKind(e) : null;
+      return { e, on, dim: lit !== null && !on };
+    });
+    return [...rows.filter((x) => !x.on), ...rows.filter((x) => x.on)];
+  }, [L, lit]);
 
   const fit = useCallback(() => {
     const el = box.current;
@@ -210,15 +162,42 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
     return () => ro.disconnect();
   }, [fit]);
 
+  // 右边（窄屏时是下面）打开详情时多留出地方，选中的点可以挪到没被挡住的那一块
+  const panelRoom = useCallback(() => {
+    const el = box.current;
+    if (!el || !selected) return { right: 0, bottom: 0 };
+    return window.innerWidth >= 1024 ? { right: 376, bottom: 0 } : { right: 0, bottom: el.clientHeight * 0.62 };
+  }, [selected]);
+
   const clampView = useCallback((v: { x: number; y: number; k: number }) => {
     const el = box.current;
     if (!el) return v;
     const w = el.clientWidth, h = el.clientHeight;
     const cw = L.width * v.k, ch = L.height * v.k;
-    const x = cw <= w ? Math.max(0, Math.min(w - cw, v.x)) : Math.min(40, Math.max(w - cw - 40, v.x));
-    const y = ch <= h ? Math.min(Math.max(v.y, -20), 20) : Math.min(40, Math.max(h - ch - 40, v.y));
+    const room = panelRoom();
+    const x = Math.min(cw <= w ? w - cw : 40, Math.max((cw <= w ? 0 : w - cw - 40) - room.right, v.x));
+    const y = Math.min(ch <= h ? 20 : 40, Math.max((ch <= h ? -20 : h - ch - 40) - room.bottom, v.y));
     return { x, y, k: v.k };
-  }, [L.width, L.height]);
+  }, [L.width, L.height, panelRoom]);
+
+  // 选中的点被详情挡住时，把图挪过去（带一点过渡）
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const [glide, setGlide] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    const at = selected ? L.pos.get(selected) : undefined;
+    if (!el || !at) return;
+    const v = viewRef.current;
+    const room = panelRoom();
+    const right = el.clientWidth - room.right, bottom = el.clientHeight - room.bottom;
+    const cx = v.x + (at.x + CHIP_W / 2) * v.k, cy = v.y + (at.y + CHIP_H / 2) * v.k;
+    if (cx > 60 && cx < right - 60 && cy > 40 && cy < bottom - 40) return;
+    setGlide(true);
+    setView(clampView({ ...v, x: v.x + right / 2 - cx, y: v.y + bottom / 2 - cy }));
+    const id = window.setTimeout(() => setGlide(false), 450);
+    return () => window.clearTimeout(id);
+  }, [selected, L, panelRoom, clampView]);
 
   const zoomAt = useCallback((factor: number, cx?: number, cy?: number) => {
     setView((v) => {
@@ -268,28 +247,30 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
     window.setTimeout(() => (suppressClick.current = false), 0);
   };
 
-  const hovered = hover ? L.byCode.get(hover) : null;
+  const hoveredPos = hover ? L.pos.get(hover) : undefined;
+  const hovered = hover ? byCode.get(hover) : undefined;
+  const single = L.bands.length === 1;
 
   return (
     <div className={`kg${drag.current?.moved ? " kg-dragging" : ""}`} ref={box}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
       onClick={(e) => { if (!suppressClick.current && e.target === e.currentTarget) onSelect(null); }}>
-      <div className="kg-canvas" style={{ width: L.width, height: L.height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
+      <div className={`kg-canvas${glide ? " kg-canvas-glide" : ""}`} style={{ width: L.width, height: L.height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
         onClick={(e) => { if (!suppressClick.current && e.target === e.currentTarget) onSelect(null); }}>
         {L.bands.map((b) => (
-          <div key={b.course} className={`kg-band kg-band-${b.course}`} style={{ top: b.y, height: b.height, width: L.width - PAD * 2, left: PAD }}>
+          <div key={b.course} className={`kg-band kg-band-${b.course === home ? "home" : "base"}`}
+            style={{ top: 12, height: (L.isoTop ?? L.height - 20) - 24, width: b.width, left: b.x }}>
             <div className="kg-band-head">
-              <strong>{courseNames[b.course]}</strong>
-              <span>{b.count} 个知识点{b.course !== home ? " · 这门课要用到的基础，只有掌握程度" : ""}</span>
+              <strong>{courseNames[b.course]}{b.course !== home ? " · 要用到的基础" : ""}</strong>
+              <span>{b.count} 个有前置关系的知识点{single ? " · 从左到右：先学 → 后学" : b.course !== home ? " · 只有掌握程度" : ""}</span>
             </div>
           </div>
         ))}
-        {L.rows.map((r) => (
-          <div key={r.topic.code} className="kg-topic" style={{ top: r.y, left: PAD + 12, width: LABEL_W - 20, height: CHIP_H }}>
-            <span className="kg-topic-code">{r.topic.code}</span>
-            <span className="kg-topic-name">{r.topic.name}</span>
+        {L.isoTop !== null && (
+          <div className="kg-iso-head" style={{ top: L.isoTop, left: OPTS.padX }}>
+            <strong>没有和别的知识点连线的</strong><span>{L.isolated.length} 个</span>
           </div>
-        ))}
+        )}
         <svg className="kg-edges" width={L.width} height={L.height} aria-hidden="true">
           <defs>
             {Object.entries(ARROWS).map(([id, color]) => (
@@ -298,16 +279,15 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
               </marker>
             ))}
           </defs>
-          {visibleEdges.map((e) => {
-            const a = L.byCode.get(e.from)!, b = L.byCode.get(e.to)!;
-            const on = lit ? lit.edgeKind(e) : null;
-            const dim = lit !== null && !on;
+          {drawn.map(({ e, on, dim }) => {
             const kind = on ?? (e.cross ? "cross" : "base");
-            const cls = `kg-edge kg-edge-${kind}${dim ? " kg-edge-dim" : ""}`;
-            return <path key={`${e.from}-${e.to}`} d={edgePath(a, b)} className={cls} markerEnd={dim ? undefined : `url(#kg-${kind})`} />;
+            return <path key={`${e.from}-${e.to}`} d={e.d} className={`kg-edge kg-edge-${kind}${dim ? " kg-edge-dim" : ""}`}
+              markerEnd={dim ? undefined : `url(#kg-${kind})`} />;
           })}
         </svg>
-        {L.nodes.map((n) => {
+        {nodes.map((n) => {
+          const at = L.pos.get(n.code);
+          if (!at) return null;
           const dim = (lit !== null && !lit.nodes.has(n.code)) || (matches !== null && !matches.has(n.code));
           const total = n.dist.reduce((s, v) => s + v, 0) || 1;
           const stu = mode === "student" ? n.student : undefined;
@@ -323,12 +303,17 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
               : ready !== null ? `${n.name}，还没有证据，推算的准备度 ${ready.toFixed(2)}` : `${n.name}，作业还没涉及`;
           return (
             <button key={n.code} type="button"
-              className={`kg-node${foundation ? " kg-node-ds" : ""}${!shown && !foundation ? " kg-node-uncovered" : ""}${lvl ? ` kg-lv-${lvl}` : ""}${selected === n.code ? " kg-node-selected" : ""}${dim ? " kg-node-dim" : ""}${matches?.has(n.code) ? " kg-node-match" : ""}`}
-              style={{ left: n.x, top: n.y, width: CHIP_W, height: CHIP_H }}
+              className={`kg-node${foundation ? " kg-node-ds" : ""}${!shown && !foundation ? " kg-node-uncovered" : ""}${lvl ? ` kg-lv-${lvl}` : ""}${selected === n.code ? " kg-node-selected" : ""}${dim ? " kg-node-dim" : ""}${matches?.has(n.code) && (needle || topic) ? " kg-node-match" : ""}`}
+              style={{ left: at.x, top: at.y, width: CHIP_W, height: CHIP_H }}
               aria-label={label} aria-pressed={selected === n.code}
               onMouseEnter={() => setHover(n.code)} onMouseLeave={() => setHover(null)}
               onFocus={() => setHover(n.code)} onBlur={() => setHover(null)}
-              onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) onSelect(selected === n.code ? null : n.code); }}>
+              onPointerDown={(e) => { touch.current = e.pointerType === "touch"; }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (touch.current) setHover(null); // 手机上点完不留提示框，详情在下面
+                if (!suppressClick.current) onSelect(selected === n.code ? null : n.code);
+              }}>
               <span className="kg-node-name">{n.name}</span>
               {mode === "class" && shown && (
                 <span className="kg-node-dist" aria-hidden="true">
@@ -344,11 +329,12 @@ export default function KnowledgeGraph({ nodes, edges, topics, courses, courseNa
         })}
       </div>
 
-      {hovered && (
+      {hovered && hoveredPos && (
         <div className="tip kg-tip" style={{
-          left: Math.min(view.x + (hovered.x + CHIP_W / 2) * view.k, (box.current?.clientWidth ?? 0) - 120),
-          top: view.y + hovered.y * view.k - 8, transform: "translate(-50%, -100%)",
+          left: Math.min(view.x + (hoveredPos.x + CHIP_W / 2) * view.k, (box.current?.clientWidth ?? 0) - 120),
+          top: view.y + hoveredPos.y * view.k - 8, transform: "translate(-50%, -100%)",
         }}>
+          <span className="kg-tip-topic">{hovered.topic} {topicName.get(hovered.topic) ?? hovered.topicName}</span>
           <b>{hovered.name}</b>
           {mode === "student" && hovered.student ? (
             <div className="tip-row"><span>{hovered.student.predicted ? "推算的准备度" : hovered.student.level}</span><b className="num">{hovered.student.p.toFixed(2)}</b></div>
