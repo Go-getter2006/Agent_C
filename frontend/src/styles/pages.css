@@ -258,8 +258,8 @@
 
 .lvpill.lv-mastered {
   background: var(--lv-mastered-bg);
-  color: #1b4f8f;
-  border-color: #cfe0f6;
+  color: #0b6b52;   /* 深绿字：在浅绿底上对比度 5.8 */
+  border-color: #bfe6d7;
 }
 
 .lvpill.lv-mastered i {
