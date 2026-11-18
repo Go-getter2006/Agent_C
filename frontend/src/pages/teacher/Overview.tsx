@@ -11,11 +11,12 @@ import { Code, type ClassInfo, type SkillRef } from "./common";
 interface Overview {
   class: { key: string; name: string; students: number; activeThisWeek: number };
   kpis: {
-    students: number; active: number; activeDelta: number; firstTryRate: number | null; firstTryDelta: number | null;
+    students: number; active: number; activeDelta: number; passed: number; passedDelta: number;
+    avgToPass: number | null; avgToPassDelta: number | null;
     submissions: number; submissionsDelta: number; stuckThisWeek: number; suspicious: number;
     review: { active: number; due: number; graduated: number; lapses: number; students: number };
   };
-  trend: { label: string; start: string; submissions: number; active: number; firstTryRate: number | null; rounds: number }[];
+  trend: { label: string; start: string; submissions: number; active: number; passed: number; avgToPass: number | null; rounds: number }[];
   attention: { userId: string; name: string; reasons: string[] }[];
   levels: string[];
   knowledge: { code: string; name: string; topic: string; counts: number[] }[];
@@ -40,8 +41,8 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
     <div className="stack">
       <div className="stats stats-5">
         <Stat icon={Users} label="本周交过题" value={k.active} unit={`/${k.students} 人`} delta={k.activeDelta} deltaText=" 比上周" />
-        <Stat icon={Target} label="第一次就通过" value={k.firstTryRate ?? "—"} unit={k.firstTryRate === null ? "" : "%"}
-          delta={k.firstTryDelta} deltaText=" 个百分点" foot="本周新做的题里" />
+        <Stat icon={Target} label="平均几次改对" value={k.avgToPass ?? "—"} unit={k.avgToPass === null ? "" : "次"}
+          delta={k.avgToPassDelta} deltaText=" 次" goodWhenUp={false} foot={`本周通过 ${k.passed} 道题，平均交到第几次通过`} />
         <Stat icon={Send} label="本周提交" value={k.submissions} unit="次" delta={k.submissionsDelta} deltaText=" 比上周"
           foot={k.suspicious ? <span className="warn-text"><Copy size={13} aria-hidden="true" />{k.suspicious} 次通过和同学代码雷同</span> : undefined} />
         <Stat icon={CircleAlert} label="本周卡点" value={k.stuckThisWeek} unit="次" goodWhenUp={false}
@@ -55,9 +56,9 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
           <ColumnChart label="最近八周全班每周的提交次数" labels={d.trend.map((w) => w.label)}
             series={[{ name: "提交次数", color: "var(--series-1)" }]} values={[d.trend.map((w) => w.submissions)]} unit=" 次" emphasizeLast />
         </Card>
-        <Card title="第一次就通过的比例" sub="每周新做的题里，第一次提交就通过的占多少">
-          <LineChart label="最近八周第一次就通过的比例" labels={d.trend.map((w) => w.label)} min={0} max={100} unit="%"
-            series={[{ name: "一次通过率", color: "var(--series-1)", values: d.trend.map((w) => w.firstTryRate) }]} />
+        <Card title="平均几次改对" sub="每周通过的题，平均交到第几次才通过。比“第一次就通过”更能看出改错的能力：OJ 上先交上去看看很正常">
+          <LineChart label="最近八周通过的题平均交几次" labels={d.trend.map((w) => w.label)} min={0} format={(v) => v.toFixed(1)} unit=" 次"
+            series={[{ name: "平均几次改对", color: "var(--series-1)", values: d.trend.map((w) => w.avgToPass) }]} />
         </Card>
       </div>
 
@@ -65,7 +66,7 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
         <Card title="需要留意的学生" sub="按透明的规则列出，每人附上理由；不是预测模型"
           action={<Link to="/teacher/students" className="btn btn-sm">全部学生<ArrowRight size={14} aria-hidden="true" /></Link>}>
           {d.attention.length === 0 ? (
-            <Empty icon={CircleCheck} title="目前没有需要特别留意的学生">规则：反复卡住、三个以上知识点待加强、一周没交题、一次通过率明显低于全班等。</Empty>
+            <Empty icon={CircleCheck} title="目前没有需要特别留意的学生">规则：反复卡住、三个以上知识点待加强、一周没交题、通过一道题要交的次数明显比全班多等。</Empty>
           ) : (
             <ul className="attn-list">
               {d.attention.map((a) => (

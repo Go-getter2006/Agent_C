@@ -776,7 +776,12 @@ class AgentAssessment(Base):
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     course: Mapped[str] = mapped_column(String(8), default="C")
     skill_code: Mapped[str] = mapped_column(String(16), index=True)
-    round_id: Mapped[int] = mapped_column(Integer, index=True)
+    # 评的依据：chat 对话里他说的话（round_id）；code 他在 OJ 上怎么改的代码（没问过问题的学生也有）
+    basis: Mapped[str] = mapped_column(String(8), default="chat")
+    round_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    problem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    submission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)   # code：评的是哪次提交（改对的那次）
     level: Mapped[int | None] = mapped_column(Integer, nullable=True)       # 最后采用的等级；None：证据不够，不评
     raw_level: Mapped[int | None] = mapped_column(Integer, nullable=True)   # 大模型原来给的
     rule_level: Mapped[int | None] = mapped_column(Integer, nullable=True)

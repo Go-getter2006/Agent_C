@@ -208,7 +208,8 @@ def test_progress_page(client):
     assert errs["缺分号或括号、花括号不匹配"]["status"] == "已改正"
     assert errs["数组开小了"]["status"] == "还没解决"
     act = p["activity"]
-    assert (act["tried"], act["passed"], act["firstTryPassed"], act["firstTryRate"]) == (12, 9, 3, 25)
+    assert (act["tried"], act["passed"]) == (12, 9) and 1 < act["avgToPass"] < 22 / 9 + 1
+    assert "firstTryRate" not in act and "firstTryRate" not in p["summary"]
     assert len(act["weeks"]) == 8 and act["weeks"][-1]["label"] == "本周"
     summ = p["summary"]
     assert (summ["passed"], summ["total"], summ["reviewDue"]) == (9, 14, 1)

@@ -6,8 +6,9 @@
 | 维度 | 看什么 | 怎么算 |
 |---|---|---|
 | 做题 perf | 评测结果、提交次数、求助级别、雷同 | 掌握程度算法 v2（Beta 后验，带遗忘和图先验） |
-| 理解 understanding | 对话里学生自己说的话 | 智能体按量规评 0~3 档（assess.py），按置信度和时间加权平均 |
+| 理解 understanding | 对话里学生自己说的话；没问过问题的，看他自己是怎么改代码的 | 智能体按量规评 0~3 档（assess.py），按置信度和时间加权平均 |
 | 独立 independence | 通过之前要了多少帮助 | 一次做对 1、自己改对 0.85、反问或指位置后 0.6、讲原理后 0.3、给示例代码后 0 |
+| 改错 debugging | OJ 上的提交过程（不需要问过问题） | 没过的题怎么改对的：交了几次、同一个错误反复没有、是不是急着重交（process.py） |
 | 保持 retention | 复习记录 | 半衰期回归：2^(−距上次成功的天数 / 半衰期) |
 | 自知 calibration | 小题前选的把握和实际对错 | 1 − 平均 |把握 − 对错|；偏差为正是高估自己 |
 | 先修 prereq | 先修知识点的掌握程度 | 知识图上先修技能的 v2 估计的平均（图节点辅助）；另附贝叶斯网络的后验作对照 |
@@ -39,15 +40,16 @@ from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, course_of, course_prompt, kp
 
 log = logging.getLogger("profile")
 
-DIM_NAMES = {"perf": "做题", "understanding": "理解", "independence": "独立", "retention": "保持",
-             "calibration": "自知", "prereq": "先修"}
+DIM_NAMES = {"perf": "做题", "understanding": "理解", "independence": "独立", "debugging": "改错", "retention": "保持",
+             "calibration": "自知", "prereq": "前置知识"}
 FLAG_TEXT = {   # 教师端的说法
     "explain_gap": "会做，但讲不清为什么",
     "help_reliant": "做出来的题多半靠提示",
     "fading": "可能快忘了",
     "overconfident": "自以为会：有把握的小题答错过",
-    "weak_prereq": "先修没打牢",
-    "specific_gap": "先修都扎实，这里是具体的缺口",
+    "weak_prereq": "前置知识没打牢",
+    "specific_gap": "前置知识都扎实，这里是具体的缺口",
+    "trial_error": "改错靠反复试：同一个错误一再出现，或者急着重交",
 }
 STUDENT_TEXT = {   # 学生端的说法：不出现数字
     "explain_gap": "会做，但说清楚“为什么”还差一点",
@@ -55,6 +57,7 @@ STUDENT_TEXT = {   # 学生端的说法：不出现数字
     "fading": "隔了一段时间，可能有点忘了，复习一下",
     "overconfident": "有把握的小题也错过，做之前多想一步",
     "weak_prereq": "前面的基础还要补一补",
+    "trial_error": "没过的时候，先看看错在哪再改，别急着重交",
 }
 
 
@@ -80,6 +83,8 @@ class Dims:
     n_assess: int = 0
     independence: float | None = None
     n_pass: float = 0.0
+    debugging: float | None = None
+    n_episodes: int = 0
     retention: float | None = None
     n_review: int = 0
     calibration: float | None = None
@@ -113,8 +118,10 @@ class Sources:
         self.graph = {r.skill_code: r.p for r in s.scalars(select(m.GraphPosterior).where(
             m.GraphPosterior.user_id == user_id)).all()} if with_graph else {}
         from .cross import weighted_parents
+        from .process import episodes
 
         self.parents, _ = weighted_parents(s)   # 数据结构的技能带上采用的跨课程联系（按类型和数据检验加权）
+        self.episodes = [e for e in episodes(s, user_id, self.at) if e.score is not None]   # OJ 上的改错过程
 
 
 def _understanding(src: Sources, skill: str) -> tuple[float | None, int]:
@@ -141,6 +148,11 @@ def _independence(src: Sources, skill: str) -> tuple[float | None, float]:
             num += w * table[r.event_type]
             den += w
     return (num / den if den > 0 else None), den
+
+
+def _debugging(src: Sources, skill: str) -> tuple[float | None, int]:
+    vals = [e.score for e in src.episodes if skill in e.skills]
+    return (sum(vals) / len(vals) if vals else None), len(vals)
 
 
 def _retention(src: Sources, skill: str) -> tuple[float | None, int]:
@@ -177,6 +189,7 @@ def skill_dims(src: Sources, skill: str) -> Dims:
         d.weight = max(1.0, st.raw)
     d.understanding, d.n_assess = _understanding(src, skill)
     d.independence, d.n_pass = _independence(src, skill)
+    d.debugging, d.n_episodes = _debugging(src, skill)
     d.retention, d.n_review = _retention(src, skill)
     d.calibration, d.bias, d.n_quiz = _calibration(src, skill)
     d.prereq = _prereq(src, skill)
@@ -198,19 +211,22 @@ def _flags(d: Dims) -> list[str]:
         out.append("weak_prereq")
     if d.prereq is not None and d.prereq >= 0.7 and d.perf is not None and d.perf < 0.45:
         out.append("specific_gap")
+    if d.debugging is not None and d.debugging < 0.4 and d.n_episodes >= 2:
+        out.append("trial_error")
     return out
 
 
 def _merge(parts: list[Dims]) -> Dims:
     """几个技能汇总成知识点：每个维度在有数据的技能里按证据量加权平均。"""
     out = Dims()
-    for dim in ("perf", "perf_lower", "understanding", "independence", "retention", "calibration", "bias",
+    for dim in ("perf", "perf_lower", "understanding", "independence", "debugging", "retention", "calibration", "bias",
                 "prereq", "graph"):
         vals = [(p.get(dim), p.weight) for p in parts if p.get(dim) is not None]
         if vals:
             setattr(out, dim, sum(v * w for v, w in vals) / sum(w for _v, w in vals))
     out.n_assess = sum(p.n_assess for p in parts)
     out.n_pass = sum(p.n_pass for p in parts)
+    out.n_episodes = sum(p.n_episodes for p in parts)
     out.n_review = sum(p.n_review for p in parts)
     out.n_quiz = sum(p.n_quiz for p in parts)
     out.weight = sum(p.weight for p in parts)
@@ -304,6 +320,7 @@ def kp_profile(s: Session, user_id: str, course: str, at: dt.datetime | None = N
     src = Sources(s, user_id, at)
     skills: set[str] = {c for c, st in src.states.items() if not st.predicted}
     skills |= {a.skill_code for a in src.assessments} | {r.skill_code for r in src.reviews}
+    skills |= {c for e in src.episodes for c in e.skills}   # 只在 OJ 上交过题（没问过问题）的也要有
     by_kp: dict[str, list[Dims]] = defaultdict(list)
     for code in skills:
         if course_of(code) == course:
@@ -330,7 +347,8 @@ def teacher_view(s: Session, user_id: str, course: str) -> list[dict]:
         rows.append({
             "code": kp, "name": KNOWLEDGE_POINTS.get(kp, ""), "level": d.level, "perf": _r(d.perf),
             "perfLower": _r(d.perf_lower), "understanding": _r(d.understanding), "nAssess": d.n_assess,
-            "independence": _r(d.independence), "retention": _r(d.retention), "calibration": _r(d.calibration),
+            "independence": _r(d.independence), "debugging": _r(d.debugging), "nEpisodes": d.n_episodes,
+            "retention": _r(d.retention), "calibration": _r(d.calibration),
             "bias": _r(d.bias), "prereq": _r(d.prereq), "graph": _r(d.graph), "fused": _r(d.fused),
             "flags": [{"code": f, "text": FLAG_TEXT[f]} for f in d.flags]})
     return rows
@@ -348,6 +366,7 @@ def student_dims(d: Dims | None) -> dict:
         return {"dims": [], "insight": ""}
     dims = [{"name": "理解", "segments": _segments(d.understanding), "hint": "根据你在对话里的回答"},
             {"name": "独立", "segments": _segments(d.independence), "hint": "做出来的题里，有多少是自己做出来的"},
+            {"name": "改错", "segments": _segments(d.debugging), "hint": "没过的题，你是怎么改对的"},
             {"name": "保持", "segments": _segments(d.retention), "hint": "复习时还记得多少"}]
     texts = [STUDENT_TEXT[f] for f in d.flags if f in STUDENT_TEXT]
     return {"dims": [x for x in dims if x["segments"] > 0], "insight": texts[0] if texts else ""}
@@ -386,20 +405,23 @@ def dialogue_profile(s: Session, user_id: str, course: str) -> dict:
 
 # ------------------------------------------------------------ 智能体写的学情评语（教师端按需）
 _REVIEW_SYSTEM = """你是 C 语言课程的助教，根据一名学生的多维掌握画像，给任课老师写一段简短的学情评估。
-维度：perf 做题、understanding 理解（智能体根据对话评的）、independence 独立（不靠提示做出来的比例）、
-retention 保持（复习时还记得多少）、calibration 自知（把握和实际对错的吻合程度）、prereq 先修。数值都在 0~1，越大越好；空表示没有数据。
+维度：perf 做题、understanding 理解（智能体根据对话或代码修改评的）、independence 独立（不靠提示做出来的比例）、
+debugging 改错（没过的题怎么改对的：次数、同一错误反复、急着重交）、retention 保持（复习时还记得多少）、
+calibration 自知（把握和实际对错的吻合程度）、prereq 前置知识。学生没问过问题不代表有问题，可能是不需要问。数值都在 0~1，越大越好；空表示没有数据。
 输出 JSON：{"summary":"两三句话的总体判断，不超过 120 字","strengths":["知识点编码"],
-"concerns":[{"kp":"知识点编码","dimension":"perf/understanding/independence/retention/calibration/prereq 之一","why":"不超过 50 字"}],
+"concerns":[{"kp":"知识点编码","dimension":"perf/understanding/independence/debugging/retention/calibration/prereq 之一","why":"不超过 50 字"}],
 "suggestions":["给老师的建议，每条不超过 50 字，最多 3 条"]}
 要求：知识点编码只能从画像里选；结论要有画像里的数据支持，不要编造；不要提学号、姓名。"""
 
 
 def _profile_payload(s: Session, user_id: str, course: str) -> dict:
-    rows = [r for r in teacher_view(s, user_id, course) if r["perf"] is not None or r["understanding"] is not None]
+    rows = [r for r in teacher_view(s, user_id, course)
+            if r["perf"] is not None or r["understanding"] is not None or r["debugging"] is not None]
     misconceptions = [a.misconception for a in s.scalars(select(m.AgentAssessment).where(
         m.AgentAssessment.user_id == user_id, m.AgentAssessment.course == course,
         m.AgentAssessment.misconception != "").order_by(m.AgentAssessment.id.desc()).limit(5)).all()]
-    keep = ("code", "name", "level", "perf", "understanding", "independence", "retention", "calibration", "prereq")
+    keep = ("code", "name", "level", "perf", "understanding", "independence", "debugging", "retention", "calibration",
+            "prereq")
     return {"knowledge": [{k: r[k] for k in keep} | {"flags": [f["code"] for f in r["flags"]]} for r in rows],
             "dialogue": dialogue_profile(s, user_id, course), "misconceptions": misconceptions}
 
@@ -409,7 +431,7 @@ def _rule_review(payload: dict) -> dict:
     strengths = [r["code"] for r in rows if r["level"] == "已掌握"][:4]
     concerns = []
     dim_of = {"explain_gap": "understanding", "help_reliant": "independence", "fading": "retention",
-              "overconfident": "calibration", "weak_prereq": "prereq", "specific_gap": "perf"}
+              "overconfident": "calibration", "weak_prereq": "prereq", "specific_gap": "perf", "trial_error": "debugging"}
     for r in rows:
         for f in r["flags"]:
             concerns.append({"kp": r["code"], "dimension": dim_of[f], "why": FLAG_TEXT[f]})
@@ -422,11 +444,15 @@ def _rule_review(payload: dict) -> dict:
     if dia["total"]:
         summary += f"对话里建构性的提问和解释占 {round((dia['constructive'] or 0) * 100)}%，" \
                    f"索要答案占 {round((dia['answerSeeking'] or 0) * 100)}%。"
+    else:
+        summary += "没有向智能体提过问题（不一定有问题，可能是不需要问），以上依据是 OJ 上的提交。"
     suggestions = []
+    if any(c["dimension"] == "debugging" for c in concerns):
+        suggestions.append("提醒他没过时先读错误信息、想清楚再改，别急着重交。")
     if any(c["dimension"] == "understanding" for c in concerns):
         suggestions.append("对“会做讲不清”的知识点，课上请他讲一讲为什么这样改。")
     if any(c["dimension"] == "prereq" for c in concerns):
-        suggestions.append("先补先修知识点，再练这一块的题。")
+        suggestions.append("先补前置知识，再练这一块的题。")
     if (dia["answerSeeking"] or 0) >= 0.3:
         suggestions.append("提醒他先说自己的想法再求助，少直接要答案。")
     return {"summary": summary, "strengths": strengths, "concerns": concerns[:6], "suggestions": suggestions[:3]}

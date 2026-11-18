@@ -114,7 +114,7 @@ def test_v2_weak_needs_failure_evidence(database):
     now = db.now()
     with db.session_scope() as s:
         # 只有一点成功证据：不会因为先验被拉着就定成“待加强”
-        mastery.add_evidence(s, UID, "C01.02.03", "pass_self_fixed", True, 0.5, "x", now, True)
+        mastery.add_evidence(s, UID, "C01.02.03", "pass_after_h0_h1", True, 0.5, "x", now, True)
         st = mastery.skill_states(s, UID, model="v2")["C01.02.03"]
         assert st.p < 0.6 and st.level == LEVEL_BASIC
         # 有失败证据而且估计低：待加强

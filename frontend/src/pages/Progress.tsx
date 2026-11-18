@@ -83,8 +83,8 @@ export default function Progress() {
                   note: <span className="bar bar-pass" aria-hidden="true"><span style={{ width: `${p.summary.total ? (100 * p.summary.passed) / p.summary.total : 0}%` }} /></span>,
                 },
                 {
-                  label: "第一次提交就通过", value: `${p.activity.firstTryPassed} 题`,
-                  note: p.summary.firstTryRate === null ? "还没有数据" : `占做过的 ${p.activity.tried} 题的 ${p.summary.firstTryRate}%`,
+                  label: "平均几次改对", value: p.summary.avgToPass === null ? "还没有数据" : `${p.summary.avgToPass} 次`,
+                  note: "通过的题，平均交到第几次通过。没过的时候先看看错在哪再改",
                 },
                 { label: "平均每题提交", value: p.summary.avgSubmissions === null ? "还没有数据" : `${p.summary.avgSubmissions} 次`, note: `做过 ${p.activity.tried} 题` },
                 {

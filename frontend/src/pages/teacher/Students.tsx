@@ -9,7 +9,7 @@ import { shortTime } from "../../lib/time";
 import type { ClassInfo } from "./common";
 
 interface StudentRow {
-  userId: string; name: string; tried: number; passed: number; submissions: number; firstTryRate: number | null;
+  userId: string; name: string; tried: number; passed: number; submissions: number; avgToPass: number | null;
   weak: number; mastered: number; stuck: number; stubborn: number; rounds: number; lastActive: string | null;
   orderPct: number | null; copies: number; activeDays: number;
 }
@@ -19,7 +19,7 @@ const COLUMNS: { key: SortKey; label: string; num: boolean; title?: string }[] =
   { key: "name", label: "学生", num: false },
   { key: "passed", label: "已通过", num: true },
   { key: "submissions", label: "提交", num: true },
-  { key: "firstTryRate", label: "一次通过率", num: true },
+  { key: "avgToPass", label: "平均几次改对", num: true },
   { key: "weak", label: "待加强", num: true, title: "待加强的知识点个数" },
   { key: "stuck", label: "卡点", num: true },
   { key: "rounds", label: "求助回合", num: true },
@@ -95,7 +95,7 @@ export default function Students({ cls }: { cls: ClassInfo }) {
                   </span>
                 </td>
                 <td className="num">{r.submissions}</td>
-                <td className="num">{r.firstTryRate === null ? "—" : `${r.firstTryRate}%`}</td>
+                <td className="num">{r.avgToPass === null ? "—" : `${r.avgToPass} 次`}</td>
                 <td className="num">{r.weak ? <span className="pill pill-fail">{r.weak}</span> : <span className="muted">0</span>}</td>
                 <td className="num">{r.stuck}{r.stubborn > 0 && <span className="pill pill-warn" style={{ marginLeft: 6 }}>顽固 {r.stubborn}</span>}</td>
                 <td className="num">{r.rounds}</td>

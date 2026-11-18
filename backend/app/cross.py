@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from . import config, db, llm, mastery
 from . import models as m
 from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, LEVEL_WEAK, SKILLS, kp_of_skill, skill_name, skills_of_kp
-from .taxonomy.prereq import CROSS_EDGES, parents_of
+from .taxonomy.prereq import CROSS_EDGES, CROSS_NOTES, parents_of
 
 log = logging.getLogger("cross")
 
@@ -50,8 +50,10 @@ def ensure_seed(s: Session) -> int:
     for c, d in CROSS_EDGES:
         if (c, d) not in have:
             s.add(m.CrossLink(c_skill=c, d_skill=d, relation="prerequisite", source="seed", status="accepted",
-                              rationale="人工初稿", created_at=db.now()))
+                              rationale=CROSS_NOTES.get((c, d), ""), created_at=db.now()))
             n += 1
+    for row in s.scalars(select(m.CrossLink).where(m.CrossLink.source == "seed", m.CrossLink.rationale == "人工初稿")).all():
+        row.rationale = CROSS_NOTES.get((row.c_skill, row.d_skill), "")   # 以前写的是“人工初稿”，换成为什么成立
     if n:
         s.flush()
     return n
@@ -163,8 +165,9 @@ def validate_links(s: Session, now: dt.datetime | None = None) -> int:
 _SYSTEM = """你是数据结构课程的助教。数据结构课的代码用 C 语言写，学生先学过 C 语言。
 任务：对给出的数据结构技能，找出 C 语言课里和它有关的技能，说明是什么关系。只输出 JSON：
 {"links":[{"c":"C 语言技能编码","d":"数据结构技能编码","type":"prerequisite","why":"不超过 30 字","confidence":0.8}]}
-type 只能取：prerequisite（C 的这个技能是学它的前提）、used_for（C 的这个技能会被直接用在它里面）、
-part_of（它包含了 C 的这个技能，是其中一部分）、similar（两者相似，可以类比）。
+type 只能取（和 TransKT 的四种关系一致）：prerequisite（前置：学它之前要先会 C 的这个技能）、
+used_for（用到：它里面直接用到 C 的这个技能）、part_of（组成部分：C 的这个技能是它的一部分）、
+hyponym_of（是一种：C 的这个技能是它的一个特例或一种具体做法）。
 要求：编码只能从给出的列表里选；已有的联系不要重复；只给确实有关的，宁缺毋滥，最多 8 条。"""
 
 
@@ -194,7 +197,7 @@ def propose_links(s: Session, d_kp: str) -> list[m.CrossLink]:
                 raise ValueError(f"{c} 不是 C 语言的技能编码")
             if dd not in d_skills:
                 raise ValueError(f"{dd} 不在给出的数据结构技能里")
-            if typ not in cfg()["relation"]:
+            if typ not in cfg()["relation"] or typ == "similar":
                 raise ValueError(f"type {typ} 不在枚举里")
             if (c, dd) in existing or (c, dd) in seen:
                 continue

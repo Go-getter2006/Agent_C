@@ -1,5 +1,5 @@
 // 模型对比：掌握程度算法 v1、v2、图模型（试验中）和多维融合在同一批预测上谁更准；智能体评估的消融和一致率；
-// 融合学到的维度权重；对话行为和表现的关系；根因推断、差别大的地方、先修边的描述统计。
+// 融合学到的维度权重；对话行为和表现的关系；根因推断、差别大的地方、前置关系的描述统计。
 import { Link } from "react-router-dom";
 import { FlaskConical } from "lucide-react";
 import { get } from "../../api";
@@ -85,7 +85,7 @@ function Fusion({ d }: { d: GraphData }) {
             )}
             <p className="note">规则看不出“能迁移”，也看不出说法本身错没错；一致率太低时说明要检查评估的提示词。</p>
           </Card>
-          <Card title="对话行为和做题表现" sub={`对话至少 5 条、做过至少 3 道题的 ${d.dialogue.students} 名学生；和一次通过率的相关系数（描述性）`}>
+          <Card title="对话行为和做题表现" sub={`对话至少 5 条、通过至少 3 道题的 ${d.dialogue.students} 名学生；和“平均几次改对”的相关系数（描述性，负数表示次数少）`}>
             <p className="num">建构性提问占比：{corr(d.dialogue.constructive)} · 索要答案占比：{corr(d.dialogue.answerSeeking)}</p>
             <p className="note">StudyChat（McNichols 等 2026）发现概念性提问和成绩正相关、索要答案负相关；这里用本班的数据看是不是一样。</p>
           </Card>
@@ -119,7 +119,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
           学生端和智能体用的是 <b>v2</b>。v1 和图模型用同一批证据同步运行，结果只在教师端显示。
           现在用了 {d.data.students} 名学生的 {d.data.evidence} 条证据、{d.data.predictions} 次预测；
           {d.data.updatedAt ? `图模型上次全图更新在${fullTime(d.data.updatedAt)}。` : "图模型还没有做过全图更新。"}
-          先修边：{d.prereqStatus}。图模型的参数是经验值（先修影响 {d.params.gamma}，碰巧做对 {d.params.guess}，失误 {d.params.slip}），还没有用数据估计。
+          前置关系：{d.prereqStatus}。图模型的参数是经验值（前置知识的影响 {d.params.gamma}，碰巧做对 {d.params.guess}，失误 {d.params.slip}），还没有用数据估计。
         </p>
       </div>
 
@@ -182,10 +182,10 @@ export default function Models({ cls }: { cls: ClassInfo }) {
       </Card>
 
       <div className="grid-2">
-        <Card title="全班共同的根因" sub="学生反复失败时，图模型认为真正没掌握的先修技能" bodyClass="">
+        <Card title="全班共同的根因" sub="学生反复失败时，图模型认为真正没掌握的前置技能" bodyClass="">
           {d.commonRoots.length === 0 ? <Empty title="目前没有推断出共同的根因" /> : (
             <table className="table">
-              <thead><tr><th scope="col">先修技能</th><th scope="col" className="num">学生人数</th></tr></thead>
+              <thead><tr><th scope="col">前置技能</th><th scope="col" className="num">学生人数</th></tr></thead>
               <tbody>{d.commonRoots.map((c) => <tr key={c.code}><td className="cell-title">{c.name} <Code>{c.code}</Code></td><td className="num">{c.students}</td></tr>)}</tbody>
             </table>
           )}
@@ -220,10 +220,10 @@ export default function Models({ cls }: { cls: ClassInfo }) {
         {d.gaps.length > 30 && <p className="card-foot">只列前 30 条，一共 {d.gaps.length} 条。</p>}
       </Card>
 
-      <Card title="先修边" sub="描述性统计，不是边的强度估计：两头都有数据的学生里，先修会和不会时，后继技能“会”的比例。先修会不会没有差别的边标出来，供修正知识点图参考" bodyClass="">
+      <Card title="前置关系" sub="描述性统计，不是边的强度估计：两头都有数据的学生里，前置会和不会时，后续技能“会”的比例。前置会不会没有差别的边标出来，供修正知识点图参考" bodyClass="">
         <div className="table-scroll">
           <table className="table">
-            <thead><tr><th scope="col">先修技能</th><th scope="col">后继技能</th><th scope="col" className="num">学生数</th><th scope="col" className="num">先修会时</th><th scope="col" className="num">先修不会时</th><th scope="col"><span className="sr-only">提示</span></th></tr></thead>
+            <thead><tr><th scope="col">前置技能</th><th scope="col">后续技能</th><th scope="col" className="num">学生数</th><th scope="col" className="num">前置会时</th><th scope="col" className="num">前置不会时</th><th scope="col"><span className="sr-only">提示</span></th></tr></thead>
             <tbody>
               {d.edges.map((e) => (
                 <tr key={e.parent + e.child}>

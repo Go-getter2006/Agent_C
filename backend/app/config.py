@@ -153,11 +153,17 @@ MASTERY = {
     # 一道题的证据记到它的主技能和次技能上。次技能按这个比例折算；1.0 表示和主技能一样算。
     # 文档没有规定，这是暂定值，见 docs/问题清单.md。
     "secondary_skill_factor": 1.0,
+    # 没通过的提交（只在 v2 用）：记到这次错误所属的技能上（程序或大模型标注的主错误，置信度 ≥ 0.5）。
+    # 同一道题上同一个技能，第一次没过记 0.5，第二次 0.25，再往后不记：交得多不该被无限扣分。
+    "w_submit_failed": (0.5, 0.25),
 }
 
 # 学生端、智能体、复习安排用哪个版本：v1 是附件一第 8 节原样；v2 见 app/mastery.py 开头的说明
 MASTERY_MODEL = _env("MASTERY_MODEL", "v2")
 MASTERY_V2 = {
+    # v2 对几类证据的分量另有调整（v1 照附件一原样）：自己改对的通过，原来只算一次做对的一半；
+    # 现在没通过的那几次已经单独记到出错的技能上了，改对本身就是会了的证据，按 0.8 算
+    "event_scale": {"pass_self_fixed": 1.6},
     "prior_strength": 1.0,      # 图先验的强度（伪计数）
     "half_life_base": 35.0,     # 证据半衰期的起点（天），和 v1 的 λ=0.98 差不多
     "half_life_growth": 1.4,    # 每多一天间隔开的独立成功乘它；每次失败除以它
@@ -221,13 +227,14 @@ AGENT_ASSESS = {
     "min_confidence": 0.4,       # 大模型自己都没把握的不记证据（照样存下来给老师看）
     "batch": 5,                  # 后台空闲时一次评几个回合
     "max_wait_hours": 48,        # 结束超过两天还没评的回合不再评
+    "code_days": 14,             # 看代码评：只评最近两周改对的题（第一次部署时不去评很久以前的）
 }
 
 # 多维画像和融合（app/profile.py）。默认权重是融合用的起点，数据够了按“下一次新题能不能一次做对”学
 PROFILE = {
-    "dims": ("perf", "understanding", "independence", "retention", "prereq"),
-    "default_weights": {"bias": 0.0, "perf": 1.0, "understanding": 0.35, "independence": 0.3, "retention": 0.2,
-                        "prereq": 0.25},
+    "dims": ("perf", "understanding", "independence", "debugging", "retention", "prereq"),
+    "default_weights": {"bias": 0.0, "perf": 1.0, "understanding": 0.35, "independence": 0.3, "debugging": 0.3,
+                        "retention": 0.2, "prereq": 0.25},
     "min_samples": 30,           # 少于这么多次预测，用默认权重
     "ridge": 2.0,                # 学权重时往默认权重收缩的力度
     "understanding_half_life": 30.0,   # 理解的评估按 30 天半衰期衰减
@@ -242,8 +249,9 @@ PROFILE = {
 # 先验的分量 n0 相当于几次作答：数据结构这头的证据越多，C 语言那头的影响越小（η = n0 / (n0 + n)）。
 CROSS = {
     "n0": 2.0,
-    "relation": {"prerequisite": ("先修", 1.0), "used_for": ("被用于", 0.8), "part_of": ("是其中一部分", 0.6),
-                 "similar": ("相似、可以类比", 0.4)},
+    # 关系类型和 TransKT（Han 等 2025）的四种一致；similar 是以前的类型，只为兼容旧数据保留，不再提出
+    "relation": {"prerequisite": ("前置", 1.0), "used_for": ("用到", 0.8), "part_of": ("组成部分", 0.7),
+                 "hyponym_of": ("是一种", 0.6), "similar": ("相似", 0.4)},
     "reliability": {"supported": 1.0, "unknown": 0.7, "unsupported": 0.3},   # 数据检验的结论
     "mastered": 0.6,          # C 那头估计到这么多算掌握了
     "min_n": 10,              # 两组合起来至少这么多次新题才下结论

@@ -84,7 +84,7 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
     for kp in sorted(k for k in KNOWLEDGE_POINTS if course_of(k) == course):
         keys = kps.get(kp, [])
         tried = [k for k in keys if snap.subs.get(k)]
-        first = sum(1 for k in tried if snap.first_try(k))
+        passed = sum(1 for k in tried if snap.passed(k))
         stuck = sum(1 for p in snap.stuck if kp_of_skill(p.skill_code) == kp)
         state = snap.kp.get(kp)
         level = state.level if state else LEVEL_NONE
@@ -95,7 +95,7 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
         elif level == LEVEL_NONE:
             basis = f"做过 {len(tried)} 题，还不够判断"
         else:
-            basis = f"做过 {len(tried)} 题，{first} 题一次通过"
+            basis = f"做过 {len(tried)} 题，通过 {passed} 题"
             if stuck:
                 basis += f"，卡住过 {stuck} 次"
         practice = snap.practice_for(kp) if keys else None
@@ -162,7 +162,8 @@ def activity_block(snap: Snapshot) -> dict:
             "endTime": c.end_time.isoformat() if c.end_time else None,
             "ended": bool(c.end_time and c.end_time < snap.now), "lastSubmit": None})
     tried = [k for k in snap.info if snap.subs.get(k)]
-    first = sum(1 for k in tried if snap.first_try(k))
+    # 通过的题平均交几次才通过（不看“第一次就通过”：OJ 上先交上去看看很正常，改对的过程更说明问题）
+    tries = [next(i for i, x in enumerate(snap.subs[k], start=1) if x.judgement == "AC") for k in tried if snap.passed(k)]
     total_subs = sum(len(snap.subs[k]) for k in tried)
     # 按周：本周一 0 点起算，往前共 8 周（旧的在前）
     local = snap.now.astimezone(db.BEIJING)
@@ -183,8 +184,7 @@ def activity_block(snap: Snapshot) -> dict:
         "homeworks": homeworks,
         "tried": len(tried),
         "passed": sum(1 for k in tried if snap.passed(k)),
-        "firstTryPassed": first,
-        "firstTryRate": round(100 * first / len(tried)) if tried else None,
+        "avgToPass": round(sum(tries) / len(tries), 1) if tries else None,
         "avgSubmissions": round(total_subs / len(tried), 1) if tried else None,
         "weeks": weeks,
     }
@@ -253,7 +253,7 @@ def build(s: Session, user_id: str, course: str = "C") -> dict:
     return {
         "summary": {
             "passed": sum(1 for k in snap.info if snap.passed(k)), "total": len(snap.info),
-            "firstTryRate": activity["firstTryRate"], "avgSubmissions": activity["avgSubmissions"],
+            "avgToPass": activity["avgToPass"], "avgSubmissions": activity["avgSubmissions"],
             "thisWeek": weeks[-1]["submissions"], "lastWeek": weeks[-2]["submissions"],
             "reviewDue": len(rv["due"]), "reviewActive": rv["active"],
             "levels": {lv: levels.count(lv) for lv in (LEVEL_MASTERED, LEVEL_BASIC, LEVEL_WEAK)},
