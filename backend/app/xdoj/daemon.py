@@ -21,7 +21,7 @@ from sqlalchemy import select
 from .. import config, db
 from .. import models as m
 from . import store, sync_meta, sync_submissions
-from .client import ClientError, RetryExhausted, SessionError, XdojError
+from .client import ClientError, ResponseError, RetryExhausted, SessionError, XdojError
 from .store import SyncContext
 
 log = logging.getLogger("xdoj.daemon")
@@ -273,14 +273,16 @@ class Daemon:
             with db.session_scope() as s:
                 store.finish_task(s, task_id)
         except SessionError:
-            raise
-        except ClientError as exc:  # 其他 4xx：标为失败，不重试
+            raise  # 登录本身失败（账号密码不对）：停下报错
+        except (ClientError, ResponseError, RetryExhausted, XdojError) as exc:
+            # XDOJ 拒绝了这一个请求、或者一时出错：只有这个任务失败，慢慢退避重试，不让整个同步停下来。
+            # 以前 400 错误页被当成“掉线”，重新登录后抛会话错误，后台同步每 30 秒重启一次又卡在同一个任务上
+            log.warning("任务 %s/%s 没做完：%s", kind, target, exc)
+            with db.session_scope() as s:
+                store.fail_task(s, task_id, str(exc), retry=True, at=ctx.now(), remote=True)
+        except LookupError as exc:
             with db.session_scope() as s:
                 store.fail_task(s, task_id, str(exc), retry=False, at=ctx.now())
-        except (RetryExhausted, XdojError, LookupError) as exc:
-            with db.session_scope() as s:
-                store.fail_task(s, task_id, str(exc), retry=not isinstance(exc, (RetryExhausted, LookupError)),
-                                at=ctx.now())
         except Exception as exc:  # 本地任务出错不能把主循环带崩
             log.exception("任务 %s/%s 出错", kind, target)
             with db.session_scope() as s:
@@ -326,6 +328,9 @@ class Daemon:
                 done = store.get_state(s, 0, "last_nightly_date")
             if done != local.date().isoformat() and local.hour >= config.SYNC["meta_hour"]:
                 try:
+                    for c in self.contexts:  # 失败了的详情、题面和测试点，每天再试一次
+                        with db.session_scope() as s:
+                            store.requeue_failed(s, c.server_id, at=c.now())
                     self._nightly()
                 except Exception:
                     log.exception("夜间任务出错")
@@ -362,9 +367,9 @@ class Daemon:
     def startup(self) -> None:
         for ctx in self.contexts:
             with db.session_scope() as s:
-                n = store.requeue_failed(s, ctx.server_id)
+                n = store.requeue_failed(s, ctx.server_id, at=ctx.now())
             if n:
-                log.info("重新入队上次失败的 %d 个详情任务", n)
+                log.info("重新入队上次失败、还没取齐的 %d 个任务（提交详情、题面和测试点）", n)
 
     def run_forever(self) -> None:
         self.startup()

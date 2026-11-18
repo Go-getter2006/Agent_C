@@ -10,13 +10,13 @@ import logging
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .. import config, llm
+from .. import config, llm, pdftext
 from .. import models as m
 from ..sandbox import run_program
 from ..sandbox.precheck import check_reference_solution
 from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, is_skill_code, skills_for_course
 from ..xdoj.assemble import source_text
-from ..xdoj.util import decode_bytes, json_hash
+from ..xdoj.util import decode_bytes, json_hash, sha256
 
 log = logging.getLogger("labeling.problems")
 
@@ -25,7 +25,9 @@ def problem_content_hash(s: Session, server_id: int, problem_id: int) -> str:
     text = s.get(m.ProblemText, (server_id, problem_id))
     cases = s.scalars(select(m.Testcase).where(
         m.Testcase.server_id == server_id, m.Testcase.problem_id == problem_id).order_by(m.Testcase.testcase_id)).all()
-    return json_hash([text.file_hash if text else "", [(c.testcase_id, c.io_hash) for c in cases]])
+    # 题面识别出来的文字也算进去：同一个 PDF 重新识别（以前是乱码）后要重新标注
+    return json_hash([text.file_hash if text else "", sha256(pdftext.usable_text(text).encode("utf-8")),
+                      [(c.testcase_id, c.io_hash) for c in cases]])
 
 
 def _same_output(a: str, b: str) -> bool:
@@ -75,15 +77,15 @@ def reference_solution(s: Session, server_id: int, problem_id: int) -> str | Non
         return best
     if not llm.available():
         return None
-    text = s.get(m.ProblemText, (server_id, problem_id))
-    if text is None or not text.extracted_text:
+    statement = pdftext.usable_text(s.get(m.ProblemText, (server_id, problem_id)))
+    if not statement:
         return None
     try:
         code = llm.call_json(
             "reference_solution",
             "你是 C 语言课程的助教。根据题面写一份正确、朴素的 C 程序，只用标准库。"
             '输出 JSON：{"code":"完整的 C 源码"}',
-            text.extracted_text[:4000],
+            statement[:4000],
             lambda d: str(d["code"]) if isinstance(d.get("code"), str) and "main" in d["code"] else (_ for _ in ()).throw(ValueError("没有给出完整程序")),
             retries=1, max_tokens=1500)
     except llm.LLMUnavailable:
@@ -135,7 +137,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
         return current
     problem = s.get(m.Problem, (server_id, problem_id))
     text = s.get(m.ProblemText, (server_id, problem_id))
-    if problem is None or text is None or text.extract_status != "ok":
+    if problem is None or not pdftext.usable_text(text):  # 乱码、还没识别出来的题面不拿去标注
         return current
     cases = s.scalars(select(m.Testcase).where(
         m.Testcase.server_id == server_id, m.Testcase.problem_id == problem_id
@@ -176,7 +178,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
         f"测试点 {c.testcase_id}\n输入：\n{(decode_bytes(c.input_bytes, c.input_encoding)[0] or '')[:300]}\n"
         f"输出：\n{(decode_bytes(c.output_bytes, c.output_encoding)[0] or '')[:300]}" for c in cases)
     user = (f"【技能表】\n{skill_table}\n\n【题目】{problem.title}\n【XDOJ 的类别和标签】{problem.category} {' '.join(tags)}\n"
-            f"【题面】\n{text.extracted_text[:3000]}\n\n【正确代码】\n{(solution or '（暂无）')[:3000]}\n\n【测试点】\n{case_text}")
+            f"【题面】\n{pdftext.usable_text(text)[:3000]}\n\n【正确代码】\n{(solution or '（暂无）')[:3000]}\n\n【测试点】\n{case_text}")
     try:
         brief, primary, secondary, tcs = llm.call_json("label_problem", course_prompt(_SYSTEM, server.course if server else "C"), user, validate,
                                                        retries=1, max_tokens=1200)

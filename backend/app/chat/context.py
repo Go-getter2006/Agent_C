@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, db, llm, mastery
+from .. import catalog, config, db, llm, mastery, pdftext
 from .. import models as m
 from ..labeling import labeler
 from ..taxonomy import LEVEL_NONE, error_name, skill_name
@@ -283,7 +283,7 @@ def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
     if ctx.problem is not None:
         sid, pid = ctx.problem.server_id, ctx.problem.problem_id
         text = s.get(m.ProblemText, (sid, pid))
-        ctx.statement = (text.extracted_text or "")[:1500] if text is not None else ""
+        ctx.statement = pdftext.usable_text(text)[:1500]
         for tc in s.scalars(select(m.Testcase).where(m.Testcase.server_id == sid, m.Testcase.problem_id == pid)
                             .order_by(m.Testcase.seq, m.Testcase.testcase_id).limit(8)).all():
             inp = decode_bytes(tc.input_bytes, tc.input_encoding)[0] if tc.input_bytes is not None else ""

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import accounts, catalog, changes, db, llm, progress, quiz, review
+from .. import accounts, catalog, changes, db, llm, pdftext, progress, quiz, review
 from .. import models as m
 from ..chat import workflow
 from ..taxonomy import UI_EVENTS, course_of
@@ -151,7 +151,7 @@ def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depen
     text = s.get(m.ProblemText, (info.server_id, info.problem_id))
     return {"key": info.key, "title": info.title, "brief": info.brief,
             "homeworkKey": catalog.homework_key(*contest) if contest else None,
-            "statement": (text.extracted_text or "")[:6000] if text is not None else "",
+            "statement": pdftext.usable_text(text)[:6000],
             "submissions": views[::-1],
             "changes": changes.problem_changes(s, user.student_id, info.server_id, info.problem_id),
             "knowledge": progress.problem_knowledge(s, user.student_id, info.server_id, info.problem_id)}

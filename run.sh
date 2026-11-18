@@ -67,7 +67,20 @@ setup_backend() {
     backend/.venv/bin/pip install -q -r backend/requirements.txt
     stamp_set backend/requirements.txt backend/.venv/.req-stamp
   fi
+  setup_ocr
   command -v gcc >/dev/null 2>&1 || printf '\033[33m没有 gcc：小题的“运行检查”用不了。Ubuntu 上 sudo apt install gcc\033[0m\n'
+}
+
+# 题面 PDF 要 OCR 才认得对（直接抽文字会乱码）。装不上不影响运行：乱码的题面先不显示，装上后后台自动重新识别
+setup_ocr() {
+  backend/.venv/bin/python -c "import rapidocr" 2>/dev/null && return 0
+  backend/.venv/bin/python -c "import rapidocr_onnxruntime" 2>/dev/null && return 0
+  say "安装题面识别（OCR）"
+  if ! backend/.venv/bin/pip install -q -r backend/requirements-ocr.txt; then
+    backend/.venv/bin/pip install -q rapidocr_onnxruntime \
+      || printf '\033[33m没装上 OCR：PDF 题面里乱码的那些先不显示。之后可以再试：backend/.venv/bin/pip install -r backend/requirements-ocr.txt\033[0m\n'
+  fi
+  return 0
 }
 
 setup_frontend() {

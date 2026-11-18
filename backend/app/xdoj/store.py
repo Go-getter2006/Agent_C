@@ -114,31 +114,46 @@ def finish_task(s: Session, task_id: int) -> None:
     s.execute(update(m.FetchTask).where(m.FetchTask.id == task_id).values(status="done", last_error=""))
 
 
-def fail_task(s: Session, task_id: int, error: str, retry: bool, at: dt.datetime) -> None:
-    """失败：能重试的按 2、4、8…秒退避；重试用尽或不该重试的标为失败。"""
+def fail_task(s: Session, task_id: int, error: str, retry: bool, at: dt.datetime, remote: bool = False) -> None:
+    """失败：能重试的退避后再试；重试用尽或不该重试的标为失败（每天自动重新入队一次，见 requeue_failed）。
+
+    remote=True 是 XDOJ 那边拒绝或出错（参数写法不对、接口一时报错）：退避得慢一些（2、4、8…分钟，最长 6 小时），
+    不在几十秒里把次数用光。
+    """
     task = s.get(m.FetchTask, task_id)
     if task is None:
         return
     task.attempts += 1
     task.last_error = error[:500]
     if retry and task.attempts < config.SYNC["max_retries"]:
-        task.next_try_at = at + dt.timedelta(seconds=min(2 ** task.attempts, 300))
+        wait = min(60 * 2 ** task.attempts, 6 * 3600) if remote else min(2 ** task.attempts, 300)
+        task.next_try_at = at + dt.timedelta(seconds=wait)
     else:
         task.status = "failed"
 
 
-def requeue_failed(s: Session, server_id: int) -> int:
-    """启动时把上次失败、但提交详情仍没取齐的任务重新入队。"""
+# 失败后会自动重新入队的任务：提交详情、题面和测试点
+REQUEUE_KINDS = ("detail", "pending_judge", "problem_assets", "problem_check")
+
+
+def requeue_failed(s: Session, server_id: int, at: dt.datetime | None = None) -> int:
+    """把失败了、但东西仍没取齐的任务重新入队。启动时和每天夜里各做一次：XDOJ 那边好了以后能自己补上。"""
     rows = s.scalars(select(m.FetchTask).where(
         m.FetchTask.server_id == server_id, m.FetchTask.status == "failed",
-        m.FetchTask.kind.in_(("detail", "pending_judge")))).all()
+        m.FetchTask.kind.in_(REQUEUE_KINDS))).all()
     n = 0
     for task in rows:
-        sub = s.get(m.Submission, (server_id, task.target_id))
-        if sub is not None and sub.detail_status != "done":
-            task.status = "done"
-            enqueue(s, server_id, "detail", task.target_id, max(task.priority, 1))
-            n += 1
+        task.status = "done"
+        if task.kind in ("detail", "pending_judge"):
+            sub = s.get(m.Submission, (server_id, task.target_id))
+            if sub is not None and sub.detail_status != "done":
+                enqueue(s, server_id, "detail", task.target_id, max(task.priority, 1), when=at)
+                n += 1
+        else:
+            prob = s.get(m.Problem, (server_id, task.target_id))
+            if prob is not None and not prob.assets_fetched:
+                enqueue(s, server_id, "problem_assets", task.target_id, max(task.priority, 1), when=at)
+                n += 1
     return n
 
 
