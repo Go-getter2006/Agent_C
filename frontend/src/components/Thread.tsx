@@ -39,6 +39,7 @@ function looksLikeCode(text: string): boolean {
 
 export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKey, onAsked, onActivity }: Props) {
   const [messages, setMessages] = useState<Message[] | null>(null);
+  const [stale, setStale] = useState(false);   // 换了题、新的对话还没取到：先留着上一份（变淡），不闪一下
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
   const [failed, setFailed] = useState<{ payload: Payload; message: string } | null>(null);
@@ -55,6 +56,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
       .then((r) => {
         if (key !== keyRef.current) return;
         setMessages((old) => (silent && old && old.length > r.messages.length ? old : r.messages));
+        setStale(false);
         setLoadError(null);
       })
       .catch((err: Error) => {
@@ -63,7 +65,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
   }, []);
 
   useEffect(() => {
-    setMessages(null);
+    setStale(true);
     setLoadError(null);
     setPending(null);
     setFailed(null);
@@ -97,12 +99,12 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
 
   // 从“问问为什么错”进来
   useEffect(() => {
-    if (askKey && messages !== null && !busy) {
+    if (askKey && messages !== null && !stale && !busy) {
       onAsked?.();
       void send({ text: ASK_WHY, submissionKey: askKey });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [askKey, messages === null]);
+  }, [askKey, messages === null, stale]);
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -146,7 +148,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
         {messages === null && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
         {loadError && <div className="chat-list"><Problem message={loadError} onRetry={() => load(false)} /></div>}
         {messages !== null && (
-          <div className="chat-list" aria-live="polite">
+          <div className={stale ? "chat-list fade-swap is-stale" : "chat-list fade-swap"} aria-live="polite" aria-busy={stale}>
             {list.length === 0 && !shown && (
               <div className="chat-empty">
                 <AgentMark />

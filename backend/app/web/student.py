@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import accounts, catalog, db, llm, progress, quiz, review
+from .. import accounts, catalog, changes, db, llm, progress, quiz, review
 from .. import models as m
 from ..chat import workflow
 from ..taxonomy import UI_EVENTS, course_of
@@ -138,7 +138,8 @@ def homework_submissions(key: str, user: m.User = Depends(student), s: Session =
         server_id, problem_id = catalog.parse_key(row["key"], "p")
         views = catalog.submissions_view(s, user.student_id, server_id, problem_id)
         out.append({"key": row["key"], "title": row["title"], "brief": row["brief"], "passed": row["passed"],
-                    "submissions": views[::-1]})
+                    "submissions": views[::-1],
+                    "changes": changes.problem_changes(s, user.student_id, server_id, problem_id) if views else {}})
     return {"homework": detail["homework"], "problems": out}
 
 
@@ -147,9 +148,12 @@ def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depen
     info = _problem(s, user, key)
     views = catalog.submissions_view(s, user.student_id, info.server_id, info.problem_id)
     contest = catalog.visible_problems(s, user.student_id, user.course).get((info.server_id, info.problem_id))
+    text = s.get(m.ProblemText, (info.server_id, info.problem_id))
     return {"key": info.key, "title": info.title, "brief": info.brief,
             "homeworkKey": catalog.homework_key(*contest) if contest else None,
+            "statement": (text.extracted_text or "")[:6000] if text is not None else "",
             "submissions": views[::-1],
+            "changes": changes.problem_changes(s, user.student_id, info.server_id, info.problem_id),
             "knowledge": progress.problem_knowledge(s, user.student_id, info.server_id, info.problem_id)}
 
 

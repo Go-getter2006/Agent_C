@@ -1,9 +1,10 @@
 // 外壳：深色侧边栏 + 内容。
 // 很宽（学生端 1440 以上、教师端 1280 以上）时侧边栏展开，带文字；中等宽度收成图标竖条；手机上学生端是底部标签栏，教师端是顶栏加抽屉。
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { BarChart3, Braces, ListChecks, LogOut, Menu, MessageSquare, RotateCcw, type LucideIcon } from "lucide-react";
 import { useSession, useStatus } from "../session";
+import { useSlider } from "./Slider";
 import { Avatar, Drawer } from "./ui";
 
 export interface NavItem {
@@ -30,10 +31,14 @@ function Brand() {
   );
 }
 
-function NavList({ nav, onNavigate }: { nav: NavItem[]; onNavigate?: () => void }) {
+function NavList({ nav, onNavigate, name = "side" }: { nav: NavItem[]; onNavigate?: () => void; name?: string }) {
+  const location = useLocation();
+  const box = useRef<HTMLDivElement>(null);
+  const slider = useSlider(name, box, ".nav-item.active", location.pathname);
   let section: string | undefined;
   return (
-    <>
+    <div className="nav-track" ref={box}>
+      <span className={`${slider.className} nav-slider`} style={slider.style} aria-hidden="true" />
       {nav.map((item) => {
         const head = item.section && item.section !== section ? ((section = item.section), <div key={`s-${item.section}`} className="nav-label">{item.section}</div>) : null;
         const Icon = item.icon;
@@ -50,7 +55,7 @@ function NavList({ nav, onNavigate }: { nav: NavItem[]; onNavigate?: () => void 
           </NavLink>,
         ];
       })}
-    </>
+    </div>
   );
 }
 
@@ -70,6 +75,30 @@ function UserFoot() {
         <LogOut size={18} />
       </button>
     </div>
+  );
+}
+
+/** 手机上的底部标签栏，选中的那一项上面有一条滑块。 */
+function TabBar({ nav }: { nav: NavItem[] }) {
+  const location = useLocation();
+  const box = useRef<HTMLElement>(null);
+  const slider = useSlider("tab", box, "a.active", location.pathname);
+  return (
+    <nav className="tabbar" aria-label="主导航" ref={box}>
+      <span className={`${slider.className} tab-slider`} style={slider.style} aria-hidden="true" />
+      {nav.map((item) => {
+        const Icon = item.icon;
+        return (
+          <NavLink key={item.to} to={item.to} aria-label={item.badge ? `${item.label}，${item.badge} 项待处理` : undefined}>
+            <span className="nav-icon">
+              <Icon size={22} aria-hidden="true" />
+              {!!item.badge && <span className="nav-dot" aria-hidden="true" />}
+            </span>
+            <span>{item.label}</span>
+          </NavLink>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -108,26 +137,13 @@ export function Shell({ nav, kind = "student", children }: ShellProps) {
       <div className="shell-main">{children}</div>
 
       {kind === "student" && (
-        <nav className="tabbar" aria-label="主导航">
-          {nav.map((item) => {
-            const Icon = item.icon;
-            return (
-              <NavLink key={item.to} to={item.to} aria-label={item.badge ? `${item.label}，${item.badge} 项待处理` : undefined}>
-                <span className="nav-icon">
-                  <Icon size={22} aria-hidden="true" />
-                  {!!item.badge && <span className="nav-dot" aria-hidden="true" />}
-                </span>
-                <span>{item.label}</span>
-              </NavLink>
-            );
-          })}
-        </nav>
+        <TabBar nav={nav} />
       )}
 
       {menu && (
         <Drawer side="left" title="导航" dark onClose={() => setMenu(false)}>
           <nav className="nav nav-drawer">
-            <NavList nav={nav} onNavigate={() => setMenu(false)} />
+            <NavList nav={nav} onNavigate={() => setMenu(false)} name="drawer" />
           </nav>
           <UserFoot />
         </Drawer>

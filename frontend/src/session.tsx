@@ -39,8 +39,28 @@ export const useSession = () => useContext(SessionContext);
 
 const HW_KEY = "pda.homework";
 
-/** 学生可见的作业，以及当前选中的那个（记在本机，下次打开还是它）。 */
-export function useHomeworks() {
+interface HomeworksValue {
+  homeworks: Homework[];
+  current: Homework | null;
+  pick: (key: string) => void;
+  loading: boolean;
+  error: string | null;
+  reload: () => void;
+}
+
+const HomeworksContext = createContext<HomeworksValue>({
+  homeworks: [], current: null, pick: () => undefined, loading: true, error: null, reload: () => undefined,
+});
+
+/** 学生可见的作业，以及当前选中的那个。对话页、提交页共用同一份（以前各存一份，会互相打架）；记在本机，下次打开还是它。 */
+export function HomeworksProvider({ children }: { children: ReactNode }) {
+  const value = useHomeworksState();
+  return <HomeworksContext.Provider value={value}>{children}</HomeworksContext.Provider>;
+}
+
+export const useHomeworks = () => useContext(HomeworksContext);
+
+function useHomeworksState(): HomeworksValue {
   const list = useLoad(() => api.homeworks().then((r) => r.homeworks), [], 60000);
   const [picked, setPicked] = useState<string | null>(() => {
     try {
@@ -61,7 +81,8 @@ export function useHomeworks() {
       /* 存不了也不影响使用 */
     }
   }, []);
-  return { homeworks, current, pick, loading: list.loading, error: list.error, reload: list.reload };
+  return useMemo(() => ({ homeworks, current, pick, loading: list.loading && !list.data, error: list.error, reload: list.reload }),
+    [homeworks, current, pick, list.loading, list.data, list.error, list.reload]);
 }
 
 // ---------- 学生端：XDOJ 状态、该复习的数量（侧边栏的小红点用） ----------

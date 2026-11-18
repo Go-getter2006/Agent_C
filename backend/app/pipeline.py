@@ -60,9 +60,12 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
         mastery.record_pass(s, sub.user_id, label, f"pass:{server_id}:{submission_id}", sub.submit_time or db.now(),
                             len(earlier), help_before(s, sub), reliability)
         review.on_independent_practice(s, sub, label, len(earlier), help_before(s, sub), reliability)
-    from .chat import workflow
+    from .chat import summary, workflow
 
-    workflow.after_pass(s, sub, now)
+    note = summary.on_pass(s, sub, now)          # 先总结他是怎么改对的（之前没过过的才有）
+    quiz_msg = workflow.after_pass(s, sub, now)  # 再看要不要出小题
+    if note is not None and quiz_msg is not None:
+        summary.drop_reflection(note)
 
 
 def local_task(server_id: int, kind: str, target_id: int) -> None:

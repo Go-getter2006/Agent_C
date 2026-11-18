@@ -28,6 +28,12 @@ class Ctx:
     thread: tuple[int, int] | None = None        # 消息所在的线程：某道题，或通用线程（None）
     course: str = "C"                            # 这次登录的课程：只在这门课的题里绑定
     profile_note: str = ""                       # 多维画像的一句话，给大模型看（profile.tutor_note）
+    # 下面这些只给大模型看（学生看不到）：题目、全部测试点、这道题以前的提交、学情、在别的题上纠结过什么
+    statement: str = ""
+    all_tests: list[dict] = field(default_factory=list)   # [{"standardInput", "standardOutput"}]，也用于回复的泄露检查
+    history: list[str] = field(default_factory=list)      # 这道题每次提交：第几次、结果、错误、改了几行
+    learning: list[str] = field(default_factory=list)     # 学情：薄弱的知识点和提示
+    struggles: list[str] = field(default_factory=list)    # 在别的题上卡过、纠结过的地方
     problem: catalog.ProblemInfo | None = None   # 绑定到的题
     bind_by: str = ""
     candidates: list[catalog.ProblemInfo] = field(default_factory=list)
@@ -236,6 +242,8 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
         from .. import profile
 
         ctx.profile_note = profile.tutor_note(s, user_id, ctx.root_skill)
+    if llm.available():
+        tutor_context(s, ctx, now)
     if rnd is not None and sub is not None and rnd.submission_id and rnd.submission_id != sub.submission_id \
             and rnd.error_code and rnd.error_code == ctx.root_error and sub.submission_id > rnd.submission_id:
         ctx.same_error_resubmit = True  # 带着同一个错误又交了一次
@@ -263,3 +271,54 @@ def evidence_card(ctx: Ctx) -> dict:
         "noProgress": ctx.no_progress,
         "sourceKind": ctx.source_kind,
     }
+
+
+# ------------------------------------------------------------ 给大模型的完整情况（学生看不到）
+def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
+    """题目、全部测试点、这道题以前的提交、学情、在别的题上纠结过什么。只放进给大模型的提示里。"""
+    from .. import changes, profile
+    from ..taxonomy import KNOWLEDGE_POINTS, kp_of_skill
+    from ..xdoj.util import decode_bytes
+
+    if ctx.problem is not None:
+        sid, pid = ctx.problem.server_id, ctx.problem.problem_id
+        text = s.get(m.ProblemText, (sid, pid))
+        ctx.statement = (text.extracted_text or "")[:1500] if text is not None else ""
+        for tc in s.scalars(select(m.Testcase).where(m.Testcase.server_id == sid, m.Testcase.problem_id == pid)
+                            .order_by(m.Testcase.seq, m.Testcase.testcase_id).limit(8)).all():
+            inp = decode_bytes(tc.input_bytes, tc.input_encoding)[0] if tc.input_bytes is not None else ""
+            out = decode_bytes(tc.output_bytes, tc.output_encoding)[0] if tc.output_bytes is not None else ""
+            ctx.all_tests.append({"standardInput": inp or "", "standardOutput": out or ""})
+        subs = catalog.user_submissions(s, ctx.user_id, sid, pid, until=now)
+        prev_lines = None
+        for i, sub in enumerate(subs[-8:], start=max(1, len(subs) - 7)):
+            lines = changes.code_lines(s, sub)
+            errs = "、".join(error_name(c) for c in changes.error_codes(s, sub)) or "没标出错误"
+            moved = changes.compare(prev_lines, lines) if prev_lines else None
+            ctx.history.append(f"第 {i} 次：{sub.judgement_text or sub.judgement}"
+                               + (f"，问题：{errs}" if sub.judgement != "AC" else "")
+                               + (f"，比上一次改了 {moved.changed} 行" if moved and moved.available else ""))
+            prev_lines = lines
+    course = ctx.course
+    prof = profile.kp_profile(s, ctx.user_id, course)
+    weak = sorted(((kp, d) for kp, d in prof.items() if d.level == "待加强" or d.flags), key=lambda kv: (kv[1].perf or 0.5))
+    for kp, d in weak[:4]:
+        tips = "；".join(profile.FLAG_TEXT[f] for f in d.flags[:2])
+        ctx.learning.append(f"{KNOWLEDGE_POINTS.get(kp, kp)}：{d.level}" + (f"（{tips}）" if tips else ""))
+    # 在别的题上卡过的地方、智能体看出来的错误想法
+    current = (ctx.problem.server_id, ctx.problem.problem_id) if ctx.problem else None
+    for sp in s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id == ctx.user_id)
+                        .order_by(m.StuckPoint.id.desc()).limit(12)).all():
+        if sp.problem_id is None or (sp.server_id, sp.problem_id) == current or catalog.server_course(s, sp.server_id) != course:
+            continue
+        info = catalog.problem_info(s, sp.server_id, sp.problem_id)
+        how = {"recalled": "后来自己想起来了", "blank_filled": "挖空补上的", "example_given": "给了示例代码",
+               "exercise": "做了小练习"}.get(sp.resolution, "")
+        ctx.struggles.append(f"在「{info.title if info else '另一道题'}」卡在{skill_name(sp.skill_code)}"
+                             + (f"（{error_name(sp.error_code)}）" if sp.error_code else "") + (f"，{how}" if how else ""))
+        if len(ctx.struggles) >= 4:
+            break
+    for a in s.scalars(select(m.AgentAssessment).where(
+            m.AgentAssessment.user_id == ctx.user_id, m.AgentAssessment.course == course,
+            m.AgentAssessment.misconception != "").order_by(m.AgentAssessment.id.desc()).limit(3)).all():
+        ctx.struggles.append(f"以前看出来的错误想法（{KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), '')}）：{a.misconception}")

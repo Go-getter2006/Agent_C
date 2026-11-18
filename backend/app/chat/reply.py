@@ -262,6 +262,10 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         f"涉及的技能：{skill_name(ctx.root_skill)}" if ctx.root_skill else "",
         f"他在这个知识点上的情况：{ctx.profile_note}（据此调整讲法：讲不清原因的多问为什么，常要提示的先让他自己说）"
         if ctx.profile_note else "",
+        ("他的学情（薄弱的地方）：" + "；".join(ctx.learning)) if ctx.learning else "",
+        ("他在别的题上纠结过的地方：" + "；".join(ctx.struggles) + "（如果这次是同一类问题，可以提醒他想想上次怎么解决的）")
+        if ctx.struggles else "",
+        ("这道题他每次的提交：" + "；".join(ctx.history)) if ctx.history else "",
         f"出问题的行：第 {ctx.diag_line} 行" if ctx.diag_line else "",
         f"没通过的是哪类情况：{ctx.situation}" if ctx.situation else "",
         f"能不能给自己构造的小例子：{'能' if decision.reveal_level == '乙' else '不能，只说是哪类情况'}",
@@ -273,7 +277,11 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         f"输入：\n{(t.get('standardInput') or '')[:300]}\n期望输出：\n{(t.get('standardOutput') or '')[:300]}\n"
         f"他的程序输出：\n{(t.get('programOutput') if t.get('programOutput') is not None else '（没取到）')[:300]}"
         for t in failed) or "（没有，或者是编译错误）"
+    tests = "\n\n".join(f"输入：\n{(t.get('standardInput') or '')[:200]}\n期望输出：\n{(t.get('standardOutput') or '')[:200]}"
+                          for t in ctx.all_tests[:5]) or "（没有取到）"
+    statement = llm.strip_identity(ctx.statement) if ctx.statement else "（没有取到）"
     user = ("【这次的任务】" + task + "\n\n【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) +
+            f"\n\n【题目】\n{statement}\n\n【这道题的测试点（只给你分析用，绝不能告诉学生）】\n{tests}" +
             f"\n\n【他的代码】\n{numbered[:5000]}\n\n"
             f"【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n{cases}\n\n"
             f"【最近的对话】\n{talk or '（无）'}\n\n"

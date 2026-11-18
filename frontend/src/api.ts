@@ -1,7 +1,7 @@
 // 和后端通信。出错时抛 ApiError，message 是可以直接给人看的一句中文。
 import type {
   AuthInfo, DiffView, Homework, Me, Message, ProblemDetail, ProblemRow, ProgressData, QuizView, ReviewCurrent,
-  ReviewPage, StatusInfo, SubmissionView,
+  ReviewPage, StatusInfo, SubmissionChange, SubmissionView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -60,7 +60,7 @@ export const api = {
   homeworks: () => get<{ homeworks: Homework[] }>("/api/homeworks"),
   homework: (key: string) => get<{ homework: Homework; problems: ProblemRow[] }>(`/api/homeworks/${key}`),
   homeworkSubmissions: (key: string) =>
-    get<{ homework: Homework; problems: (ProblemRow & { submissions: SubmissionView[] })[] }>(
+    get<{ homework: Homework; problems: (ProblemRow & { submissions: SubmissionView[]; changes: Record<string, SubmissionChange> })[] }>(
       `/api/homeworks/${key}/submissions`,
     ),
   problem: (key: string) => get<ProblemDetail>(`/api/problems/${key}`),
