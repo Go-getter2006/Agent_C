@@ -158,7 +158,7 @@ def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depen
     pages = pdftext.page_count(text) if not statement else 0
     return {"key": info.key, "title": info.title, "brief": info.brief,
             "homeworkKey": catalog.homework_key(*contest) if contest else None,
-            "statement": statement[:6000],
+            "statement": statement,
             # 示意图（题面文字里 [图N] 的位置）；文字整理不出来时是题面 PDF 的各页。学生在 XDOJ 上本来就能看到题面
             "figures": [{"n": n, "url": f"/api/problems/{info.key}/figures/{n}", "width": w, "height": h}
                         for n, w, h in figures] if statement else [],

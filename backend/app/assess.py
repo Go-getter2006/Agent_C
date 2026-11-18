@@ -247,10 +247,10 @@ def code_guard(level: int | None, ep: process.Episode, changed: int) -> tuple[in
 
 
 def _diff(before: list[str], after: list[str]) -> tuple[list[str], list[str]]:
-    """统一格式的改动（带少量上下文），和其中改了的行（不带 + -）。"""
+    """统一格式的改动（带少量上下文），和其中改了的行（不带 + -）。改动完整给出，不截断。"""
     lines = [x for x in difflib.unified_diff(before, after, lineterm="", n=2)][2:]
     changed = [x[1:] for x in lines if x[:1] in "+-" and x[1:].strip()]
-    return lines[:120], changed
+    return lines, changed
 
 
 def assess_code(s: Session, sub: m.Submission, use_llm: bool = True) -> m.AgentAssessment | None:

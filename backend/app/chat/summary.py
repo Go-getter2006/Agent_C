@@ -53,8 +53,8 @@ def _compare_llm(before: list[str], after: list[str], tests: list[dict], course:
             raise ValueError("不能出现测试数据")
         return parts
 
-    user = ("【原来的代码】\n" + llm.strip_identity("\n".join(before))[:3000] +
-            "\n\n【通过的代码】\n" + llm.strip_identity("\n".join(after))[:3000])
+    user = ("【原来的代码】\n" + llm.strip_identity("\n".join(before)) +
+            "\n\n【通过的代码】\n" + llm.strip_identity("\n".join(after)))
     try:
         return llm.call_json("summary_compare", course_prompt(_SYSTEM, course), user, validate, retries=1, max_tokens=400)
     except llm.LLMUnavailable:

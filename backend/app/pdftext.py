@@ -341,8 +341,9 @@ def tidy(raw: str, status: str) -> tuple[str, str] | None:
         return text
 
     try:
-        text = llm.call_json("statement_tidy", _SYSTEM, "【抽出来的题面】\n" + raw[:6000], validate,
-                             retries=1, max_tokens=2500)
+        # 整篇题面一起给，不截断；输出要装得下整理后的全文
+        text = llm.call_json("statement_tidy", _SYSTEM, "【抽出来的题面】\n" + raw, validate,
+                             retries=1, max_tokens=min(8000, max(2500, 2 * len(raw))))
     except llm.LLMUnavailable as exc:
         log.info("题面整理没成功（%s），用程序抽的文字", exc)
         return None

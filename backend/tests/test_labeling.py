@@ -135,3 +135,32 @@ def test_problem_label_versions_and_llm_annotation(ctx):
             assert annotate_problem(s, 1, 406).id == label.id, "题面和测试点没变：不重标"
     finally:
         llm.set_backend(None)
+
+
+def test_problem_label_prompt_has_complete_evidence(ctx):
+    """标注题目时题面、测试点完整给出：长的测试点不截断；没取到的是 null，不当成空输出。"""
+    synced(ctx)
+    long_output = "1 " * 2000 + "END_OF_OUTPUT"
+    with db.session_scope() as s:
+        t1, t2 = s.scalars(select(m.Testcase).where(m.Testcase.server_id == 1, m.Testcase.problem_id == 406)
+                           .order_by(m.Testcase.testcase_id)).all()
+        t1.output_bytes, t1.output_encoding = long_output.encode("utf-8"), "utf-8"
+        t2.output_bytes = None
+    seen = []
+    answer = {"brief": "输入两个整数，输出它们的和", "primary": "C01.03.01", "secondary": [],
+              "testcases": [{"id": 1396, "skill": "C01.03.01", "situation": "普通数据", "ordinary": True},
+                            {"id": 1397, "skill": "C01.03.01", "situation": "普通数据", "ordinary": True}]}
+
+    def backend(messages, *_args):
+        seen.append(messages[1]["content"])
+        return json.dumps(answer, ensure_ascii=False), 10, 5
+    llm.set_backend(backend)
+    try:
+        with db.session_scope() as s:
+            annotate_problem(s, 1, 406, force=True)
+        prompt = next(p for p in seen if "【技能表】" in p)
+        cases = json.loads(prompt.split("【测试点】\n", 1)[1])
+        assert cases[0]["standardOutput"] == long_output        # 不截断
+        assert cases[1]["standardOutput"] is None               # 没取到 ≠ 空输出
+    finally:
+        llm.set_backend(None)
