@@ -69,6 +69,7 @@ export const api = {
 
   thread: (key: string) => get<{ messages: Message[] }>(`/api/threads/${key}`),
   offerReview: (key: string) => post<{ status: string }>(`/api/threads/${key}/review`),
+  welcome: (key: string) => post<{ messages: Message[] }>(`/api/threads/${key}/welcome`),
   send: (key: string, body: { text?: string; action?: string; submissionKey?: string }) =>
     post<{ messages: Message[] }>(`/api/threads/${key}/messages`, body),
 

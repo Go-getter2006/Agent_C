@@ -6,9 +6,9 @@ const timeOf = (p: ProblemRow) => {
   return Number.isFinite(time) ? time : 0;
 };
 
-/** 未通过、未提交、已通过；提交按时间倒序，未提交按题目编号升序。 */
+/** 已确认失败、未提交、评测中/结果未知、已通过；未提交按题号，其余按时间倒序。 */
 export function sortProblems(problems: ProblemRow[]): ProblemRow[] {
-  const group = (p: ProblemRow) => p.passed ? 2 : p.last ? 0 : 1;
+  const group = (p: ProblemRow) => p.passed ? 3 : !p.last ? 1 : ["PENDING", "UNKNOWN"].includes(p.last.result) ? 2 : 0;
   return [...problems].sort((a, b) => group(a) - group(b)
     || (group(a) === 1 ? 0 : timeOf(b) - timeOf(a))
     || numberOf(a) - numberOf(b) || a.key.localeCompare(b.key));

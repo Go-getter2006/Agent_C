@@ -6,6 +6,7 @@ import "./styles/layout.css";
 import "./styles/pages.css";
 import "./styles/desktop.css";
 import "./styles/login.css";
+import "./styles/homework-nav.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -1,6 +1,5 @@
 /* 桌面精修：参考研究见 docs/首页与UI细节复查.md。手机布局暂不重做。 */
 .chat-head[hidden] { display: none; }
-.submission-history summary { cursor: pointer; color: var(--ink-2); padding: 12px 0; font-size: 13px; }
 .problem-list-content[aria-busy="true"] { pointer-events: none; }
 .kg-chapters { display: none; }
 

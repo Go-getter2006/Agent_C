@@ -29,6 +29,7 @@ interface Props {
   emptyTitle: string;
   emptyText: string;
   askKey?: string | null;      // 从“问问为什么错”进来：自动问这次提交
+  welcomeKey?: string | null;  // 未通过的最新提交：让智能体主动提问。
   onAsked?: () => void;
   onActivity?: () => void;     // 有新消息、小题有进展：让外面刷新列表和右栏
 }
@@ -37,7 +38,7 @@ function looksLikeCode(text: string): boolean {
   return text.includes("\n") && /[;{}]|#include/.test(text);
 }
 
-export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKey, onAsked, onActivity }: Props) {
+export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKey, welcomeKey, onAsked, onActivity }: Props) {
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [stale, setStale] = useState(false);   // 换了题、新的对话还没取到：先留着上一份（变淡），不闪一下
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -53,6 +54,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
   const loadSeq = useRef(0);
   const offerBusy = useRef(false);
   const interacting = useRef(false);
+  const welcomed = useRef(new Set<string>());
   interacting.current = busy || !!text.trim();
 
   const load = useCallback((silent: boolean) => {
@@ -87,6 +89,18 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
     }, 15000);
     return () => window.clearInterval(timer);
   }, [busy, load]);
+
+  useEffect(() => {
+    if (!welcomeKey || threadKey === "general" || messages === null || stale || interacting.current || askKey) return;
+    const token = `${threadKey}:${welcomeKey}`;
+    if (welcomed.current.has(token)) return;
+    welcomed.current.add(token);
+    const seq = ++loadSeq.current;
+    void api.welcome(threadKey).then(r => {
+      if (threadKey !== keyRef.current || seq !== loadSeq.current || interacting.current) return;
+      setMessages(old => old && old.length > r.messages.length ? old : r.messages);
+    }).catch(() => { welcomed.current.delete(token); });
+  }, [welcomeKey, threadKey, messages, stale, askKey]); // 首次请求失败时，下次正常轮询可以自动重试。
 
   // 综合对话空闲时主动递来复习小题；学生输入或讨论具体题目时不打断。
   useEffect(() => {

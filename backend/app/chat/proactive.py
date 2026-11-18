@@ -24,6 +24,63 @@ from .reply import HELP_ACTIONS
 log = logging.getLogger("chat.proactive")
 
 
+def on_open_problem(s: Session, user_id: str, thread: tuple[int, int], course: str,
+                    now: dt.datetime | None = None) -> m.ChatMessage | None:
+    """学生进入未通过题目时先提问；不伪造学生消息，不重复打断已有对话。"""
+    from . import context, reply
+    from .workflow import _round_for, thread_filter
+    from .policy import Decision
+    from .validate import Draft
+
+    now = now or db.now()
+    s.scalar(select(m.Student).where(m.Student.user_id == user_id).with_for_update())
+    if not catalog.is_visible(s, user_id, *thread, course=course):
+        return None
+    subs = catalog.user_submissions(s, user_id, *thread, until=now)
+    if not subs or any(sub.judgement == "AC" for sub in subs):
+        return None
+    sub = subs[-1]
+    if sub.judgement in ("PENDING", "UNKNOWN"):
+        return None
+    messages = s.scalars(select(m.ChatMessage).where(*thread_filter(user_id, thread, course))
+                         .order_by(m.ChatMessage.id)).all()
+    if any((msg.content or {}).get("proactive", {}).get("submission") == sub.submission_id for msg in messages):
+        return None
+    last = messages[-1] if messages else None
+    if last is not None and (sub.submit_time is None or last.created_at >= sub.submit_time
+                             or now - last.created_at < dt.timedelta(minutes=cfg()["quiet_minutes"])):
+        return None
+
+    label = _primary(s, sub)
+    info = catalog.problem_info(s, *thread)
+    source = source_text(s, thread[0], sub.submission_id)
+    ctx = context.Ctx(user_id=user_id, thread=thread, course=course, problem=info, submission=sub,
+                      source=source, source_kind="submission", attempt_no=len(subs))
+    if label is not None and label.confidence >= config.CHAT["low_confidence"] and source \
+            and label.line and 1 <= label.line <= len(ctx.lines):
+        ctx.root_error, ctx.root_skill, ctx.diag_line = label.error_code, label.skill_code, label.line
+        draft = reply.template(ctx, Decision("R11", "H0", "甲", "help"), "help")
+    else:
+        draft = Draft(before="这次提交还没通过。你觉得最可能出问题的是哪一步？")
+    rnd = _round_for(s, user_id, thread, now, course)
+    rnd.submission_id, rnd.last_message_at = sub.submission_id, now
+    if label is not None:
+        rnd.skill_code, rnd.error_code = label.skill_code, label.error_code
+    rnd.help_count += 1
+    rnd.asked_back += 1
+    rnd.last_help_level = "H0"
+    if rnd.max_help_level == "NA":
+        rnd.max_help_level = "H0"
+    rnd.located = draft.quote is not None
+    msg = m.ChatMessage(user_id=user_id, round_id=rnd.id, server_id=thread[0], problem_id=thread[1],
+                        course=course, role="agent", kind="text", created_at=now,
+                        content={"blocks": reply.to_blocks(draft, ctx), "actions": list(HELP_ACTIONS),
+                                 "proactive":{"kind":"opened", "submission":sub.submission_id}})
+    s.add(msg)
+    s.flush()
+    return msg
+
+
 def cfg() -> dict:
     return config.PROACTIVE
 
