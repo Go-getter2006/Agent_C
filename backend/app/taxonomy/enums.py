@@ -88,6 +88,8 @@ UI_EVENTS = (
     "login",             # 登录
     "open_review",       # 打开复习页
     "review_start",      # 开始一道复习题
+    "review_wait",       # 自动出题暂不可用，短暂退避
+    "review_seed",       # 补排历史错误技能的复习
     "open_problem_text", # 打开题目
 )
 

@@ -311,7 +311,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         base_level=ctx.level, last_help=rnd.last_help_level, help_count=rnd.help_count,
         failed_replies=rnd.failed_replies, located=bool(rnd.located),
         same_error_resubmit=ctx.same_error_resubmit, no_progress=ctx.no_progress,
-        needs_example=action != "think" and teaching.needs_example(prose or text)))
+        needs_example=analysis.intent != "CONCEPT" and action != "think" and teaching.needs_example(prose or text)))
     flow = decision.kind
     prior: m.StuckPoint | None = None
     stuck_point: m.StuckPoint | None = None

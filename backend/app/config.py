@@ -119,7 +119,7 @@ SYNC = {
 TAXONOMY_VERSION = "0.1"      # 知识点表、技能表
 ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
 LABELER_VERSION = "2026-11-16a"
-PROMPT_VERSION = "2026-11-18b"
+PROMPT_VERSION = "2026-11-18c"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
 WORKFLOW_VERSION = "2026-11-18a"
 MASTERY_VERSION = "2026-11-18a"
@@ -200,9 +200,11 @@ QUIZ = {
 
 # ---------------------------------------------------------------- 复习（回访），见 app/review.py
 REVIEW = {
+    "spot_check_every": 10,
     "target_retention": 0.75,      # 预测的记忆保持降到这么多时到期
     "initial_half_life": {          # 刚进来时的记忆半衰期（天）：第一次复习大约在 0.4 倍半衰期之后
         "stuck": 2.5, "heavy_help": 2.5, "recurrence": 2.5, "quiz_wrong": 2.5, "lucky": 5.0,
+        "failed": 2.5, "corrected": 3.0, "spot_check": 14.0,
     },
     "growth": {"很有把握": 2.5, "一半": 2.0, "没把握": 1.5, "second_try": 1.3,
                "practice_first_try": 2.5, "practice_fixed": 1.5},

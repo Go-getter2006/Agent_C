@@ -27,7 +27,7 @@ class Analysis:
 _UNDERSTOOD = re.compile(r"(懂了|明白了|我会了|知道了|原来如此|原来是这样|搞定|通过了|过了|[Aa][Cc]\s*了|改对了|可以了)")
 _STUCK = re.compile(r"(不会|不知道|没思路|想不出|想不到|不懂|看不懂|忘了|不记得|没头绪|不明白|还是不|不太会|不清楚怎么)")
 _ANSWER = re.compile(r"(直接给|给我代码|完整代码|标准答案|要答案|帮我写|帮我改|发我|直接告诉|直接讲|把代码|代码给我|怎么写)")
-_TASK = re.compile(r"(题意|题目.*(什么意思|意思是|要求|让)|输入格式|输出格式|样例|题面|这题.*干什么|要输出什么|要输入什么)")
+_TASK = re.compile(r"(题意|(?:题目|这(?:道)?题).*(什么意思|意思是|要求|让|干什么)|输入格式|输出格式|样例|题面|要输出什么|要输入什么)")
 _CONCEPT = re.compile(r"(什么是|是什么|有什么区别|区别|有什么用|怎么用|什么时候用|的作用|是什么意思|为什么要用)")
 _DEBUG = re.compile(r"(错|不对|为什么|过不了|没过|不过|运行错误|超时|编译|哪里|bug|有问题|出问题|挂了|[Ww][Aa]|没通过)")
 _OWN_PROBLEM = re.compile(r"(这题|这道题|我的代码|我这|我写|我交|提交|一直错|测试点|那一组|有一组)")
@@ -38,6 +38,16 @@ _CODEISH = re.compile(r"(`|\b(max|min|sum|cnt|count|int|long|double|char|for|whi
                       r"main|i|j|n|a)\b|\[[^\]]*\]|==|!=|<=|>=|\+\+|--|%[dfsc])")
 
 
+def factual_question(text: str) -> bool:
+    """明确的定义、语法和用法请求；不把调试原因或题意澄清当作事实提问。"""
+    if re.search(r"(?:我的|这段|这个|这题|这道题|程序|代码).{0,12}(?:为什么|哪里|什么问题|错在哪|过不了)|题意|(?:这题|这道题|题目)(?:是)?什么意思", text):
+        return False
+    return bool(re.search(r"什么是|是什么|有什么区别|有何区别|有什么用|怎么用|如何使用|的作用|是什么意思|"
+                          r"(?:占|有|需要)(?:几|多少)(?:个)?字节|取值范围|语法(?:是|怎么)|返回值(?:是|什么)|参数(?:是|含义)|"
+                          r"(?:语法|用法|定义|含义|区别|作用)(?:是什么|是啥|[？?]|$)|"
+                          r"(?:scanf|printf|sizeof|malloc|strlen|strcpy|strcmp|break|continue|return|for|while|switch).{0,10}(?:用法|怎么用|怎么写|什么意思)", text))
+
+
 def analyze_rules(text: str, has_code: bool, awaiting_answer: bool, bound: bool = False) -> Analysis:
     t = (text or "").strip()
     a = Analysis(has_code=has_code, source="rule")
@@ -45,6 +55,8 @@ def analyze_rules(text: str, has_code: bool, awaiting_answer: bool, bound: bool 
     a.understood = bool(_UNDERSTOOD.search(t)) and not _STUCK.search(t) and not re.search(r"没|不", t[:4])
     if a.understood:
         a.intent = "REPLY"
+    elif factual_question(t):
+        a.intent = "CONCEPT"
     elif _STUCK.search(t) and not has_code:
         a.intent = "STUCK"
     elif _ANSWER.search(t):
@@ -106,6 +118,7 @@ _SYSTEM = """你在分析一名学 C 语言课程的学生发给答疑助手的�
 {"intent":"DEBUG","skillCode":"","hasAttempt":true,"icap":"constructive","answerCorrect":null,"understood":false}
 intent 只能取：DEBUG 调试求助；CONCEPT 概念提问；TASK 题意澄清；ANSWER 索要答案或要代码；
 REPLY 回答助手刚才的问题（包括表示懂了）；STUCK 表示不会、没思路；OTHER 和学习无关。
+定义、事实、语法、函数作用或参数含义归 CONCEPT，即使它出现在某道题的对话里；当前代码为何失败才归 DEBUG。
 skillCode 只能从“可选技能”里选一个，选不出填空字符串。
 hasAttempt：消息里有没有他自己的尝试或想法。
 icap 只能取 passive、active、constructive、interactive。
@@ -117,6 +130,8 @@ def analyze(text: str, has_code: bool, awaiting_answer: bool, last_agent_text: s
             diagnosis_note: str = "", skill_options: list[tuple[str, str]] | None = None,
             bound: bool = False, course: str = "C") -> Analysis:
     fallback = analyze_rules(text, has_code, awaiting_answer, bound)
+    if factual_question(text):
+        return fallback  # 事实类直接解答，不受“正在反问”或已绑定题目的影响。
     if not llm.available():
         return fallback
     options = skill_options or []

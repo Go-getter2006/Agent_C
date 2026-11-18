@@ -301,6 +301,14 @@ def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session =
     return {"messages": _thread_view(s, user, th)}
 
 
+@router.post("/threads/{key}/review")
+def offer_review(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    th = _thread(s, user, key)
+    if th is not None:
+        return {"status": "busy"}  # 不往具体题目的调试对话里插题。
+    return {"status": review.offer_in_chat(s, user.student_id, user.course)}
+
+
 # ------------------------------------------------------------ 小题
 class ConfidenceBody(BaseModel):
     value: str
@@ -382,7 +390,9 @@ def review_start(item_id: int, user: m.User = Depends(student), s: Session = Dep
     if item is None:
         raise HTTPException(status_code=404, detail="没有这个复习项。")
     if attempt is None:
-        raise HTTPException(status_code=409, detail="这一项今天不用复习，或者今天的复习已经做够了。")
+        if item.id in {d.id for d in review.due_items(s, user.student_id, course=user.course)}:
+            raise HTTPException(status_code=503, detail="这一项仍需复习，小题暂时没有准备好，稍后会自动重试。")
+        raise HTTPException(status_code=409, detail="复习计划已经更新，请回到对话继续，或查看最新安排。")
     s.add(m.UiEvent(user_id=user.student_id, kind="review_start", target=str(item_id), course=user.course))
     q = s.get(m.QuizItem, attempt.item_id)
     return {"itemId": item.id, "lead": review.lead_for(s, user.student_id, item, q), "quiz": quiz.view(s, attempt)}

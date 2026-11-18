@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import datetime as dt
 import re
 
 import pytest
@@ -153,6 +154,16 @@ def test_ask_why_from_submission(client, demo):
 
 def test_review_flow_over_api(client, demo):
     login(client)
+    # 本例专门检查整型复习的完整生命周期；其他失败技能的入队与每日名额由独立测试覆盖。
+    with db.session_scope() as s:
+        for item in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == UID)).all():
+            if item.skill_code != "C02.01.02":
+                item.due_at = db.now() + dt.timedelta(days=30)
+            else:
+                item.origin, item.origin_server_id, item.origin_problem_id = "stuck", demo["server_id"], 301
+                item.half_life, item.streak = 2.5, 0
+                item.last_success_at = db.now() - dt.timedelta(days=8)
+                item.due_at = db.now() - dt.timedelta(days=1)
     page = client.get("/api/review").json()
     assert [d["title"] for d in page["due"]] == ["整型与取值范围"] and page["due"][0]["dueNow"]
     due = page["due"][0]
@@ -212,9 +223,10 @@ def test_progress_page(client):
     assert "firstTryRate" not in act and "firstTryRate" not in p["summary"]
     assert len(act["weeks"]) == 8 and act["weeks"][-1]["label"] == "本周"
     summ = p["summary"]
-    assert (summ["passed"], summ["total"], summ["reviewDue"]) == (9, 14, 1)
+    assert (summ["passed"], summ["total"]) == (9, 14)
+    assert summ["reviewDue"] == len(client.get("/api/review").json()["due"])
     assert 2 <= len(p["next"]) <= 3 and p["next"][0]["kind"] == "review"
-    assert p["next"][1]["problem"]["title"] == "成绩最高分"
+    assert next(x for x in p["next"] if x["kind"] == "problem")["problem"]["title"] == "成绩最高分"
 
 
 def test_student_api_never_leaks(client, demo):
@@ -286,7 +298,8 @@ def test_student_api_never_leaks(client, demo):
 def test_status_reports_demo(client):
     login(client)
     st = client.get("/api/status").json()
-    assert st["xdoj"] == {"ok": True, "dataTime": None, "demo": True} and st["dueReviews"] == 1
+    assert st["xdoj"] == {"ok": True, "dataTime": None, "demo": True}
+    assert st["dueReviews"] == len(client.get("/api/review").json()["due"])
 
 
 def test_source_download_notification_survives_pending_response(client, demo):

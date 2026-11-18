@@ -1,7 +1,7 @@
 // 对话页（工作台）。题目在左边，对话在中间，这道题的情况在右边；窄了以后两边收进抽屉。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ChevronDown, CloudOff, FileText, List, PanelRight } from "lucide-react";
+import { ChevronDown, CloudOff, List, PanelRight } from "lucide-react";
 import { api } from "../api";
 import DiffOverlay from "../components/Diff";
 import { HomeworkPicker, ProblemList, SidePanel } from "../components/Lists";
@@ -11,7 +11,6 @@ import { Cells, Drawer, Loading, Problem, ResultPill, gridLabel } from "../compo
 import { useLayout, useLoad } from "../lib/hooks";
 import { clock } from "../lib/time";
 import { useHomeworks, useStatus } from "../session";
-import LearningStart from "./LearningStart";
 
 function ProblemDocument({ problemKey }: { problemKey: string }) {
   const doc = useLoad(() => api.problemDocument(problemKey), [problemKey], 2500);
@@ -109,6 +108,7 @@ export default function Workbench() {
   const sidePane = shown && isProblem ? (
     <div className={detailOk ? "fade-swap" : "fade-swap is-stale"}>
       <SidePanel detail={shown}
+        onDocument={() => { setDrawer(null); setShowDocument(true); }}
         onDiff={(a, b) => { setDrawer(null); void api.event("open_diff", shown.key); setParam("diff", `${a}~${b}`); }}
         onAsk={(sub) => { setDrawer(null); setParam("ask", sub); }} />
     </div>
@@ -161,9 +161,6 @@ export default function Workbench() {
             </div>
           )}
           <header className="chat-head" hidden={!key}>
-            {isProblem && <button type="button" className="btn btn-sm" onClick={() => setShowDocument(true)}>
-              <FileText size={15} aria-hidden="true" />原始 PDF
-            </button>}
             {layout === "phone" ? (
               <button type="button" className="chat-head-title" onClick={() => setDrawer("list")} aria-label={`${title}，换一道题`}>
                 <span className="chat-head-main">
@@ -201,10 +198,9 @@ export default function Workbench() {
               </>
             )}
           </header>
-          {!key ? <LearningStart homework={current} problems={listOk ? problems : []} due={due}
-              loading={hwLoading || (!!current && !listOk && !list.error)} error={list.error} />
-            : <Thread threadKey={threadKey} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
-              askKey={isProblem ? ask : null} onAsked={() => setParam("ask", null)} onActivity={refresh} />}
+          <Thread threadKey={threadKey} layout={layout} emptyTitle={key ? emptyTitle : "有什么想弄明白的？"}
+            emptyText={key ? emptyText : "直接问，也可以从左侧选一道题。"}
+            askKey={isProblem ? ask : null} onAsked={() => setParam("ask", null)} onActivity={refresh} />
         </main>
         {layout === "four" && sidePane && <aside className="wb-side" aria-label="这道题的情况">{sidePane}</aside>}
       </div>

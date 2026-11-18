@@ -41,7 +41,9 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
         if primary is not None and primary.skill_code:
             # 在 OJ 上交了没过就是证据，不需要他问过问题（v2；同一道题同一个技能分量递减）
             mastery.record_failed_submission(s, sub, primary.skill_code)
-            review.on_recurrence(s, sub, primary.error_code, primary.skill_code)   # 改正后又出现
+            if review.on_recurrence(s, sub, primary.error_code, primary.skill_code) is None:
+                review.enqueue(s, sub.user_id, primary.skill_code, "failed", sub.server_id,
+                               sub.problem_id, sub.submit_time or db.now())
         from .chat import proactive
 
         proactive.on_failed_submission(s, sub, now)   # 卡住或重犯：智能体主动先说一句

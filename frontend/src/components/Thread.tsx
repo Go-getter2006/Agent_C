@@ -44,17 +44,23 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
   const [pending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
   const [failed, setFailed] = useState<{ payload: Payload; message: string } | null>(null);
   const [text, setText] = useState("");
+  const [reviewWaiting, setReviewWaiting] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const keyRef = useRef(threadKey);
   keyRef.current = threadKey;
   const busy = pending !== null;
+  const loadSeq = useRef(0);
+  const offerBusy = useRef(false);
+  const interacting = useRef(false);
+  interacting.current = busy || !!text.trim();
 
   const load = useCallback((silent: boolean) => {
     const key = keyRef.current;
+    const seq = ++loadSeq.current;
     api.thread(key)
       .then((r) => {
-        if (key !== keyRef.current) return;
+        if (key !== keyRef.current || seq !== loadSeq.current) return;
         setMessages((old) => (silent && old && old.length > r.messages.length ? old : r.messages));
         setStale(false);
         setLoadError(null);
@@ -70,6 +76,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
     setPending(null);
     setFailed(null);
     setText("");
+    setReviewWaiting(false);
     load(false);
   }, [threadKey, load]);
 
@@ -81,6 +88,27 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
     return () => window.clearInterval(timer);
   }, [busy, load]);
 
+  // 综合对话空闲时主动递来复习小题；学生输入或讨论具体题目时不打断。
+  useEffect(() => {
+    if (threadKey !== "general" || messages === null || stale) return;
+    let disposed = false;
+    const offer = async () => {
+      if (disposed || offerBusy.current || interacting.current || document.visibilityState !== "visible") return;
+      offerBusy.current = true;
+      try {
+        const result = await api.offerReview("general");
+        if (!disposed && keyRef.current === "general") {
+          setReviewWaiting(result.status === "waiting");
+          if (result.status === "ready") load(true);
+        }
+      } catch { /* 出题暂不可用，不影响学生正常提问。 */ }
+      finally { offerBusy.current = false; }
+    };
+    void offer();
+    const timer = window.setInterval(() => void offer(), 60000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [threadKey, messages === null, stale, load]);
+
   const send = useCallback(async (payload: Payload) => {
     const key = keyRef.current;
     setPending(payload);
@@ -88,6 +116,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
     try {
       const r = await api.send(key, payload);
       if (key !== keyRef.current) return;
+      loadSeq.current += 1;
       setMessages(r.messages);
       onActivity?.();
     } catch (err) {
@@ -162,6 +191,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
                 onAction={(action) => void send({ action })} onQuiz={(q) => updateQuiz(m.id, q)}
                 onCopy={() => void api.event("copy_code", threadKey)} />
             ))}
+            {threadKey === "general" && reviewWaiting && <p className="note" role="status">复习小题暂时没有准备好，会自动重试。你可以先继续提问。</p>}
             {shown && (
               <div className="msg msg-student">
                 <div className="msg-body">

@@ -282,7 +282,8 @@ _SYSTEM = """你在整理一道 C 语言程序设计题的题面。下面的文�
 多余的空格和断行、行的顺序乱了、上标下标被拆开（比如 10^5 抽成了“10 5”）、≤ ≥ ≠ × 这类符号丢了或者变成怪字、个别字是乱码。
 
 请整理成通顺的纯文本：
-- 按原文分成这几部分（原文没有的部分就不写）：题目描述、输入格式、输出格式、样例输入、样例输出、提示；每部分标题单独一行；
+- 按原文分成这几部分（原文没有的部分就不写）：题目描述、输入格式、输出格式、样例输入、样例输出、样例说明、提示；每部分标题单独一行；
+- 输入示例1、输出示例1等编号形式统一写成“样例输入 1”“样例输出 1”，标题后换行再写数据。样例输出只含输出数据；样例说明、推导、提示必须另起标题和正文，不能混进样例代码块；输出格式不能包住后面的样例；
 - 样例的输入、输出逐行照抄，一个字符都不能改，保留原来的换行；
 - 不许增加原文没有的内容；不许改数字；不许解释题目、不许给思路和代码；
 - [图1] 这样的标记是示意图的位置（你看不到图），原样留在原来的位置；
@@ -302,6 +303,10 @@ def check_tidy(raw: str, out: str, raw_garbled: bool) -> str | None:
     """大模型整理的结果和原文对不对得上。对不上返回原因（程序核对，不靠大模型自己说）。"""
     if not out.strip():
         return "是空的"
+    from .statement_sections import samples
+    original_samples = samples(raw)
+    if original_samples and original_samples != samples(out):
+        return "样例输入输出被修改、丢失或与说明混在一起"
     if sorted(FIG_MARK.findall(raw)) != sorted(FIG_MARK.findall(out)):
         return "[图N] 的标记丢了或多了"
     raw_body, out_body = FIG_MARK.sub("", raw), FIG_MARK.sub("", out)
