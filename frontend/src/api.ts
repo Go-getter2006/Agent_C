@@ -76,7 +76,12 @@ export const api = {
 
   quizConfidence: (id: number, value: string, elapsedMs: number) =>
     post<QuizView>(`/api/quiz/${id}/confidence`, { value, elapsedMs }),
-  quizJudge: (id: number, hasBug: boolean) => post<QuizView>(`/api/quiz/${id}/judge`, { hasBug }),
+  quizJudge: (id: number, hasBug: boolean, confidence?: string | null, elapsedMs?: number) =>
+    post<QuizView>(`/api/quiz/${id}/judge`, { hasBug, confidence: confidence ?? null, elapsedMs }),
+  quizLocate: (id: number, lines: number[]) => post<QuizView>(`/api/quiz/${id}/locate`, { lines }),
+  quizSample: (id: number, code: string) => post<QuizView>(`/api/quiz/${id}/sample`, { code }),
+  quizHint: (id: number) => post<QuizView>(`/api/quiz/${id}/hint`),
+  quizSubmit: (id: number, code: string) => post<QuizView>(`/api/quiz/${id}/submit`, { code }),
   quizRun: (id: number, body: { code?: string; choice?: number }) => post<QuizView>(`/api/quiz/${id}/run`, body),
   quizSkip: (id: number) => post<QuizView>(`/api/quiz/${id}/skip`),
 

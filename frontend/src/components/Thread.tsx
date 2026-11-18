@@ -9,6 +9,7 @@ import { dayLabel, sameDay } from "../lib/time";
 import type { HelpAction, Message, QuizView } from "../types";
 import { useSession } from "../session";
 import CourseScene from "./CourseScene";
+import Attempt from "./Attempt";
 import Quiz from "./Quiz";
 import { CodeBlock, Inline, Loading, Problem } from "./ui";
 
@@ -326,7 +327,9 @@ function MessageItem({ message, layout, disabled, daySep, onAction, onQuiz, onCo
               <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} onCopy={onCopy} />
             ),
           )}
-          {message.quiz && <Quiz quiz={message.quiz} layout={layout} onChange={onQuiz} />}
+          {message.quiz && (message.quiz.protocol === 2
+            ? <Attempt quiz={message.quiz} onChange={onQuiz} compact />
+            : <Quiz quiz={message.quiz} layout={layout} onChange={onQuiz} />)}
           {message.actions.length > 0 && (
             <div className="chips" role="group" aria-label="接下来想怎么做">
               {message.actions.map((a) => {

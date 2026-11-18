@@ -66,6 +66,7 @@ def test_own_code_attempt_view_uses_original_line_numbers(demo):
         plan = plan_for(s, quiz_type="JUDGE", has_bug=True, origin=(demo["server_id"], 410))
         item = quizgen.from_own_code(s, plan, random.Random(5))
         attempt = quiz.new_attempt(s, UID, item, "after_pass")
+        attempt.protocol, attempt.state = 1, "confidence"   # 以前的作答协议（新协议见 test_independent.py）
         v = quiz.view(s, attempt)
         assert v["startLine"] == item.start_line and v["mark"] == [item.start_line + item.origin["mark_line"] - 1]
         assert "result" not in v and "origin" not in json.dumps(v)

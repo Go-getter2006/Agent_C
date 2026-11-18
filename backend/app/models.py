@@ -651,6 +651,18 @@ class QuizAttempt(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[Dt] = _ts()
     finished_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
+    # 独立作答（界面改造方案第 4 节，protocol 2）：先判断 → 再选位置/依据 → 判断有问题的再修改。
+    # 首次判断、首次选行、首稿各记一次就不再改；之后的运行、提示、重试按顺序记进 events。
+    protocol: Mapped[int] = mapped_column(Integer, default=1)  # 1：以前的“把握→判断→改”；2：现在的独立作答
+    item_version: Mapped[str] = mapped_column(String(16), default="")  # 作答时题目内容的哈希（题目改了也能认出是哪一版）
+    events: Mapped[list] = mapped_column(JSON, default=list)  # [{"t": 时间, "kind": shown/judge/locate/sample/hint/submit/feedback, ...}]
+    first_lines: Mapped[list] = mapped_column(JSON, default=list)  # 首次选的行（显示的行号）
+    locate_hit: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # 有错的题、判断有问题时：首次选行命中有效位置没有
+    first_fix: Mapped[str] = mapped_column(Text, default="")  # 首稿
+    first_fix_pass: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    first_fix_clean: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # 首稿之前没看提示、没运行公开样例
+    hints: Mapped[int] = mapped_column(Integer, default=0)
+    sample_runs: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class ReviewItem(Base):

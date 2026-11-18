@@ -116,8 +116,10 @@ def test_missing_historical_error_is_backfilled_once(demo):
 def test_api_generation_failure_does_not_claim_review_is_unnecessary(demo,monkeypatch):
     with TestClient(create_app()) as client:
         assert client.post('/api/auth/login',json={'loginName':'2500000001','password':'test-pass'}).status_code==200
-        due=client.get('/api/review').json()['due'][0]
-        monkeypatch.setattr(quizgen,'generate',lambda *_a,**_k:None)
+        monkeypatch.setattr(quizgen,'generate',lambda *_a,**_k:None)   # 进复习提升会当场备题：先让出题失败
+        page=client.get('/api/review').json()
+        assert 'current' not in page and page['due']
+        due=page['due'][0]
         result=client.post(f"/api/review/{due['id']}/start")
         assert result.status_code==503 and "仍需复习" in result.json()['error']
         assert due['id'] in {r['id'] for r in client.get('/api/review').json()['due']}

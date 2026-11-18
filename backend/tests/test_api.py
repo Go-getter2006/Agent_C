@@ -172,7 +172,8 @@ def test_review_flow_over_api(client, demo):
     assert [d["title"] for d in page["due"]] == ["整型与取值范围"] and page["due"][0]["dueNow"]
     due = page["due"][0]
     assert due["why"] == "卡住过" and due["origin"]["title"] == "阶乘求和" and due["memory"]["segments"] == 1
-    assert "%" not in json.dumps(page, ensure_ascii=False)  # 学生端不给概率
+    plan = {k: v for k, v in page.items() if k != "current"}   # 备好的题里的代码会有 %d
+    assert "%" not in json.dumps(plan, ensure_ascii=False)  # 学生端不给概率
     assert "%" not in json.dumps(client.get("/api/progress").json()["next"], ensure_ascii=False)
     assert "C02" not in str(page) and "skill" not in str(page).lower()
     up = [u["title"] for u in page["upcoming"]]
@@ -181,20 +182,21 @@ def test_review_flow_over_api(client, demo):
     assert r.status_code == 200
     body = r.json()
     q = body["quiz"]
-    assert body["lead"] and q["state"] == "confidence"
+    assert body["lead"] and q["state"] == "judge" and q["protocol"] == 2   # 独立作答：先判断
     assert set(q) >= {"attemptId", "stem", "caption", "code", "state", "startLine"}
     assert client.post(f"/api/review/{due['id']}/start").json()["quiz"]["attemptId"] == q["attemptId"]  # 不重复出题
     aid = q["attemptId"]
-    assert client.post(f"/api/quiz/{aid}/judge", json={"hasBug": True}).json()["state"] == "confidence"
-    q = client.post(f"/api/quiz/{aid}/confidence", json={"value": "很有把握", "elapsedMs": 2100}).json()
-    assert q["state"] == "judge"
     with db.session_scope() as s:
         item = s.get(m.QuizItem, s.get(m.QuizAttempt, aid).item_id)
         has_bug, fix, owner = item.has_bug, item.standard_fix, item.owner_user_id
+        line = item.start_line + (item.bug_line or 1) - 1
         assert owner in (UID, None) and item.verified   # 他没通过过用到这个技能的题：退回题库
-    q = client.post(f"/api/quiz/{aid}/judge", json={"hasBug": has_bug}).json()
+    q = client.post(f"/api/quiz/{aid}/judge", json={"hasBug": has_bug, "confidence": "很有把握", "elapsedMs": 2100}).json()
+    assert q["state"] == "locate"
+    assert client.post(f"/api/quiz/{aid}/locate", json={"lines": []}).status_code == 400
+    q = client.post(f"/api/quiz/{aid}/locate", json={"lines": [line]}).json()
     if q["state"] == "edit":
-        q = client.post(f"/api/quiz/{aid}/run", json={"code": fix}).json()
+        q = client.post(f"/api/quiz/{aid}/submit", json={"code": fix}).json()
     assert q["state"] == "done" and q["result"]["outcome"] == "right"
     with db.session_scope() as s:
         it = s.get(m.ReviewItem, due["id"])
@@ -303,7 +305,9 @@ def test_status_reports_demo(client):
     login(client)
     st = client.get("/api/status").json()
     assert st["xdoj"] == {"ok": True, "dataTime": None, "demo": True}
-    assert st["dueReviews"] == len(client.get("/api/review").json()["due"])
+    page = client.get("/api/review").json()           # 进复习提升：没备好的题当场备一道
+    # 侧边栏的数字只数已经备好的题，不是到期的项数
+    assert client.get("/api/status").json()["dueReviews"] == (1 if page.get("current") else 0) <= len(page["due"])
 
 
 def test_source_download_notification_survives_pending_response(client, demo):

@@ -190,10 +190,12 @@ def _run_timeline(server_id: int, now: dt.datetime, with_story: bool) -> None:
             if attempt is None:
                 return
             item = s.get(m.QuizItem, attempt.item_id)
-            quiz.set_confidence(s, attempt, confidence, 2600)
-            quiz.judge(s, attempt, item.has_bug)
+            # 独立作答：判断对、选中出错的那一行（没错的题选第一行当依据）、有错的改对
+            quiz.judge2(s, attempt, item.has_bug, confidence, 2600)
+            start = item.start_line or 1
+            quiz.locate(s, attempt, [start + (item.bug_line or 1) - 1])
             if attempt.state == "edit":
-                quiz.run_fix(s, attempt, item.standard_fix)
+                quiz.submit_fix(s, attempt, item.standard_fix)
             attempt.finished_at = at
             s.flush()
             for ev in s.scalars(select(m.SkillEvidence).where(
