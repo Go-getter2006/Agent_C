@@ -3,6 +3,8 @@
 //   数据结构那台还没接入（.env 的 XDOJ_DS_URL 没填）时，照样能切过去看，但表单说明还没接入、不能登录。
 // - 背景是立体场景（CourseScene）：C 语言是内存单元围成的开口的环，切到数据结构时整个环转过来，变成深蓝的循环链表和树。
 // - 学生和老师一个入口：填学号或工号。后端去 XDOJ 核对，XDOJ 说是教师就进教师端。
+// - 文字只留必要的：标题、一句话、三个要点、登录框；不写操作说明。
+// - 配色和登录以后的页面是同一套（<html data-course>）：C 语言暖色的纸，数据结构冷色的纸，图案是深蓝的。
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowRight, Braces, Eye, EyeOff } from "lucide-react";
 import { api } from "../api";
@@ -12,19 +14,17 @@ import CourseSwitch from "../components/CourseSwitch";
 import { useLoad } from "../lib/hooks";
 import { useSession } from "../session";
 
-const COPY: Record<CourseCode, { eyebrow: string; title: [string, string]; body: string; points: string[]; code: string }> = {
+const COPY: Record<CourseCode, { title: [string, string]; body: string; points: string[]; code: string }> = {
   C: {
-    eyebrow: "C 语言程序设计 · XDOJ 上机练习",
     title: ["C 语言", "上机练习助手"],
-    body: "它看得到你在 XDOJ 上的每一次提交。题目没思路、编译报错、结果不对，都可以直接问。",
-    points: ["没通过的提交，自动分析错在哪", "按你自己的情况出代码小题", "快忘的时候提醒复习"],
-    code: "int main(void) { return 0; }",
+    body: "提交没过、报错看不懂，直接问。",
+    points: ["错因自动分析", "按你出小题", "到点提醒复习"],
+    code: "return 0;",
   },
   D: {
-    eyebrow: "数据结构 · XDOJ 上机练习",
     title: ["数据结构", "上机练习助手"],
-    body: "链表、栈和队列、树、图的上机题，同样可以随时问。数据结构用的是另一台 XDOJ，账号和 C 语言分开。",
-    points: ["没通过的提交，自动分析错在哪", "提醒你哪些 C 语言基础还要补", "快忘的时候提醒复习"],
+    body: "链表、栈、树、图，卡住了直接问。",
+    points: ["错因自动分析", "补 C 语言基础", "到点提醒复习"],
     code: "p = p->next;",
   },
 };
@@ -62,6 +62,7 @@ export default function Login() {
   const demo = info.data?.demo ?? false;
 
   useEffect(() => {
+    document.documentElement.dataset.course = course;   // 配色跟着课程换（tokens.css），和登录以后的页面一致
     try {
       localStorage.setItem(KEY, course);
     } catch {
@@ -104,7 +105,6 @@ export default function Login() {
       </header>
 
       <section className="login-hero" aria-live="polite">
-        <span className="eyebrow">{copy.eyebrow}</span>
         <h1>{copy.title[0]}<br />{copy.title[1]}</h1>
         <p>{copy.body}</p>
         <ul className="login-points">
@@ -116,13 +116,9 @@ export default function Login() {
         <form className="login-box" onSubmit={submit} aria-labelledby="login-title">
           <div className="login-form-heading">
             <h2 id="login-title">{course === "C" ? "登录 C 语言程序设计" : "登录数据结构"}</h2>
-            <p className="page-sub">
-              {course === "C" ? "学生填学号，老师填工号，密码和 C 语言 XDOJ 的一样。"
-                : "学生填学号，老师填工号，密码和数据结构 XDOJ 的一样（可能和 C 语言的不同）。"}
-            </p>
           </div>
           {!open && (
-            <p className="login-closed" role="status">数据结构的 XDOJ 还没接入。接入以后，用那边的账号在这里登录。</p>
+            <p className="login-closed" role="status">数据结构的 XDOJ 尚未接入</p>
           )}
           <label className="label">
             学号 / 工号
@@ -146,19 +142,17 @@ export default function Login() {
           </button>
           {demo && open && (
             <p className="login-demo">
-              现在是演示数据：学生学号 <code>{info.data?.demoAccount}</code>，老师工号 <code>demo-teacher</code>，
-              密码是管理员给的演示口令。
+              演示：学生 <code>{info.data?.demoAccount}</code>，老师 <code>demo-teacher</code>，密码为演示口令
             </p>
           )}
           {info.data && !info.data.ready && (
-            <p className="error-text">服务器还没有设置登录口令，暂时登录不了。请联系管理员。</p>
+            <p className="error-text">服务器还没设置登录口令，请联系管理员</p>
           )}
-          <p className="login-privacy">密码只用来向 XDOJ 核对。老师的密码加密保存，只用于自动读取班级的练习数据。</p>
         </form>
       </main>
 
       <footer className="login-bottom">
-        <span>只读取 XDOJ 上的练习记录，不改动 XDOJ 上的任何数据</span>
+        <span>只读 XDOJ，不改动任何数据</span>
         <code aria-hidden="true">{copy.code}</code>
       </footer>
     </div>

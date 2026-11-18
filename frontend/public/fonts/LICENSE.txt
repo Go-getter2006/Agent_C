@@ -1,2 +1,0 @@
-Inter 字体：Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
-按 SIL Open Font License 1.1 授权（https://openfontlicense.org）。这里只是原样附带，没有修改。

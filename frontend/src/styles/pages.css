@@ -761,7 +761,7 @@
   height: 40px;
   border-radius: 12px;
   background: var(--ink);
-  color: var(--brand);
+  color: var(--brand-on-dark);
   flex-shrink: 0;
 }
 
@@ -883,7 +883,7 @@
 
 .next-icon-review {
   background: var(--ink);
-  color: var(--brand);
+  color: var(--brand-on-dark);
 }
 
 .next-main {
@@ -1742,7 +1742,7 @@
 
 .kg-sw-ds {
   background: var(--surface);
-  border: 1.5px dashed #636a77;
+  border: 1.5px dashed var(--ink-3);
 }
 
 .kg-sw-uncovered {
@@ -1767,7 +1767,7 @@
   display: inline-block;
   width: 20px;
   height: 0;
-  border-top: 2px solid #b4bac3;
+  border-top: 2px solid var(--line-strong);
 }
 
 .kg-line-cross {
@@ -1787,7 +1787,7 @@
   height: clamp(520px, calc(100vh - 300px), 980px);
   overflow: hidden;
   background:
-    radial-gradient(circle, #e3e6ea 1px, transparent 1px) 0 0 / 20px 20px,
+    radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 20px 20px,
     var(--surface-2);
 }
 
@@ -1881,7 +1881,7 @@
 
 .kg-edge {
   fill: none;
-  stroke: #aab1bb;
+  stroke: var(--field);
   stroke-width: 1.2;
   transition: opacity 0.15s;
 }
@@ -1991,7 +1991,7 @@
 
 .kg-node-ds {
   border-style: dashed;
-  border-color: #a7adb6;
+  border-color: var(--field);
 }
 
 .kg-node-uncovered {

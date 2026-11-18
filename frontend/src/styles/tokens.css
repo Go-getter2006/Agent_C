@@ -1,52 +1,50 @@
-/* 设计令牌。组件里不写死颜色、字号、间距，都从这里取。只有浅色主题。 */
-
-@font-face {
-  font-family: "Inter";
-  src: url("/fonts/Inter-Regular.otf") format("opentype");
-  font-weight: 400;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Inter";
-  src: url("/fonts/Inter-Medium.otf") format("opentype");
-  font-weight: 500;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Inter";
-  src: url("/fonts/Inter-SemiBold.otf") format("opentype");
-  font-weight: 600 700;
-  font-display: swap;
-}
+/* 设计令牌。组件里不写死颜色、字号、间距，都从这里取。只有浅色主题。
+   两门课各一套纸面：C 语言是暖色的纸（墨色侧边栏、橙色强调），数据结构是冷色的纸（深蓝侧边栏、深蓝强调）。
+   首页和登录以后的页面用同一套：<html data-course="C|D">，登录页跟着课程开关换，登录以后跟着这次登录的课程。
+   字体：标题用得意黑（Smiley Sans），西文和数字用 Atkinson Hyperlegible Next（为易读设计，0/O、1/l/I 分得清），
+   代码用 Maple Mono；中文正文用系统字体。字体文件在 main.tsx 里引入，跟着前端一起打包，不连外网。 */
 
 :root {
   color-scheme: light;
 
-  /* 底色和表面 */
-  --bg: #f3f4f6;            /* 页面底色 */
-  --surface: #ffffff;       /* 卡片、对话区 */
-  --surface-2: #f8f9fa;     /* 卡片里的次级区域、表头、代码块标题条 */
-  --surface-3: #eff1f3;     /* 悬停、学生的消息气泡 */
-  --sidebar: #0f1114;       /* 深色侧边栏 */
-  --sidebar-2: #1b1e23;
-  --sidebar-text: #a3a8b0;
-  --sidebar-label: #8b919a;
+  /* 底色和表面（C 语言：暖色的纸） */
+  --bg: #f3efe7;            /* 页面底色 */
+  --surface: #fffdf8;       /* 卡片、对话区 */
+  --surface-2: #f9f6ef;     /* 卡片里的次级区域、表头、代码块标题条 */
+  --surface-3: #f0eadf;     /* 悬停、学生的消息气泡 */
+  --row-hover: #fcf9f3;
+  --dot: rgba(60, 48, 30, 0.07);   /* 页面底色上的点阵，像方格本 */
+  --sidebar: #23201b;       /* 侧边栏：墨色 */
+  --sidebar-2: #35312a;
+  --sidebar-3: #403b33;
+  --sidebar-line: #3a352d;
+  --sidebar-text: #bdb4a5;
+  --sidebar-label: #a1978a;
+  --on-dark-2: #d2cabd;
 
   /* 文字 */
-  --ink: #111318;           /* 正文 */
-  --ink-2: #4b5260;         /* 次要文字：在白底上 7.9:1 */
-  --ink-3: #636a77;         /* 更弱的说明：在白底上 5.4:1，在 --bg 上 4.9:1 */
+  --ink: #1f1d18;           /* 正文 */
+  --ink-2: #51493e;         /* 次要文字 */
+  --ink-3: #685f52;         /* 更弱的说明 */
+  --ink-hover: #000000;
+  --ink-disabled: #7a7266;
+  --lineno: #6f6659;
   --on-dark: #ffffff;
 
   /* 线 */
-  --line: #e4e6ea;
-  --line-strong: #d3d6dc;
-  --field: #c9cdd4;
+  --line: #e6dfd3;
+  --line-strong: #d5cbbc;
+  --field: #c6baa8;
 
-  /* 品牌和强调：黄色只用在标志、代码里被指出的那一行 */
-  --brand: #ffd43b;
+  /* 品牌和强调：标志、当前位置、少量图标。黄色只用在代码里被指出的那一行 */
+  --brand: #b9431a;
+  --on-brand: #fffaf3;
+  --brand-on-dark: #f0895a;   /* 深色底（侧边栏、墨色按钮）上的强调色 */
+  --accent-bg: #fbeadf;
+  --accent-line: #f1c9b3;
   --mark: #fff3bf;
-  --focus: #2a78d6;
+  --mark-edge: #f2b705;
+  --focus: #b9431a;
 
   /* 语义色：通过、未通过、提醒；一定和文字或形状一起出现 */
   --pass: #15803d;
@@ -78,9 +76,10 @@
   --grid: #eceef1;
 
   /* 字体 */
-  --font-ui: "Inter", -apple-system, "SF Pro Text", "Segoe UI", "PingFang SC", "HarmonyOS Sans SC", "MiSans",
-    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "WenQuanYi Zen Hei", sans-serif;
-  --font-code: "JetBrains Mono", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --font-ui: "Atkinson Hyperlegible Next", -apple-system, "PingFang SC", "HarmonyOS Sans SC", "MiSans",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "WenQuanYi Zen Hei", "Segoe UI", sans-serif;
+  --font-display: "Smiley Sans Oblique", "Atkinson Hyperlegible Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-code: "Maple Mono", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
 
   /* 字号 */
   --fs-11: 11px;
@@ -128,6 +127,41 @@
   --code-lh: 22px;
   --lineno-w: 40px;
   --gutter: 28px;
+}
+
+/* 数据结构：冷色的纸。只换底色、文字、线、侧边栏和强调色；语义色、掌握档位、图表颜色两门课一样 */
+:root[data-course="D"] {
+  --bg: #edf1f6;
+  --surface: #fcfdff;
+  --surface-2: #f5f8fc;
+  --surface-3: #e8eef6;
+  --row-hover: #f8fafd;
+  --dot: rgba(30, 60, 110, 0.075);
+  --sidebar: #13284d;       /* 侧边栏：深蓝 */
+  --sidebar-2: #1f3a68;
+  --sidebar-3: #28467a;
+  --sidebar-line: #24406f;
+  --sidebar-text: #b4c3dd;
+  --sidebar-label: #94a7c8;
+  --on-dark-2: #c9d5e8;
+
+  --ink: #121c31;
+  --ink-2: #424f68;
+  --ink-3: #56637c;
+  --ink-hover: #0a1222;
+  --ink-disabled: #66728a;
+  --lineno: #5f6b83;
+
+  --line: #dce3ec;
+  --line-strong: #c9d2df;
+  --field: #bcc6d5;
+
+  --brand: #2160c4;
+  --on-brand: #f8fbff;
+  --brand-on-dark: #8ab8ff;
+  --accent-bg: #e4edfb;
+  --accent-line: #bcd1f2;
+  --focus: #2160c4;
 }
 
 @media (max-width: 1279px) {
