@@ -10,6 +10,7 @@ from .. import config, db
 from .. import models as m
 from ..taxonomy import normalize_judgement
 from . import endpoints as ep
+from .api import request_meta_sync_if_stale
 from .store import SyncContext, enqueue, get_state, set_state, set_time
 from .util import decode_bytes, detect_encoding
 
@@ -47,9 +48,16 @@ def _store_submission(s, ctx: SyncContext, row: ep.SubmissionRow, backfill: bool
     if s.get(m.Submission, (ctx.server_id, row.submission_id)) is not None:
         return 0
     if row.user_id and s.get(m.Student, row.user_id) is None:
-        # 名单里还没有这个学号：先建一行，下次名单同步时补全
+        # 名单里还没有这个学号：先建一行，并且马上自动同步一次名单（他多半是刚加进班的，要能登录）
         s.add(m.Student(user_id=row.user_id, name=row.user_name, first_seen_at=ctx.now(), fetched_at=ctx.now()))
         s.flush()
+        if not backfill:
+            request_meta_sync_if_stale(s, ctx.server_id)
+    if row.contest_id and not backfill and s.get(m.Contest, (ctx.server_id, row.contest_id)) is None \
+            and not get_state(s, ctx.server_id, f"meta_for_contest:{row.contest_id}"):
+        # 交到了一个还不认识的作业里：多半是刚布置的，自动同步一次作业（每个作业只因此同步一次）
+        set_state(s, ctx.server_id, f"meta_for_contest:{row.contest_id}", "1")
+        request_meta_sync_if_stale(s, ctx.server_id)
     code = normalize_judgement(row.judgement_text)
     if code == "UNKNOWN" and row.judgement_text:
         log.warning("不认识的评测结果，已原样保存（提交 %s）", row.submission_id)

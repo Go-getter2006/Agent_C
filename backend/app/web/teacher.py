@@ -598,19 +598,6 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
             "graphUpdatedAt": max((r.updated_at for r in post.values()), default=None)}
 
 
-class ReviewBody(BaseModel):
-    force: bool = False
-
-
-@router.post("/students/{user_id}/agent-review")
-def student_agent_review(user_id: str, body: ReviewBody, user: m.User = Depends(teacher),
-                         s: Session = Depends(get_session)) -> dict:
-    """让智能体根据多维画像写一段学情评估。画像没变就给上一次的；一小时内不重写，除非 force。"""
-    _student, cls = _student_in_my_classes(s, user, user_id)
-    row = profile.agent_review(s, user_id, _course_of_class(s, cls), requested_by=user.id, force=body.force)
-    return profile.review_view(row) or {}
-
-
 def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) -> dict:
     """对话行为和做题表现：建构性提问占比、索要答案占比，各自和一次通过率的相关系数（描述性，样本少时不算）。"""
     xs_c, xs_a, ys = [], [], []
@@ -742,19 +729,6 @@ def sources_list(user: m.User = Depends(teacher), s: Session = Depends(get_sessi
                             "time": c.created_at.isoformat()} for c in candidates],
             "libraries": {"errors": len(ERRORS), "skills": len(SKILLS), "knowledge": len(KNOWLEDGE_POINTS),
                           "errorVersion": config.ERROR_LIBRARY_VERSION, "taxonomyVersion": config.TAXONOMY_VERSION}}
-
-
-@router.post("/sources/{source_id}/sync")
-def source_sync(source_id: int, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    """立即同步名单和作业：只是通知主循环，这里不直接向 XDOJ 发请求。"""
-    source = s.get(m.DataSource, source_id)
-    if source is None or source.server_id not in course_server_ids(s, user.course) or \
-            (user.role != "admin" and source.id not in accounts.teacher_source_ids(s, user)):
-        raise HTTPException(status_code=404, detail="没有这个数据源。")
-    if not source.enabled:
-        raise HTTPException(status_code=409, detail="这个数据源没有启用（演示数据不连 XDOJ）。")
-    sync_api.request_meta_sync(s, source.server_id)
-    return {"ok": True, "daemon": _daemon_status(s)}
 
 
 def _daemon_status(s: Session) -> dict:
@@ -917,27 +891,6 @@ def cross_page(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
             "dKps": [{"code": c, "name": KNOWLEDGE_POINTS.get(c, "")} for c in d_kps]}
 
 
-class ProposeBody(BaseModel):
-    kp: str
-
-
-@router.post("/cross/propose")
-def cross_propose(body: ProposeBody, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    """让智能体给一个数据结构知识点提出新的跨课程联系，存成“待审”。"""
-    from .. import llm
-
-    _ds(user)
-    if not body.kp.startswith("D") or body.kp not in KNOWLEDGE_POINTS:
-        raise HTTPException(status_code=400, detail="请选一个数据结构的知识点。")
-    if not llm.available():
-        raise HTTPException(status_code=409, detail="没有配置大模型（DEEPSEEK_API_KEY），智能体提不了。")
-    try:
-        rows = cross.propose_links(s, body.kp)
-    except llm.LLMUnavailable:
-        raise HTTPException(status_code=502, detail="智能体这次没给出合格的结果，过一会儿再试。")
-    return {"links": [cross.link_view(x) for x in rows]}
-
-
 class ReviewLinkBody(BaseModel):
     action: str
 
@@ -945,7 +898,8 @@ class ReviewLinkBody(BaseModel):
 @router.post("/cross/{link_id}/review")
 def cross_review(link_id: int, body: ReviewLinkBody, user: m.User = Depends(teacher),
                  s: Session = Depends(get_session)) -> dict:
-    """采用或不用一条联系。采用的进入数据结构的先验；不用的不再参与。"""
+    """老师改一条联系（可选）：采用的进入数据结构的先验，不用的不再参与。平时智能体和数据检验会自动决定，
+    老师改过的以老师为准，自动的不再动它。"""
     _ds(user)
     link = s.get(m.CrossLink, link_id)
     if link is None:
@@ -955,14 +909,6 @@ def cross_review(link_id: int, body: ReviewLinkBody, user: m.User = Depends(teac
     link.status = "accepted" if body.action == "accept" else "rejected"
     link.reviewed_by, link.reviewed_at = user.id, db.now()
     return cross.link_view(link)
-
-
-@router.post("/cross/validate")
-def cross_validate(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    """现在就用数据检验一遍（平时每天夜里做）。"""
-    _ds(user)
-    cross.ensure_seed(s)
-    return {"checked": cross.validate_links(s)}
 
 
 # ------------------------------------------------------------ 按需申请学生日志（参考 DBEDU 的做法，见 app/logs.py）

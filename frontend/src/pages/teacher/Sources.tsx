@@ -1,11 +1,11 @@
 // 数据源：这门课的 XDOJ 账号的同步状态、标注用的表。两门课分开登录，这里只有登录的这门课。
-import { useState } from "react";
-import { Database, RefreshCw, Server } from "lucide-react";
-import { get, post } from "../../api";
+// 同步全部是自动的：名单和作业每两小时一次（发现不认识的学生、作业时马上一次），新提交几十秒内就到，不用点任何按钮。
+import { Database, Server } from "lucide-react";
+import { get } from "../../api";
 import { Card, Empty, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { shortTime } from "../../lib/time";
-import { Code, useClasses } from "./common";
+import { Code } from "./common";
 
 interface SourceRow {
   id: number; server: string; serverCode: string; account: string; enabled: boolean; fromEnv: boolean; demo: boolean; classes: number;
@@ -29,19 +29,7 @@ function sourceState(src: SourceRow): { text: string; cls: string } {
 
 export default function Sources() {
   const data = useLoad(() => get<SourcesData>("/api/teacher/sources"), [], 30000);
-  const [note, setNote] = useState<{ id: number; text: string } | null>(null);
-  const { reload: reloadClasses } = useClasses();
   const d = data.data;
-  const sync = async (id: number) => {
-    setNote(null);
-    try {
-      await post(`/api/teacher/sources/${id}/sync`);
-      data.reload();
-      window.setTimeout(reloadClasses, 20000); // 名单一般十几秒到一两分钟同步完；之后还有定时刷新
-    } catch (err) {
-      setNote({ id, text: (err as Error).message });
-    }
-  };
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在加载" lines={4} /></div>;
   const real = d.sources.filter((x) => !x.demo);
@@ -66,10 +54,7 @@ export default function Sources() {
               <div><span className="eyebrow">已同步的提交</span><b className="num">{src.submissions}</b></div>
               <div><span className="eyebrow">上次同步名单和作业</span><b>{src.lastMeta ? shortTime(src.lastMeta) : "—"}</b></div>
             </div>
-            <div className="form-actions">
-              <button type="button" className="btn" disabled={!src.enabled} onClick={() => void sync(src.id)}><RefreshCw size={15} aria-hidden="true" />立即同步名单和作业</button>
-              {note?.id === src.id && <span className="error-text" role="alert">{note.text}</span>}
-            </div>
+            <p className="note">名单和作业每两小时自动同步一次，学生刚加进班、刚布置的作业会自动补上；新提交几十秒内自动同步。</p>
           </Card>
         );
       })}

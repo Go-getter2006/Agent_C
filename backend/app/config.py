@@ -106,7 +106,9 @@ SYNC = {
     "pending_judge_delays": [2, 5, 10, 30, 60],
     "recheck_interval_seconds": 3600,
     "recheck_window_hours": 24,
-    "meta_hour": 3,
+    "meta_hour": 3,               # 每天夜里的任务（图模型、权重、跨课程检验）在这个钟点以后做
+    "meta_interval_minutes": 120, # 名单和作业每两小时自动同步一次（新加的学生、新布置的作业当天就能看到）
+    "meta_retry_minutes": 10,     # 同步失败、或者发现了不认识的学生和作业：最快 10 分钟后再同步一次
     "max_retries": 5,
     "trigger_merge_seconds": 5,
     "fail_streak_slowdown": 10,
@@ -233,6 +235,7 @@ PROFILE = {
                             "pass_after_h2": 0.3, "pass_after_h3": 0.0},
     "calibration_value": {"很有把握": 0.9, "一半": 0.6, "没把握": 0.3},
     "review_hours": 1,           # 同一个学生同一门课，评语至少隔这么久才重写（画像变了也一样）
+    "reviews_per_run": 3,        # 后台空闲时一次自动写几份评语
 }
 
 # 跨课程（app/cross.py）。数据结构的技能的先验 = 先修（含 C 语言那头）估计的加权平均，
@@ -248,6 +251,8 @@ CROSS = {
     "support_prob": 0.9,      # “掌握了的更容易一次做对”的后验概率到这么多算数据支持
     "weak": 0.45,             # C 基础预警：估计低于这个算薄弱
     "max_proposals": 8,       # 智能体一次最多提几条
+    "propose_per_night": 6,   # 每天夜里智能体自动给几个还没提过的数据结构知识点补充联系
+    "auto_accept_confidence": 0.7,  # 智能体提出时把握到这么多，自动采用（还没检验的分量是 0.7）
 }
 
 CHAT = {

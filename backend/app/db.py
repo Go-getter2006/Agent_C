@@ -20,6 +20,13 @@ def now() -> dt.datetime:
     return dt.datetime.now(UTC)
 
 
+def as_utc(value) -> dt.datetime:
+    """聚合查询（max 之类）在 SQLite 上可能拿回不带时区的时间或字符串：统一成带时区的 UTC。"""
+    if isinstance(value, str):
+        value = dt.datetime.fromisoformat(value)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 class UTCDateTime(TypeDecorator):
     """一律存 UTC，取出来带时区。SQLite 不保存时区，这里补上。"""
 

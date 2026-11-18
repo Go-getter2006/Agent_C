@@ -113,7 +113,6 @@ def test_other_teacher_sees_nothing(client, demo):
     assert client.get(f"/api/teacher/students/{UID}").status_code == 404
     mine = client.get("/api/teacher/sources").json()["sources"]
     assert [x["account"] for x in mine] == ["someone-else"]
-    assert client.post("/api/teacher/sources/1/sync").status_code == 404
     client.post("/api/auth/logout")
     login(client, "root")   # 管理员看全部
     assert len(client.get("/api/teacher/classes").json()["classes"]) == 2
@@ -128,7 +127,8 @@ def test_sources_page(client):
     assert (src["account"], src["demo"], src["enabled"], src["classes"], src["submissions"]) == (
         "demo-teacher", True, False, 2, 201)
     assert "password" not in json.dumps(data).lower()
-    assert client.post(f"/api/teacher/sources/{src['id']}/sync").status_code == 409
+    # 同步全部自动：没有“立即同步”这个手动入口
+    assert client.post(f"/api/teacher/sources/{src['id']}/sync").status_code in (404, 405)
 
 
 def test_teacher_login_by_xdoj_account(client, monkeypatch):

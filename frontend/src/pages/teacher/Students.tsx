@@ -29,7 +29,7 @@ const COLUMNS: { key: SortKey; label: string; num: boolean; title?: string }[] =
 ];
 
 export default function Students({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<{ total: number; students: StudentRow[] }>(`/api/teacher/classes/${cls.key}/students`), [cls.key]);
+  const data = useLoad(() => get<{ total: number; students: StudentRow[] }>(`/api/teacher/classes/${cls.key}/students`), [cls.key], 60000);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "userId", dir: 1 });
   const [q, setQ] = useState("");
   const rows = useMemo(() => {

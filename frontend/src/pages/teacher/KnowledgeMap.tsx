@@ -163,7 +163,7 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   const layoutKind = useLayout();
   const [params, setParams] = useSearchParams();
   const student = params.get("student") ?? "";
-  const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student]);
+  const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student], 120000);
   const [scope, setScope] = useState<"home" | "all">("home");
   const [view, setView] = useState<"graph" | "table">("graph");
   const [showCross, setShowCross] = useState(true);

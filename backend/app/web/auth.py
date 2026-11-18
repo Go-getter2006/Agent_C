@@ -119,8 +119,22 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
     user = s.scalar(select(m.User).where(m.User.login_name == name))
     if user is None:
         record_failure(key)
-        raise HTTPException(status_code=401, detail="这个学号还不在任何班级名单里。要等任课老师登录本系统、"
-                                                    "同步完名单以后才能登录；老师请在登录页选“教师”。")
+        # 名单每两小时自动同步一次；有人用不认识的学号登录，多半是刚加进班的：马上自动再同步一次
+        asked = False
+        if name.isdigit():
+            from .. import db
+            from ..xdoj.api import request_meta_sync_if_stale
+
+            servers = [srv.id for srv in s.scalars(select(m.Server).where(
+                m.Server.course == course, m.Server.code != "demo", m.Server.base_url != "")).all()
+                if s.scalar(select(m.DataSource.id).where(m.DataSource.server_id == srv.id,
+                                                          m.DataSource.enabled.is_(True))) is not None]
+            with db.session_scope() as s2:   # 单独提交：下面要报错返回，这个请求自己的事务会回滚
+                for sid in servers:
+                    asked = request_meta_sync_if_stale(s2, sid) or asked
+        raise HTTPException(status_code=401, detail=(
+            "名单里还没有这个学号，系统正在自动重新同步名单，一两分钟后再试一次。" if asked else
+            "这个学号还不在班级名单里。名单会自动同步；如果你刚换了班，请联系任课老师。老师请在登录页选“教师”。"))
     if user.status != "active":
         raise HTTPException(status_code=403, detail="这个账号已经不在班级名单里了，请联系老师。")
 

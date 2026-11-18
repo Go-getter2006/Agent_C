@@ -106,13 +106,13 @@ def last_beat(s) -> tuple[dt.datetime | None, str]:
 
 def start_in_thread() -> threading.Thread:
     """在网页进程里起一个后台线程跑主循环。"""
-    from .. import assess, graphmodel, pipeline, sources
+    from .. import automation, graphmodel, pipeline, sources
 
     def run() -> None:
         while True:
             try:
                 Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
-                       nightly=graphmodel.nightly, idle_work=assess.run_pending).run_forever()
+                       nightly=graphmodel.nightly, idle_work=automation.idle_work).run_forever()
             except Exception:  # 出错了等一会儿重来，不能把网页带崩
                 log.exception("后台同步出错，30 秒后重启")
                 time.sleep(30)
@@ -289,6 +289,8 @@ class Daemon:
 
     def _run_meta(self, ctx: SyncContext) -> None:
         _state["activity"] = "同步名单和作业"
+        with db.session_scope() as s:
+            store.set_time(s, ctx.server_id, "last_meta_try_at", ctx.now())
         try:
             sync_meta.sync_metadata(ctx)
         except SessionError:
@@ -299,11 +301,17 @@ class Daemon:
             store.set_state(s, ctx.server_id, "last_meta_date", ctx.now().astimezone(db.BEIJING).date().isoformat())
 
     def _meta_due(self, ctx: SyncContext) -> bool:
-        """名单和作业今天同步过没有。名单关系到学生能不能登录，所以排在一切之前（启动后第一件事）。"""
-        local = ctx.now().astimezone(db.BEIJING)
+        """名单和作业到时间该同步了没有：每两小时一次，自动的，不用谁去点。
+
+        名单关系到学生能不能登录，所以排在一切之前（启动后第一件事）。上一次没成功的，10 分钟后再试。
+        """
+        now = ctx.now()
         with db.session_scope() as s:
-            last = store.get_state(s, ctx.server_id, "last_meta_date")
-        return last != local.date().isoformat() and (not last or local.hour >= config.SYNC["meta_hour"])
+            done = store.get_time(s, ctx.server_id, "last_meta_at")
+            tried = store.get_time(s, ctx.server_id, "last_meta_try_at")
+        if tried is not None and now - tried < dt.timedelta(minutes=config.SYNC["meta_retry_minutes"]):
+            return False
+        return done is None or now - done >= dt.timedelta(minutes=config.SYNC["meta_interval_minutes"])
 
     def _periodic(self, ctx: SyncContext) -> bool:
         now = ctx.now()
@@ -390,7 +398,7 @@ class Daemon:
             if did is None and self._idle_work is not None:
                 try:
                     if self._idle_work():
-                        _state["activity"] = "智能体评估刚结束的对话"
+                        _state["activity"] = "智能体评估、自动写评语"
                         continue
                 except Exception:
                     log.exception("空闲时的本地任务出错")

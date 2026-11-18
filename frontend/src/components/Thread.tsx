@@ -71,11 +71,11 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, askKe
     load(false);
   }, [threadKey, load]);
 
-  // 定时看一眼：题目通过后，智能体可能会追加一道小题
+  // 定时看一眼（自动的）：提交没过时智能体可能主动先说一句；题目通过后可能追加一道小题
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && !busy) load(true);
-    }, 20000);
+    }, 15000);
     return () => window.clearInterval(timer);
   }, [busy, load]);
 

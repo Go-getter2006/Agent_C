@@ -791,7 +791,7 @@ class AgentAssessment(Base):
 
 
 class AgentReview(Base):
-    """教师端“让智能体写一段评估”：根据多维画像写的学情评语。按需生成，画像没变就用上一次的。"""
+    """智能体根据多维画像写的学情评语（教师端看）。后台自动写：有了新数据、离上一份超过一小时就重写，画像没变就沿用。"""
 
     __tablename__ = "agent_reviews"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
@@ -821,7 +821,8 @@ class CrossLink(Base):
     """C 语言的技能和数据结构的技能之间带类型的联系。
 
     来源：seed 人工初稿（taxonomy/prereq.py 的跨课程边）、llm 智能体提出、teacher 老师加的。
-    状态：proposed 待审、accepted 采用、rejected 不用。只有采用的联系进入数据结构的先验（mastery v2）。
+    状态：proposed 待检验、accepted 采用、rejected 不用。只有采用的联系进入数据结构的先验（mastery v2）。
+    采用与否每天夜里自动决定（cross.auto_links）；reviewed_by 不为空表示老师改过，自动的不再动它。
     数据检验（每天夜里）：C 那头掌握了（估计 ≥ 0.6）和没掌握的学生，数据结构这头新题一次做对的比例，
     以及“前者更高”的后验概率；结论 supported / unsupported / unknown 决定这条联系在先验里的分量。
     """

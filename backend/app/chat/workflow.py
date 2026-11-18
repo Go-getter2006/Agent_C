@@ -6,7 +6,7 @@ import logging
 import re
 import time
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import catalog, config, db, llm, mastery, quiz, quizgen, review
@@ -117,6 +117,21 @@ def refresh_rounds(s: Session, user_id: str, now: dt.datetime | None = None) -> 
                 continue
         if now - rnd.last_message_at > dt.timedelta(minutes=config.CHAT["round_timeout_minutes"]):
             close_round(s, rnd, "超时", rnd.last_message_at)
+
+
+def close_stale_rounds(s: Session, now: dt.datetime | None = None) -> int:
+    """后台自动做：超时没说话的回合按超时结束、绑定的题已经通过的按通过结束，不用等学生再打开页面。
+
+    结束以后智能体才会评估这个回合（assess.py）。返回结束了几个回合。
+    """
+    now = now or db.now()
+    users = s.scalars(select(m.ChatRound.user_id).where(m.ChatRound.status == "open").distinct()).all()
+    before = s.scalar(select(func.count()).select_from(m.ChatRound).where(m.ChatRound.status == "open")) or 0
+    for uid in users:
+        refresh_rounds(s, uid, now)
+    s.flush()
+    after = s.scalar(select(func.count()).select_from(m.ChatRound).where(m.ChatRound.status == "open")) or 0
+    return before - after
 
 
 def _round_for(s: Session, user_id: str, key: tuple[int, int] | None, now: dt.datetime,

@@ -133,9 +133,10 @@ def test_ds_pages(database):
         link = next(x for x in page["links"] if x["c"]["code"] == C_PTR and x["d"]["code"] == D_LIST)
         assert link["status"] == "accepted" and link["relationName"] == "先修"
         r = c.post(f"/api/teacher/cross/{link['id']}/review", json={"action": "reject"}).json()
-        assert r["status"] == "rejected"
-        assert c.post("/api/teacher/cross/propose", json={"kp": "D02.02"}).status_code == 409   # 没有大模型
-        assert c.post("/api/teacher/cross/validate").json()["checked"] == 27
+        assert r["status"] == "rejected" and r["decidedBy"] == "teacher"      # 老师可以改（可选）
+        # 没有手动入口：补充联系、检验都是每天夜里自动做
+        assert c.post("/api/teacher/cross/propose", json={"kp": "D02.02"}).status_code in (404, 405)
+        assert c.post("/api/teacher/cross/validate").status_code in (404, 405)
         detail = c.get("/api/teacher/students/2599000012").json()
         assert detail["joint"] and detail["foundation"] and detail["submissions"] == []
         ov = c.get(f"/api/teacher/classes/c{d_id}-601/overview").json()
@@ -150,3 +151,40 @@ def test_ds_pages(database):
         c.post("/api/auth/logout")
         c.post("/api/auth/login", json={"loginName": "2599000011", "password": "test-pass", "course": "D"})
         assert c.get("/api/progress").json()["foundation"] == []
+
+
+def test_links_are_managed_automatically(database):
+    """每天夜里：智能体自动补充联系（把握大的直接采用）、数据检验后自动采用或不用；老师改过的不动。"""
+    answers = {"D02.02": {"links": [{"c": "C10.03.01", "d": D_LIST, "type": "used_for", "why": "遍历要移动指针", "confidence": 0.9},
+                                    {"c": "C06.02.01", "d": D_LIST, "type": "similar", "why": "顺序访问", "confidence": 0.4}]}}
+
+    def backend(messages, json_mode, max_tokens, temperature):
+        kp = next((k for k in answers if k in messages[-1]["content"] or "链表结点" in messages[-1]["content"]), None)
+        return json.dumps(answers.get(kp) or {"links": []}, ensure_ascii=False), 100, 50
+
+    llm.set_backend(backend)
+    try:
+        with db.session_scope() as s:
+            # 让“相似”那条有数据支持：C06.02.01 掌握了的学生，链表结点题一次做对
+            for i in range(8):
+                _c_evidence(s, f"s{i}", "C06.02.01", True)
+                _c_evidence(s, f"w{i}", "C06.02.01", False)
+                _outcomes(s, f"s{i}", D_LIST, [True, True])
+                _outcomes(s, f"w{i}", D_LIST, [False, False])
+            out = cross.auto_links(s)
+            assert out["seeded"] == 28 and out["proposed"] >= 2
+            by = {(r.c_skill, r.d_skill): r for r in s.scalars(select(m.CrossLink)).all()}
+            high = by[("C10.03.01", D_LIST)]
+            low = by[("C06.02.01", D_LIST)]
+            assert high.status == "accepted" and high.reviewed_by is None       # 把握大：自动采用
+            assert low.verdict == "supported" and low.status == "accepted"      # 把握不大，但数据支持：自动采用
+            # 每个知识点只提一次
+            again = cross.auto_links(s)
+            assert again["proposed"] == 0
+            # 老师改过的，自动的不再动
+            low.status, low.reviewed_by = "rejected", 1
+            s.flush()
+            cross.auto_links(s)
+            assert low.status == "rejected"
+    finally:
+        llm.set_backend(None)
