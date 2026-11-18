@@ -4,7 +4,7 @@
 
 ## 1. 结论
 
-五个 MCP 服务均已加入用户级 Codex 配置并启用。三个服务的真实工具调用通过；Subframe 与 A1 尚未完成账户授权，调用尝试在认证握手阶段失败，不能列为验证成功。
+五个 MCP 服务均已加入用户级 Codex 配置并启用，五项真实工具调用均已通过。Subframe 与 A1 重新发起授权后，Codex 已收到有效回调，两项均显示 `o_auth`；此前认证失败的记录保留在下方，不能与当前状态混淆。
 
 没有购买套餐、开通自动续费、安装额外浏览器依赖，也没有修改虚拟机或 Docker。
 
@@ -27,8 +27,8 @@
 | `inspo` | `https://inspomcp.dev/api/mcp` | 已启用，真实调用成功 | 无需登录 |
 | `awwwards` | `npx -y awwwards-mcp`，`AWWWARDS_MCP_PROFILE=core` | 已启用，`1.20.0`，13 个核心工具 | 无需登录 |
 | `mgd-design` | `https://madegooddesigns.com/inspiration/mcp/core` | 已启用，真实调用成功，实际发现 24 个工具 | 无需登录 |
-| `subframe` | `https://mcp.subframe.com/mcp` | 已启用，待授权 | 需要免费账户授权 |
-| `a1` | `https://www.a1.gallery/api/mcp` | 已启用，待授权 | 需要免费账户授权 |
+| `subframe` | `https://mcp.subframe.com/mcp` | 已启用，OAuth 已登录，真实搜索通过 | 免费账户已授权 |
+| `a1` | `https://www.a1.gallery/api/mcp` | 已启用，OAuth 已登录，真实搜索通过 | 免费账户已授权 |
 
 Inspo 先运行了用户指定的 `npx -y inspo-mcp install --dry-run`。预览显示默认会配置 Claude Code、Codex 和 VS Code，因此实际使用官方支持的 `--client codex` 参数限定范围。
 
@@ -56,24 +56,26 @@ Awwwards 使用官方 `core` 配置减少工具描述开销；基础搜索已复
 | Awwwards | 核心配置下 `search_sites`：`award=product`，2 项 | 返回 Agrumea Farm、Lidar Drone Scanning，含站点地址和奖项字段 | 通过 |
 | Made Good Designs | `get_font_pairing`：IBM Plex Sans，最多 3 组 | IBM Plex Sans / Serif、IBM Plex Mono / Sans、IBM Plex Sans / Source Serif 4，含说明与资源链接 | 通过 |
 | Made Good Designs | `search_ui_screens`：AI chat assistant learning dashboard login，web，3 项 | 返回聊天、学习仪表盘、AI 产品首页参考屏幕和截图 | 通过 |
-| Subframe | 尝试 `search_inspiration`：modern software product homepage | `Auth required, when send initialize request` | 未通过：认证握手未完成，无搜索结果 |
-| A1 | 尝试 `search_websites`：modern software product | 同样在 initialize 阶段返回 `Auth required` | 未通过：无搜索结果，未取得账户配额信息 |
+| Subframe | 授权后 `search_inspiration`：modern software product homepage | 返回 Tekt、Interfere、Resurf、Mintlify、Etched 五个真实案例，含图像预览 | 通过 |
+| A1 | 授权后 `search_websites`：software product，limit=3 | 返回 Making Software、Click Therapeutics、Stacker 三个真实站点的链接、截图地址和样式元数据 | 通过；仅新增一次成功搜索 |
 
-后两项的失败发生在建立授权连接之前，尚未取得它们的工具 schema 或实际搜索数据。报告中的查询是调用尝试，不代表服务已经执行了搜索。
+初次验证时，Subframe 和 A1 的调用在 initialize 阶段返回 `Auth required`，没有搜索结果；该记录仅表示当时未完成认证。授权成功后，使用新增的原生 MCP 工具完成了上表中的实际搜索。公开结果摘要保存在工作区 `work/design_mcp/authorized-search-verification.json`，不包含凭据。
 
-`codex mcp list` 已实际执行，退出码为 0。原生连接再次发现全部五项配置；Subframe、A1 显示 `Not logged in`。Inspo / Awwwards 的 `Unsupported` 指不使用 OAuth；MGD 的认证栏为 `Unknown`，但其实际工具调用成功，不能仅凭这一字段判定连接失败。
+`codex mcp list` 已实际执行，退出码为 0。最新 `--json` 结果中 Subframe、A1 均为 `o_auth`。Inspo / Awwwards 的 `Unsupported` 指不使用 OAuth；MGD 的认证栏为 `Unknown`，但其实际工具调用成功，不能仅凭这一字段判定连接失败。再次核对确认原有服务和其他 Codex 设置仍保持一致。
 
-## 5. 需要用户完成的授权
+## 5. 授权结果与以后维护
 
-已经分别尝试了 `codex mcp login subframe` 和 `codex mcp login a1`；未等到浏览器回调，授权链接超时。配置仍然保留，未伪造登录成功。旧授权链接不应继续使用。
+当前没有待完成的登录事项。两个登录进程均返回 `Successfully logged in to MCP server`，且授权后搜索成功。
 
-在 **Windows PowerShell** 分别运行，逐个完成：
+此前等待浏览器回调时链接曾超时，用户还报告 A1 授权页出现 `403 Forbidden`。排查时，A1 的 MCP 和 OAuth 元数据可达，新生成的未登录授权请求正常返回 302 登录跳转；未复现早先的 403，不能断言其根因。后续新的授权收到有效回调并通过搜索验证，没有通过购买套餐或绕过认证处理。
+
+以后确实过期或需要换账户时，再在 **Windows PowerShell** 逐个运行：
 
 ```powershell
 codex mcp login subframe
 ```
 
-打开该次命令显示的链接，登录自己的免费 Subframe 账户并授权，直到终端显示成功，再运行：
+打开该次命令显示的新链接，在这台 Windows 的浏览器中授权，直到终端显示成功，再运行：
 
 ```powershell
 codex mcp login a1
@@ -81,7 +83,7 @@ codex mcp login a1
 
 只选免费账户，不升级或填写付款信息。Subframe 官方说明 Inspiration 搜索可用于免费账户且不消耗 AI credits；A1 官方当前列出免费额度为每周 30 次工具调用，具体账户余量尚未验证。[Subframe 说明](https://www.subframe.com/inspiration)、[A1 Codex 说明](https://www.a1.gallery/mcp/codex)。
 
-授权后各补做一次指定搜索即可：Subframe 的 `search_inspiration`、A1 的 `search_websites`。A1 先用一次有针对性的查询，不做循环试探或批量搜索。
+本轮已经完成两个指定搜索。A1 本轮仅新增一次成功的目标搜索，没有继续翻页、批量抓取或追加详情查询；没有查询账户的实际剩余额度。
 
 若当前 Codex 桌面会话没有刷新新增工具，重启客户端或打开新会话后再检查；本轮已通过原生连接验证前三项能够实际运行。
 
