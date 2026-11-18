@@ -106,13 +106,13 @@ def last_beat(s) -> tuple[dt.datetime | None, str]:
 
 def start_in_thread() -> threading.Thread:
     """在网页进程里起一个后台线程跑主循环。"""
-    from .. import graphmodel, pipeline, sources
+    from .. import assess, graphmodel, pipeline, sources
 
     def run() -> None:
         while True:
             try:
                 Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
-                       nightly=graphmodel.nightly).run_forever()
+                       nightly=graphmodel.nightly, idle_work=assess.run_pending).run_forever()
             except Exception:  # 出错了等一会儿重来，不能把网页带崩
                 log.exception("后台同步出错，30 秒后重启")
                 time.sleep(30)
@@ -134,11 +134,13 @@ class Daemon:
     def __init__(self, contexts: list[SyncContext], *, sleep: Callable[[float], None] = time.sleep,
                  post_process: Callable[[int, str, int], None] | None = None,
                  reload: Callable[[], list[SyncContext]] | None = None,
-                 nightly: Callable[[], object] | None = None):
+                 nightly: Callable[[], object] | None = None,
+                 idle_work: Callable[[], int] | None = None):
         self.contexts = contexts
         self._sleep = sleep
         self._reload = reload      # 重新读一遍数据源：教师新登记的账号要能被发现
         self._nightly = nightly    # 每天夜里做一次的事（图模型全图更新）
+        self._idle_work = idle_work  # 空闲时做的本地的事（智能体评估刚结束的回合）：不请求 XDOJ
         # 本地任务（标注、学情证据）的处理函数：(server_id, kind, target_id)
         self._post_process = post_process
         self.poll_failures: dict[int, int] = {c.server_id: 0 for c in contexts}
@@ -385,6 +387,13 @@ class Daemon:
                     else:
                         ctx.client.close()
             did = self.step() if self.contexts else None
+            if did is None and self._idle_work is not None:
+                try:
+                    if self._idle_work():
+                        _state["activity"] = "智能体评估刚结束的对话"
+                        continue
+                except Exception:
+                    log.exception("空闲时的本地任务出错")
             if did is None:
                 _state["activity"] = "空闲，等新的提交" if self.contexts else "还没有数据源：等老师在网页上用 XDOJ 账号登录"
                 self._sleep(config.SYNC["idle_sleep_seconds"])

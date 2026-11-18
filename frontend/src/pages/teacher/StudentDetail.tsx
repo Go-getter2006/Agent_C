@@ -1,9 +1,9 @@
-// 学生明细：知识点和技能（v2 带区间）、复习、卡点、提交、求助、小题。只有登录的这门课；
+// 学生明细：多维掌握画像、智能体评估、知识点和技能（v2 带区间）、复习、卡点、提交、求助、小题。只有登录的这门课；
 // 数据结构这边另有“C 语言基础”（只有掌握程度，不含 C 语言的答题记录）和还没有证据时的准备度。
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Copy, FileDown, Waypoints } from "lucide-react";
-import { get } from "../../api";
+import { ArrowLeft, Bot, Copy, FileDown, Quote, Sparkles, Waypoints } from "lucide-react";
+import { get, post } from "../../api";
 import { Card, Cells, CodeBlock, Empty, LevelLegend, Loading, Problem, ResultPill, levelClass } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
@@ -31,7 +31,109 @@ interface Detail {
   readiness: { code: string; name: string; p: number }[];
   course: "C" | "D";
   foundation: { code: string; name: string; level: string; p: number | null; supports: { code: string; name: string }[] }[];
+  profile: ProfileRow[];
+  assessments: Assessment[];
+  dialogue: { total: number; constructive: number | null; answerSeeking: number | null; acts: { code: string; name: string; n: number }[] };
+  agentReview: AgentReview | null;
   graphUpdatedAt: string | null;
+}
+
+interface ProfileRow {
+  code: string; name: string; level: string; perf: number | null; perfLower: number | null; understanding: number | null;
+  nAssess: number; independence: number | null; retention: number | null; calibration: number | null; bias: number | null;
+  prereq: number | null; graph: number | null; fused: number | null; flags: { code: string; text: string }[];
+}
+
+interface Assessment {
+  id: number; skill: string; skillName: string; kp: string; level: number | null; levelName: string; rawLevel: number | null;
+  ruleLevel: number | null; confidence: number; evidence: string[]; misconception: string; adjusted: string; source: string;
+  problem: string; time: string;
+}
+
+interface AgentReview {
+  summary: string; source: string; time: string; strengths: { code: string; name: string }[];
+  concerns: { kp: string; name: string; dimension: string; why: string }[]; suggestions: string[];
+}
+
+const DIMS: { key: keyof ProfileRow; name: string; tip: string }[] = [
+  { key: "perf", name: "做题", tip: "掌握程度算法 v2：评测结果、提交次数、求助级别、雷同" },
+  { key: "understanding", name: "理解", tip: "智能体读学生在对话里自己说的话，按量规评 0~3 档" },
+  { key: "independence", name: "独立", tip: "通过之前要了多少帮助：一次做对 1，给了示例代码才改对 0" },
+  { key: "retention", name: "保持", tip: "复习时还记得多少（半衰期回归）" },
+  { key: "calibration", name: "自知", tip: "小题前选的把握和实际对错的吻合程度" },
+  { key: "prereq", name: "先修", tip: "知识图上先修技能的掌握程度" },
+  { key: "fused", name: "综合", tip: "几个维度按学到的权重融合（见“模型对比”页）" },
+];
+
+/** 一格：细条加数值。没有数据时是一条短横线。 */
+function DimCell({ v }: { v: number | null }) {
+  if (v === null) return <span className="muted">—</span>;
+  return (
+    <span className="dimcell">
+      <span className="dimcell-track" aria-hidden="true"><span style={{ width: `${Math.round(v * 100)}%` }} /></span>
+      <span className="num">{v.toFixed(2)}</span>
+    </span>
+  );
+}
+
+const LEVEL_PILL: Record<number, string> = { 0: "pill pill-fail", 1: "pill pill-warn", 2: "pill pill-pass", 3: "pill pill-pass" };
+
+function AgentCard({ d, userId, onDone }: { d: Detail; userId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const r = d.agentReview;
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/api/teacher/students/${userId}/agent-review`, { force: r !== null });
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title={<><Bot size={16} aria-hidden="true" /> 智能体评估</>}
+      sub="对话结束后，智能体读学生自己说的话评“理解”；结论要附上学生原话，和程序能确定的事实冲突时会下调"
+      action={<button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run()}>
+        <Sparkles size={15} aria-hidden="true" />{busy ? "正在写" : r ? "重新评估" : "让智能体写一段评估"}</button>}>
+      {error && <p className="error-text" role="alert">{error}</p>}
+      {r && (
+        <div className="agent-review">
+          <p>{r.summary}</p>
+          {r.strengths.length > 0 && <p className="note">掌握得好：{r.strengths.map((x) => x.name).join("、")}</p>}
+          {r.concerns.length > 0 && (
+            <ul className="agent-concerns">
+              {r.concerns.map((c, i) => <li key={i}><b>{c.name}</b><span className="pill">{c.dimension}</span>{c.why}</li>)}
+            </ul>
+          )}
+          {r.suggestions.length > 0 && <ul className="agent-suggest">{r.suggestions.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+          <span className="note">{r.source === "llm" ? "大模型写的" : "没有大模型时按规则生成"} · {shortTime(r.time)}</span>
+        </div>
+      )}
+      {d.assessments.length === 0 ? <p className="note">还没有评过“理解”：学生在对话里回答过问题、说过自己的想法以后才有。</p> : (
+        <ul className="assess-list">
+          {d.assessments.map((a) => (
+            <li key={a.id}>
+              <div className="rv-top">
+                <span><strong>{a.skillName}</strong> <span className="note">{a.problem ? `「${a.problem}」` : a.kp}</span></span>
+                <span className={a.level !== null ? LEVEL_PILL[a.level] : "pill"}>{a.levelName}</span>
+              </div>
+              {a.evidence.map((q, i) => <span key={i} className="assess-quote"><Quote size={12} aria-hidden="true" />{q}</span>)}
+              {a.misconception && <span className="note">看出来的错误想法：{a.misconception}</span>}
+              <span className="note">
+                {a.source === "llm" ? `大模型评的，把握 ${a.confidence.toFixed(2)}` : "规则评的"}
+                {a.ruleLevel !== null && a.source === "llm" ? ` · 规则给 ${a.ruleLevel} 档` : ""}
+                {a.adjusted ? ` · 从 ${a.rawLevel} 档下调：${a.adjusted}` : ""} · {shortTime(a.time)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
 }
 
 function LevelPill({ level }: { level: string }) {
@@ -76,6 +178,34 @@ export default function StudentDetail() {
           {!d && !data.error && <div className="card card-body"><Loading what="正在取这个学生的明细" lines={6} /></div>}
           {d && (
             <div className="stack">
+              <Card title="多维掌握画像" sub="每个知识点从六个方面看，再按学到的权重融合。0~1，越大越好；“—”是还没有这方面的数据" bodyClass="">
+                {d.profile.length === 0 ? <Empty title="还没有可以画像的知识点" /> : (
+                  <div className="table-scroll">
+                    <table className="table table-dims">
+                      <thead>
+                        <tr>
+                          <th scope="col">知识点</th><th scope="col">档位</th>
+                          {DIMS.map((x) => <th key={x.key} scope="col" title={x.tip}>{x.name}</th>)}
+                          <th scope="col">提示</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {d.profile.map((k) => (
+                          <tr key={k.code}>
+                            <td><span className="cell-title">{k.name}</span> <Code>{k.code}</Code></td>
+                            <td><LevelPill level={k.level} /></td>
+                            {DIMS.map((x) => <td key={x.key}><DimCell v={k[x.key] as number | null} /></td>)}
+                            <td>{k.flags.map((f) => <span key={f.code} className="pill pill-warn flag-pill">{f.text}</span>)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+
+              <AgentCard d={d} userId={d.student.userId} onDone={data.reload} />
+
               <div className="grid-main">
                 <Card title="知识点" sub="档位来自掌握程度算法 v2（学生端和智能体用的）；括号里是 v1 的档位，作对照" bodyClass="">
                   <div className="table-scroll">
@@ -122,6 +252,24 @@ export default function StudentDetail() {
                       </ul>
                     </Card>
                   )}
+                  <Card title="对话行为" sub="参考 StudyChat 的分类：概念提问、带着想法问、解释自己的想法是建构性的；索要答案相反">
+                    {d.dialogue.total === 0 ? <p className="note">还没有对话。</p> : (
+                      <>
+                        <p className="note num">
+                          共 {d.dialogue.total} 条 · 建构性 {Math.round((d.dialogue.constructive ?? 0) * 100)}% · 索要答案 {Math.round((d.dialogue.answerSeeking ?? 0) * 100)}%
+                        </p>
+                        <ul className="act-list">
+                          {d.dialogue.acts.map((a) => (
+                            <li key={a.code}>
+                              <span>{a.name}</span>
+                              <span className="dimcell-track" aria-hidden="true"><span style={{ width: `${Math.round((a.n / d.dialogue.total) * 100)}%` }} /></span>
+                              <span className="num">{a.n}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </Card>
                   <Card title="复习" sub="间隔重复：记得牢的程度按半衰期算，降到 75% 时到期">
                     {d.reviews.length === 0 ? <p className="note">没有在复习的项。</p> : (
                       <ul className="rv-list">

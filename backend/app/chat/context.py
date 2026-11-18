@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, db, mastery
+from .. import catalog, config, db, llm, mastery
 from .. import models as m
 from ..labeling import labeler
 from ..taxonomy import LEVEL_NONE, error_name, skill_name
@@ -27,6 +27,7 @@ class Ctx:
     user_name: str = ""
     thread: tuple[int, int] | None = None        # 消息所在的线程：某道题，或通用线程（None）
     course: str = "C"                            # 这次登录的课程：只在这门课的题里绑定
+    profile_note: str = ""                       # 多维画像的一句话，给大模型看（profile.tutor_note）
     problem: catalog.ProblemInfo | None = None   # 绑定到的题
     bind_by: str = ""
     candidates: list[catalog.ProblemInfo] = field(default_factory=list)
@@ -231,6 +232,10 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
         ).order_by(m.StuckPoint.id)).all()
         ctx.prior_stuck = [p for p in stuck if rnd is None or p.round_id != rnd.id]
         ctx.round_stuck = next((p for p in reversed(stuck) if rnd is not None and p.round_id == rnd.id), None)
+    if ctx.root_skill and llm.available():
+        from .. import profile
+
+        ctx.profile_note = profile.tutor_note(s, user_id, ctx.root_skill)
     if rnd is not None and sub is not None and rnd.submission_id and rnd.submission_id != sub.submission_id \
             and rnd.error_code and rnd.error_code == ctx.root_error and sub.submission_id > rnd.submission_id:
         ctx.same_error_resubmit = True  # 带着同一个错误又交了一次

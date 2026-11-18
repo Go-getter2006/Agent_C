@@ -14,7 +14,7 @@ from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
 from . import context, hints, reply, validate
-from .analyze import Analysis, analyze
+from .analyze import Analysis, analyze, dialogue_act
 from .policy import Decision, PolicyInput, decide, willingness_of
 from .text import split_message
 
@@ -278,7 +278,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
                 if code in SKILLS:
                     options.append((code, SKILLS[code][0]))
         analysis = analyze(prose or text, bool(pasted), awaiting, last_agent_text,
-                           ctx.fill(hint.why) if awaiting else "", options, bound=ctx.problem is not None)
+                           ctx.fill(hint.why) if awaiting else "", options, bound=ctx.problem is not None, course=course)
         if analysis.intent == "REPLY" and awaiting and analysis.answer_correct is None and not analysis.understood:
             analysis.answer_correct = bool(hints.answered(text, hint))  # 判不了按没答对处理：多帮一点比错夸要稳妥
     in_recall = rnd.recall_stage in ("asked", "blanked") and action is None \
@@ -374,6 +374,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     s.add(m.ChatStep(
         message_id=student_msg.id, round_id=rnd.id, user_id=user_id,
         intent=analysis.intent, skill_code=analysis.skill_code or ctx.root_skill, has_attempt=analysis.has_attempt,
+        act=dialogue_act(analysis.intent, analysis.has_attempt, action), answer_correct=analysis.answer_correct,
         has_code=bool(pasted), icap=analysis.icap, analysis_source=analysis.source,
         course_id=course, server_id=ctx.problem.server_id if ctx.problem else None,
         problem_id=ctx.problem.problem_id if ctx.problem else None,

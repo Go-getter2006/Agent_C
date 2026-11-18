@@ -9,7 +9,7 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import catalog, db, mastery, review
+from . import catalog, db, mastery, profile, review
 from . import models as m
 from .labeling.labeler import current_problem_label
 from .taxonomy import (KNOWLEDGE_POINTS, LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_SEGMENTS, LEVEL_WEAK, TOPICS,
@@ -38,6 +38,7 @@ class Snapshot:
             self.skills[key] = ([label.primary_skill] + list(label.secondary_skills or [])) if label else []
             self.subs[key] = catalog.user_submissions(s, user_id, *key)
         self.kp = {k: v for k, v in mastery.kp_states(s, user_id).items() if course_of(k) == course}
+        self.profile = profile.kp_profile(s, user_id, course, self.now)
         self.stuck = [p for p in s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id == user_id)
                                            .order_by(m.StuckPoint.id)).all() if course_of(p.skill_code) == course]
 
@@ -100,7 +101,8 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
         practice = snap.practice_for(kp) if keys else None
         groups.setdefault(TOPICS.get(kp[:3], ""), []).append({
             "name": KNOWLEDGE_POINTS.get(kp, ""), **level_view(level), "basis": basis, "covered": bool(keys),
-            "practice": snap.problem_view(practice) if practice else None})
+            "practice": snap.problem_view(practice) if practice else None,
+            **profile.student_dims(snap.profile.get(kp))})
     return [{"topic": topic, "items": items} for topic, items in groups.items()]
 
 

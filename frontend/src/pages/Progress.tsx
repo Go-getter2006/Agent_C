@@ -23,6 +23,19 @@ function KpTile({ kp, onPractice }: { kp: KnowledgeItem; onPractice: (key: strin
         <Meter level={kp.level} segments={kp.segments} />
       </div>
       <span className="kp-basis">{kp.basis}</span>
+      {kp.dims && kp.dims.length > 0 && (
+        <span className="kp-dims">
+          {kp.dims.map((d) => (
+            <span key={d.name} className="kp-dim" title={d.hint}>
+              {d.name}
+              <span className="kp-dim-bars" role="img" aria-label={`${d.name}：三段里的第 ${["一", "二", "三"][d.segments - 1]}段（${d.hint}）`}>
+                {[1, 2, 3].map((i) => <i key={i} className={i <= d.segments ? "on" : undefined} />)}
+              </span>
+            </span>
+          ))}
+        </span>
+      )}
+      {kp.insight && <span className="kp-insight">{kp.insight}</span>}
       {kp.practice && (
         <button type="button" className="link kp-practice" onClick={() => onPractice(kp.practice!.key)}
           aria-label={`去练一题：${kp.practice.title}`}>

@@ -14,6 +14,10 @@ v2（默认）：在 v1 上加四处改动。
        没有证据的技能也能由先修推出一个“准备度”，数据结构的技能因此能在开课前由 C 语言的情况预测。
     4. 按不确定度定档：后验 Beta 的 80% 区间。“已掌握”要求区间下限也不低于 0.6，证据少时不会轻易给高档；
        “还没练到”看有没有真实的作答，不再被遗忘拉回去。
+    5. 智能体评估的“理解”（app/assess.py）也是证据：会 / 不会按等级记，分量乘大模型的置信度。
+       它只改变估计值，不算“练过”（不计入作答次数、不改变“最近一次是不是独立做对”），
+       所以只聊过、没做过题的技能不会因此有档位；会做但讲不清的，估计值和区间下限会被拉低，不容易到“已掌握”。
+       v1 是原来的基线，不用这类证据；图模型也不用。v2 可以用 include_agent=False 去掉它，做消融对照。
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from . import models as m
 from .taxonomy import LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_WEAK, kp_of_skill
 
 Z80 = 1.2816  # 80% 双侧区间
+AGENT_EVENTS = frozenset({"agent_understanding"})   # 智能体评估记下的证据
 
 
 @dataclass
@@ -125,14 +130,15 @@ def _rows(s: Session, user_id: str, at: dt.datetime) -> list[m.SkillEvidence]:
 
 
 def skill_states(s: Session, user_id: str, at: dt.datetime | None = None, decay: bool = True,
-                 model: str | None = None, with_predicted: bool = False) -> dict[str, SkillState]:
+                 model: str | None = None, with_predicted: bool = False, include_agent: bool = True) -> dict[str, SkillState]:
     """每个有证据的技能的状态。model 不填就用 config.MASTERY_MODEL。
 
     with_predicted（只对 v2）：把没有证据、但能由先修推出来的技能也带上（predicted=True），用于数据结构准备度。
+    include_agent（只对 v2）：用不用智能体评估的证据。
     """
     model = model or config.MASTERY_MODEL
     if model == "v2":
-        return _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted)
+        return _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted, include_agent)
     return _skill_states_v1(s, user_id, at or db.now(), decay)
 
 
@@ -141,7 +147,7 @@ def _skill_states_v1(s: Session, user_id: str, at: dt.datetime, decay: bool) -> 
     rows = _rows(s, user_id, at)
     out: dict[str, SkillState] = {}
     for r in rows:
-        if r.ts > at:
+        if r.ts > at or r.event_type in AGENT_EVENTS:
             continue
         st = out.setdefault(r.skill_code, SkillState(r.skill_code))
         days = max(0.0, (at - r.ts).total_seconds() / 86400.0)
@@ -197,23 +203,31 @@ def half_life_days(rows: list[m.SkillEvidence]) -> float:
 
 
 def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
-                     with_predicted: bool) -> dict[str, SkillState]:
+                     with_predicted: bool, include_agent: bool = True) -> dict[str, SkillState]:
     from .taxonomy.prereq import parents_of
 
     cfg = config.MASTERY_V2
     by_skill: dict[str, list[m.SkillEvidence]] = {}
     for r in _rows(s, user_id, at):
+        if r.event_type in AGENT_EVENTS and not include_agent:
+            continue
         by_skill.setdefault(r.skill_code, []).append(r)
     out: dict[str, SkillState] = {}
     for code, rows in by_skill.items():
         st = SkillState(code, model="v2")
-        h = half_life_days(rows)
+        h = half_life_days([r for r in rows if r.event_type not in AGENT_EVENTS])
         st.half_life = h
         for r in rows:
             days = max(0.0, (at - r.ts).total_seconds() / 86400.0)
             w = r.weight * (r.reliability if r.reliability is not None else 1.0)
             if decay:
                 w *= 0.5 ** (days / h)
+            if r.event_type in AGENT_EVENTS:   # 智能体评估：只改估计值，不算练过
+                if r.success:
+                    st.s += w
+                else:
+                    st.f += w
+                continue
             if r.success:
                 st.s += w
             else:

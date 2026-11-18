@@ -140,12 +140,21 @@ def daemon_cmd() -> None:
     _logging()
     from .xdoj.daemon import Daemon
 
-    from . import graphmodel
+    from . import assess, graphmodel
 
     db.create_all()
     # 还没有数据源也能启动：教师在网页上登记后，一分钟内会被发现
     Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
-           nightly=graphmodel.nightly).run_forever()
+           nightly=graphmodel.nightly, idle_work=assess.run_pending).run_forever()
+
+
+@cli.command("assess-pending")
+def assess_pending(limit: int = 50) -> None:
+    """智能体评估刚结束、还没评的对话回合（平时后台空闲时会自动做）。"""
+    _logging()
+    from . import assess
+
+    typer.echo(f"评了 {assess.run_pending(limit)} 个回合")
 
 
 @cli.command("assemble")

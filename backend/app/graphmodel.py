@@ -130,18 +130,28 @@ def log_predictions(s: Session, user_id: str) -> int:
         simple = mastery.skill_states(s, user_id, at=before, model="v1").get(label.primary_skill)
         v2 = mastery.skill_states(s, user_id, at=before, model="v2", with_predicted=True).get(label.primary_skill)
         graph = infer(evidence_of(s, user_id, at=before) | ({} if simple else {label.primary_skill: (0.0, 0.0)}))
+        from . import profile
+
+        feats, fused, v2_base = profile.prediction_snapshot(s, user_id, label.primary_skill, before)
         s.add(m.PredictionLog(
             user_id=user_id, skill_code=label.primary_skill, source_key=source_key, ts=sub.submit_time,
             outcome=sub.judgement == "AC", p_simple=round(simple.p if simple else 0.5, 4),
             p_v2=round(v2.p if v2 else 0.5, 4),
             p_graph=round(graph.get(label.primary_skill, config.GRAPH["root_prior"]), 4),
+            p_fused=round(fused, 4) if fused is not None else None, p_v2_base=round(v2_base, 4), features=feats,
             model_version=config.GRAPH_VERSION))
         n += 1
     return n
 
 
 def nightly(user_ids: list[str] | None = None) -> dict:
-    """每天夜里：全图更新一次，并补记预测。"""
+    """每天夜里：把还没评的回合评完；全图更新一次，补记预测；再用新的预测记录重新学多维融合的权重。
+
+    先补预测、后学权重：当天记下的融合预测用的是学之前的权重，评比才公平（不拿答案学了再考）。
+    """
+    from . import assess, profile
+
+    assessed = assess.run_pending(limit=500)
     with db.session_scope() as s:
         ids = user_ids or list(s.scalars(select(m.SkillEvidence.user_id).distinct()).all())
     n_pred = 0
@@ -149,7 +159,9 @@ def nightly(user_ids: list[str] | None = None) -> dict:
         with db.session_scope() as s:
             update_student(s, uid)
             n_pred += log_predictions(s, uid)
-    return {"students": len(ids), "predictions": n_pred}
+    with db.session_scope() as s:
+        weights = profile.refit(s)
+    return {"students": len(ids), "predictions": n_pred, "assessed": assessed, "weights": weights}
 
 
 # ------------------------------------------------------------ 教师端用的汇总
@@ -216,9 +228,15 @@ def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6, course: str
         acc = lambda get: round(sum(1 for r in items if (get(r) >= 0.5) == r.outcome) / n, 2)  # noqa: E731
         brier = lambda get: round(sum((get(r) - (1.0 if r.outcome else 0.0)) ** 2 for r in items) / n, 3)  # noqa: E731
         start = monday - dt.timedelta(weeks=idx)
+        # 多维融合和“v2 去掉智能体评估”是后来加的：只在记了这两个值的预测上比
+        newer = [r for r in items if r.p_fused is not None and r.p_v2_base is not None]
+        nb = len(newer)
+        brier_new = lambda get: round(sum((get(r) - (1.0 if r.outcome else 0.0)) ** 2 for r in newer) / nb, 3) if nb else None  # noqa: E731
         out.append({"weekStart": start.date().isoformat(), "n": n,
                     "simpleAccuracy": acc(lambda r: r.p_simple), "v2Accuracy": acc(lambda r: r.p_v2),
                     "graphAccuracy": acc(lambda r: r.p_graph),
                     "simpleBrier": brier(lambda r: r.p_simple), "v2Brier": brier(lambda r: r.p_v2),
-                    "graphBrier": brier(lambda r: r.p_graph)})
+                    "graphBrier": brier(lambda r: r.p_graph),
+                    "nFused": nb, "fusedBrier": brier_new(lambda r: r.p_fused),
+                    "v2BaseBrier": brier_new(lambda r: r.p_v2_base), "v2SameBrier": brier_new(lambda r: r.p_v2)})
     return out

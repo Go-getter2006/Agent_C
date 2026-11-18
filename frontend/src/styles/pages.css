@@ -1227,6 +1227,46 @@
   align-self: flex-start;
 }
 
+/* 多维：理解、独立、保持，各三段。颜色用中性的墨色，不和档位的颜色混 */
+.kp-dims {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-12);
+  font-size: var(--fs-12);
+  color: var(--ink-3);
+}
+
+.kp-dim {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  white-space: nowrap;
+}
+
+.kp-dim-bars {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.kp-dim-bars i {
+  display: block;
+  width: 8px;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--lv-none);
+}
+
+.kp-dim-bars i.on {
+  background: var(--ink-2);
+}
+
+.kp-insight {
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+  padding-left: var(--sp-8);
+  border-left: 2px solid var(--line-strong, var(--line));
+}
+
 .kp-uncovered {
   background: var(--surface-2);
   border-style: dashed;
@@ -2404,4 +2444,130 @@
   .link-form {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* ---------- 学生明细：多维画像、智能体评估、对话行为 ---------- */
+.table-dims td {
+  vertical-align: middle;
+}
+
+.table-dims td:first-child {
+  min-width: 10em;
+}
+
+.dimcell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-6, 6px);
+  white-space: nowrap;
+}
+
+.dimcell-track {
+  display: inline-block;
+  width: 44px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.dimcell-track > span {
+  display: block;
+  height: 100%;
+  background: var(--series-1, var(--ink-2));
+  border-radius: 3px;
+}
+
+.dimcell-track > span.neg {
+  background: var(--series-2);
+}
+
+.flag-pill {
+  margin: 0 var(--sp-4) var(--sp-4) 0;
+  white-space: nowrap;
+}
+
+.agent-review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-12);
+  margin-bottom: var(--sp-12);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.agent-review p {
+  margin: 0;
+}
+
+.agent-concerns,
+.agent-suggest {
+  margin: 0;
+  padding-left: var(--sp-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  font-size: var(--fs-13);
+}
+
+.agent-concerns li b {
+  margin-right: var(--sp-6, 6px);
+}
+
+.agent-concerns .pill {
+  margin-right: var(--sp-6, 6px);
+}
+
+.assess-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.assess-list li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-10) 0;
+  border-top: 1px solid var(--line);
+}
+
+.assess-list li:first-child {
+  border-top: none;
+}
+
+.assess-quote {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.assess-quote svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--ink-3);
+}
+
+.act-list {
+  list-style: none;
+  margin: var(--sp-8) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--sp-6, 6px) var(--sp-10);
+  align-items: center;
+  font-size: var(--fs-13);
+}
+
+.act-list li {
+  display: contents;
+}
+
+.act-list .dimcell-track {
+  width: 100%;
 }

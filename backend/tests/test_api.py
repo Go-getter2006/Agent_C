@@ -198,7 +198,7 @@ def test_progress_page(client):
     assert all(not n.startswith("D") for n in names) and "单链表" not in names   # 跨课程的内容学生看不到
     for g in p["knowledge"]:
         for i in g["items"]:
-            assert set(i) == {"name", "level", "segments", "basis", "practice", "covered"}
+            assert set(i) == {"name", "level", "segments", "basis", "practice", "covered", "dims", "insight"}
             assert i["level"] in ("已掌握", "基本掌握", "待加强", "还没练到")
     covered = [i for g in p["knowledge"] for i in g["items"] if i["covered"]]
     assert 15 < len(covered) < 65

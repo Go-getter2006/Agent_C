@@ -115,6 +115,9 @@ export interface KnowledgeItem {
   basis: string;
   covered: boolean;
   practice: ProblemRef | null;
+  // 多维：理解、独立、保持，各三段（没有数据的不出现），加一句话。没有数字
+  dims?: { name: string; segments: number; hint: string }[];
+  insight?: string;
 }
 
 export type NextItem =

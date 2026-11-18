@@ -533,6 +533,10 @@ class ChatStep(Base):
     end_reason: Mapped[str] = mapped_column(String(16), default="")
     quiz_triggered: Mapped[bool] = mapped_column(Boolean, default=False)
     stuck_point_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 对话行为（参考 StudyChat 的对话行为分类）：concept / debug_specific / debug_vague / answer_seeking /
+    # self_explain / short_reply / stuck / task / other。由意图、有没有自己的想法、按了哪个按钮定，见 profile.dialogue_act
+    act: Mapped[str] = mapped_column(String(16), default="")
+    answer_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # 回答智能体的问题时答到点上没有
     # 版本和耗时
     prompt_version: Mapped[str] = mapped_column(String(24), default="")
     model_version: Mapped[str] = mapped_column(String(48), default="")
@@ -735,7 +739,11 @@ class GraphPosterior(Base):
 
 
 class PredictionLog(Base):
-    """两个模型各自对“下一次能不能独立做对”的预测，和实际结果。用来按周比较谁猜得准。"""
+    """几个模型各自对“下一次能不能独立做对”的预测，和实际结果。用来按周比较谁猜得准。
+
+    p_fused：多维融合（profile.py），用当时学到的权重；p_v2_base：v2 去掉智能体评估的证据（消融对照）；
+    features：预测那一刻各个维度的值，用来学维度的权重。
+    """
 
     __tablename__ = "prediction_log"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
@@ -747,4 +755,62 @@ class PredictionLog(Base):
     p_simple: Mapped[float] = mapped_column(Float)   # v1
     p_v2: Mapped[float] = mapped_column(Float, default=0.5)
     p_graph: Mapped[float] = mapped_column(Float)
+    p_fused: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_v2_base: Mapped[float | None] = mapped_column(Float, nullable=True)
+    features: Mapped[dict] = mapped_column(JSON, default=dict)
     model_version: Mapped[str] = mapped_column(String(24), default="")
+
+
+# ============================================================ 智能体评估、多维画像
+class AgentAssessment(Base):
+    """智能体对“理解”的评估：一个求助回合结束后，看学生自己说的话，按 0~3 的量规打分。
+
+    0 不理解（说不出、或说法有错）；1 能照做（按提示改对了，说不出为什么）；2 能解释（能用自己的话说出原因）；
+    3 能迁移（能说出别的情况也会怎样，或者自己发现同类问题）。
+    大模型给的等级要附上学生原话（evidence），原话必须真的出现在他的消息里；和程序能确定的事实冲突时下调（adjusted）。
+    rule_level 是只用规则得出的等级，用来算两者的一致率。
+    """
+
+    __tablename__ = "agent_assessments"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
+    course: Mapped[str] = mapped_column(String(8), default="C")
+    skill_code: Mapped[str] = mapped_column(String(16), index=True)
+    round_id: Mapped[int] = mapped_column(Integer, index=True)
+    level: Mapped[int | None] = mapped_column(Integer, nullable=True)       # 最后采用的等级；None：证据不够，不评
+    raw_level: Mapped[int | None] = mapped_column(Integer, nullable=True)   # 大模型原来给的
+    rule_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)              # 学生原话
+    misconception: Mapped[str] = mapped_column(String(120), default="")    # 看出来的错误想法
+    adjusted: Mapped[str] = mapped_column(String(80), default="")          # 为什么下调
+    source: Mapped[str] = mapped_column(String(8), default="rule")         # llm / rule
+    prompt_version: Mapped[str] = mapped_column(String(24), default="")
+    created_at: Mapped[Dt] = _ts()
+    __table_args__ = (UniqueConstraint("round_id", "skill_code", name="uq_assessment_round_skill"),)
+
+
+class AgentReview(Base):
+    """教师端“让智能体写一段评估”：根据多维画像写的学情评语。按需生成，画像没变就用上一次的。"""
+
+    __tablename__ = "agent_reviews"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
+    course: Mapped[str] = mapped_column(String(8), default="C")
+    profile_hash: Mapped[str] = mapped_column(String(64), default="")
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    source: Mapped[str] = mapped_column(String(8), default="rule")         # llm / rule
+    requested_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[Dt] = _ts()
+
+
+class ModelWeights(Base):
+    """多维融合的维度权重：按“下一次新题能不能一次做对”学出来（每门课一组），每天夜里更新。"""
+
+    __tablename__ = "model_weights"
+    course: Mapped[str] = mapped_column(String(8), primary_key=True)
+    weights: Mapped[dict] = mapped_column(JSON, default=dict)
+    n: Mapped[int] = mapped_column(Integer, default=0)          # 用了多少次预测
+    brier: Mapped[float | None] = mapped_column(Float, nullable=True)
+    learned: Mapped[bool] = mapped_column(Boolean, default=False)  # 数据不够时用的是默认权重
+    updated_at: Mapped[Dt] = _ts()

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import accounts, catalog, config, cross, crypto, db, graphmodel, logs, mastery, review
+from .. import accounts, assess, catalog, config, cross, crypto, db, graphmodel, logs, mastery, profile, review
 from .. import models as m
 from ..labeling.labeler import current_problem_label
 from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
@@ -387,6 +387,9 @@ def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
             reasons.append(f"{len(stuck_on)} 道题交了 5 次以上还没通过")
         if copied.get(st.user_id):
             reasons.append(f"{copied[st.user_id]} 次通过和同学的代码雷同")
+        gaps = [kp for kp, d in profile.kp_profile(s, st.user_id, data.course).items() if "explain_gap" in d.flags]
+        if len(gaps) >= 2:
+            reasons.append(f"{len(gaps)} 个知识点会做但讲不清为什么（智能体评估）")
         if reasons:
             out.append({"userId": st.user_id, "name": st.name, "reasons": reasons})
     out.sort(key=lambda r: -len(r["reasons"]))
@@ -564,11 +567,58 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     return {"student": {"userId": student.user_id, "name": student.name,
                         "class": {"key": class_key(cls.server_id, cls.class_id), "name": cls.class_name}},
             "course": course, "foundation": cross.c_foundation(s, user_id) if course == "D" else [],
+            "profile": profile.teacher_view(s, user_id, course),
+            "assessments": [assess.view(s, a) for a in s.scalars(select(m.AgentAssessment).where(
+                m.AgentAssessment.user_id == user_id, m.AgentAssessment.course == course,
+                m.AgentAssessment.level.is_not(None)).order_by(m.AgentAssessment.id.desc()).limit(20)).all()],
+            "dialogue": profile.dialogue_profile(s, user_id, course),
+            "agentReview": profile.review_view(s.scalars(select(m.AgentReview).where(
+                m.AgentReview.user_id == user_id, m.AgentReview.course == course)
+                .order_by(m.AgentReview.id.desc())).first()),
             "knowledge": kps, "skills": skills, "submissions": sub_rows, "moreSubmissions": max(0, len(subs) - 80),
             "stuck": stuck, "rounds": rounds, "quizzes": quizzes,
             "rootCauses": [{"skill": _skill_view(r["skill"]), "root": _skill_view(r["root"]), "p": r["p"]} for r in roots],
             "reviews": reviews, "copies": copies, "readiness": readiness,
             "graphUpdatedAt": max((r.updated_at for r in post.values()), default=None)}
+
+
+class ReviewBody(BaseModel):
+    force: bool = False
+
+
+@router.post("/students/{user_id}/agent-review")
+def student_agent_review(user_id: str, body: ReviewBody, user: m.User = Depends(teacher),
+                         s: Session = Depends(get_session)) -> dict:
+    """让智能体根据多维画像写一段学情评估。画像没变就给上一次的；一小时内不重写，除非 force。"""
+    _student, cls = _student_in_my_classes(s, user, user_id)
+    row = profile.agent_review(s, user_id, _course_of_class(s, cls), requested_by=user.id, force=body.force)
+    return profile.review_view(row) or {}
+
+
+def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) -> dict:
+    """对话行为和做题表现：建构性提问占比、索要答案占比，各自和一次通过率的相关系数（描述性，样本少时不算）。"""
+    xs_c, xs_a, ys = [], [], []
+    for uid in ids:
+        dia = profile.dialogue_profile(s, uid, course)
+        tried = [v for v in subs.get(uid, {}).values() if v]
+        if dia["total"] < 5 or len(tried) < 3:
+            continue
+        xs_c.append(dia["constructive"])
+        xs_a.append(dia["answerSeeking"])
+        ys.append(sum(1 for v in tried if v[0].judgement == "AC") / len(tried))
+
+    def corr(xs: list[float], ys_: list[float]) -> float | None:
+        n = len(xs)
+        if n < 8:
+            return None
+        mx, my = sum(xs) / n, sum(ys_) / n
+        sx = sum((x - mx) ** 2 for x in xs) ** 0.5
+        sy = sum((y - my) ** 2 for y in ys_) ** 0.5
+        if sx == 0 or sy == 0:
+            return None
+        return round(sum((x - mx) * (y - my) for x, y in zip(xs, ys_)) / (sx * sy), 2)
+
+    return {"students": len(ys), "constructive": corr(xs_c, ys), "answerSeeking": corr(xs_a, ys)}
 
 
 # ------------------------------------------------------------ 图模型（试验中）
@@ -619,7 +669,20 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
         "commonRoots": [{**_skill_view(code), "students": n} for code, n in roots_by_skill.most_common(8)],
         "edges": edges,
         "weekly": graphmodel.weekly_accuracy(s, ids, course=course),
+        "fusion": _fusion_view(s, course),
+        "agreement": assess.agreement(list(s.scalars(select(m.AgentAssessment).where(
+            m.AgentAssessment.user_id.in_(ids or ["-"]), m.AgentAssessment.course == course)).all())),
+        "dialogue": _dialogue_vs_outcome(s, ids, course, _ClassData(s, cls).subs),
     }
+
+
+def _fusion_view(s: Session, course: str) -> dict:
+    row = s.get(m.ModelWeights, course)
+    w = dict(row.weights) if row is not None and row.weights else dict(config.PROFILE["default_weights"])
+    return {"learned": bool(row and row.learned), "n": row.n if row else 0, "minSamples": config.PROFILE["min_samples"],
+            "updatedAt": row.updated_at.isoformat() if row else None,
+            "weights": [{"dim": k, "name": profile.DIM_NAMES.get(k, "截距"), "w": w.get(k, 0.0),
+                         "default": config.PROFILE["default_weights"].get(k, 0.0)} for k in ("bias", *config.PROFILE["dims"])]}
 
 
 # ------------------------------------------------------------ 数据源
