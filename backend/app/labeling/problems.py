@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from sqlalchemy import select, update
@@ -85,7 +86,7 @@ def reference_solution(s: Session, server_id: int, problem_id: int) -> str | Non
             "reference_solution",
             "你是 C 语言课程的助教。根据题面写一份正确、朴素的 C 程序，只用标准库。"
             '输出 JSON：{"code":"完整的 C 源码"}',
-            pdftext.for_llm(statement[:4000]),
+            pdftext.for_llm(statement),
             lambda d: str(d["code"]) if isinstance(d.get("code"), str) and "main" in d["code"] else (_ for _ in ()).throw(ValueError("没有给出完整程序")),
             retries=1, max_tokens=1500)
     except llm.LLMUnavailable:
@@ -175,11 +176,14 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
     server = s.get(m.Server, server_id)
     course_skills = skills_for_course(server.course if server else "C")
     skill_table = "\n".join(f"{code} {item[0]}（{KNOWLEDGE_POINTS[code[:6]]}）" for code, item in course_skills.items())
-    case_text = "\n\n".join(
-        f"测试点 {c.testcase_id}\n输入：\n{(decode_bytes(c.input_bytes, c.input_encoding)[0] or '')[:300]}\n"
-        f"输出：\n{(decode_bytes(c.output_bytes, c.output_encoding)[0] or '')[:300]}" for c in cases)
+    # 测试点完整给出；没取到的是 null，和“空输出”分开（和写回复、标注提交时的证据一样）
+    case_text = json.dumps([
+        {"testcaseId": c.testcase_id,
+         "standardInput": decode_bytes(c.input_bytes, c.input_encoding)[0] if c.input_bytes is not None else None,
+         "standardOutput": decode_bytes(c.output_bytes, c.output_encoding)[0] if c.output_bytes is not None else None}
+        for c in cases], ensure_ascii=False)
     user = (f"【技能表】\n{skill_table}\n\n【题目】{problem.title}\n【XDOJ 的类别和标签】{problem.category} {' '.join(tags)}\n"
-            f"【题面】\n{pdftext.for_llm(pdftext.usable_text(text)[:3000])}\n\n【正确代码】\n{(solution or '（暂无）')[:3000]}\n\n【测试点】\n{case_text}")
+            f"【题面】\n{pdftext.for_llm(pdftext.usable_text(text))}\n\n【正确代码】\n{solution or '（暂无）'}\n\n【测试点】\n{case_text}")
     try:
         brief, primary, secondary, tcs = llm.call_json("label_problem", course_prompt(_SYSTEM, server.course if server else "C"), user, validate,
                                                        retries=1, max_tokens=1200)
