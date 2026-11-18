@@ -59,12 +59,14 @@
   --info-bg: #e8f1fd;
   --removed: #fbe3e0;
 
-  /* 掌握档位：两极（蓝 ↔ 红）加中性灰。颜色从不单独出现，旁边一定有档位文字 */
-  --lv-mastered: #256abf;
+  /* 掌握档位：已掌握绿、基本掌握浅蓝、待加强红、还没练到灰。颜色从不单独出现，旁边一定有档位文字。
+     绿色用 #1fae8c：和浅蓝、和红在红绿色弱、蓝黄色弱下都分得开（dataviz 校验脚本：和红 ΔE 9.1，和浅蓝 17.3）；
+     更深的绿在红色弱眼里会和红一样暗，所以没用 */
+  --lv-mastered: #1fae8c;
   --lv-basic: #86b6ef;
   --lv-weak: #e34948;
   --lv-none: #d9dbe0;
-  --lv-mastered-bg: #eaf2fd;
+  --lv-mastered-bg: #e6f6f0;
   --lv-basic-bg: #f4f8fe;
   --lv-weak-bg: #fdeeee;
   --lv-none-bg: #f6f7f8;

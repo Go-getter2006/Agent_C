@@ -152,7 +152,7 @@ export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide =
   );
 }
 
-/** 掌握分：数字加一条细条，颜色跟档位一样（待加强红、基本掌握浅蓝、已掌握深蓝）。 */
+/** 掌握分：数字加一条细条，颜色跟档位一样（待加强红、基本掌握浅蓝、已掌握绿）。 */
 export function ScoreBadge({ score }: { score: number }) {
   const tone = score >= 75 ? "mastered" : score >= 50 ? "basic" : "weak";
   return (
