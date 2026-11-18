@@ -352,7 +352,8 @@ def _sync_testcases(ctx: SyncContext, problem_id: int, force_files: bool) -> boo
 
 
 def _sync_problem_text(ctx: SyncContext, problem_id: int) -> bool:
-    """题面是一个文件（多半是 PDF）。PDF 不能直接抽文字（字体映射不对会乱码），由 app/pdftext.py 识别。"""
+    """题面是一个文件（PDF，带文字层）。不能直接复制文字（会乱码、排版乱），由 app/pdftext.py 抽取并裁下示意图；
+    大模型整理放在标注这道题之前做，不占着同步。"""
     data, content_type = ep.problem_text_file(ctx.client, problem_id)
     file_hash = sha256(data)
     with db.session_scope() as s:
@@ -368,12 +369,9 @@ def _sync_problem_text(ctx: SyncContext, problem_id: int) -> bool:
                             content_hash=row.file_hash,
                             payload={"content_type": row.content_type,
                                      "file_b64": base64.b64encode(row.file_bytes or b"").decode("ascii")}))
-        old_text = row.extracted_text or ""
-        text, status = pdftext.extract(content_type, data)
-        row.content_type, row.file_bytes, row.file_hash = content_type[:64], data, file_hash
-        row.extracted_text, row.extract_status, row.fetched_at = text, status, ctx.now()
-        log.info("题目 %s 的题面：%s，%d 字", problem_id, pdftext.STATUS_NAMES.get(status, status), len(text))
-        return changed or text != old_text
+        row.content_type, row.file_bytes, row.file_hash, row.fetched_at = content_type[:64], data, file_hash, ctx.now()
+        text_changed = pdftext.store(s, row, content_type, data)
+        return changed or text_changed
 
 
 def sync_metadata(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> dict:

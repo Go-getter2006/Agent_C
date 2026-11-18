@@ -1554,6 +1554,35 @@
   word-break: break-word;
 }
 
+.stmt-fig {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--sp-8) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #fff;
+}
+
+.side-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-8);
+  margin-bottom: var(--sp-12);
+}
+
+.side-card-head h2 {
+  margin-bottom: 0;
+}
+
+.side-card-head .side-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-12);
+}
+
 .stmt-clip {
   max-height: 9.9em;   /* 大约六行 */
   overflow: hidden;

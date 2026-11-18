@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSlider } from "./Slider";
 import { Link } from "react-router-dom";
-import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Circle, CircleCheck, CircleX, ExternalLink, FileText, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
 import { useEscape } from "../lib/hooks";
 import { deadline, shortTime } from "../lib/time";
 import type { Homework, ProblemDetail, ProblemRow, SubmissionChange } from "../types";
@@ -162,15 +162,53 @@ export function ChangeNote({ change, onDiff }: { change: SubmissionChange | unde
 }
 
 /** 题目内容：默认收起，只露前几行。 */
-function Statement({ text }: { text: string }) {
+type Figure = ProblemDetail["figures"][number];
+
+/** 题面文字里的 [图N] 换成图；文字里没提到的图放在最后。 */
+function StatementBody({ text, figures }: { text: string; figures: Figure[] }) {
+  const byN = new Map(figures.map((f) => [f.n, f]));
+  const used = new Set<number>();
+  const parts = text.split(/\[图(\d+)\]/);
+  const img = (f: Figure) => (
+    <img key={`fig-${f.n}`} className="stmt-fig" src={f.url} alt={`示意图 ${f.n}`} loading="lazy"
+      width={f.width} height={f.height} style={{ aspectRatio: `${f.width} / ${f.height}` }} />
+  );
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (i % 2 === 0) {
+          // 图是单独一块：紧挨着图的那个换行去掉，免得多出空行
+          let s = part;
+          if (i > 0) s = s.replace(/^\n/, "");
+          if (i < parts.length - 1) s = s.replace(/\n$/, "");
+          return s ? <span key={i}>{s}</span> : null;
+        }
+        const f = byN.get(Number(part));
+        if (!f) return null;
+        used.add(f.n);
+        return img(f);
+      })}
+      {figures.filter((f) => !used.has(f.n)).map(img)}
+    </>
+  );
+}
+
+function Statement({ text, figures, original }: { text: string; figures: Figure[]; original: string | null }) {
   const [open, setOpen] = useState(false);
-  if (!text.trim()) return null;
-  const long = text.length > 260 || text.split("\n").length > 8;
+  if (!text.trim() && figures.length === 0 && !original) return null;
+  const long = text.length > 260 || text.split("\n").length > 8 || figures.length > 0;
   return (
     <section className="side-card" aria-labelledby="side-stmt">
-      <h2 id="side-stmt"><FileText size={16} aria-hidden="true" />题目</h2>
-      <div className={open || !long ? "stmt" : "stmt stmt-clip"}>{text}</div>
-      {long && (
+      <div className="side-card-head">
+        <h2 id="side-stmt"><FileText size={16} aria-hidden="true" />题目</h2>
+        {original && <a className="link side-link" href={original} target="_blank" rel="noreferrer">看原题<ExternalLink size={13} aria-hidden="true" /></a>}
+      </div>
+      {text.trim() ? (
+        <div className={open || !long ? "stmt" : "stmt stmt-clip"}><StatementBody text={text} figures={figures} /></div>
+      ) : (
+        <p className="note">题目内容还在整理，先看原题。</p>
+      )}
+      {text.trim() && long && (
         <button type="button" className="link side-link" aria-expanded={open} onClick={() => setOpen(!open)}>
           {open ? <><ChevronUp size={14} aria-hidden="true" />收起</> : <><ChevronDown size={14} aria-hidden="true" />展开全部</>}
         </button>
@@ -186,7 +224,7 @@ export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; on
   const canAsk = latest && latest.result !== "AC" && latest.result !== "PENDING";
   return (
     <div className="side">
-      <Statement text={detail.statement ?? ""} />
+      <Statement text={detail.statement ?? ""} figures={detail.figures ?? []} original={detail.original ?? null} />
       <section className="side-card" aria-labelledby="side-subs">
         <h2 id="side-subs"><History size={16} aria-hidden="true" />这道题的提交</h2>
         {subs.length === 0 && <p className="note">还没提交。在 XDOJ 上交一次，这里几秒钟后就能看到。</p>}

@@ -178,6 +178,22 @@ class ProblemText(Base):
     extracted_text: Mapped[str] = mapped_column(Text, default="")
     extract_status: Mapped[str] = mapped_column(String(24), default="ok")  # 见 pdftext.STATUS_NAMES；USABLE 里的才能用
     fetched_at: Mapped[Dt] = _ts()
+    # 程序从 PDF 文字层抽出来的原文（带 [图N] 占位）：大模型整理时拿它核对；extracted_text 是给人看的
+    raw_text: Mapped[str] = mapped_column(Text, default="")
+    tidied_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)  # 交给大模型整理过（成没成都记）
+
+
+class ProblemFigure(Base):
+    """题面里的示意图：从 PDF 页面上裁下来的 PNG。题面文字里在对应位置写 [图N]。"""
+
+    __tablename__ = "xdoj_problem_figures"
+    server_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    problem_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)  # 图几（从 1 起）
+    page: Mapped[int] = mapped_column(Integer, default=1)
+    png: Mapped[bytes] = mapped_column(LargeBinary, default=b"")
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Testcase(Base):

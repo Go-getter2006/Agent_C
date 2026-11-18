@@ -194,14 +194,16 @@ def _probe_fetch(c) -> None:
         got = step("题面文件 viewTextFile.do", lambda: (r := ep.problem_text_file(c, pid), f"{r[1] or '没有类型'}，{len(r[0])} 字节"))
         if got:
             data, ctype = got
-            if pdftext.is_pdf(ctype, data):
-                layer = pdftext.layer_text(data)
-                bad = pdftext.garbled(layer or "")
-                typer.echo(f"    PDF 自带的文字层：{'打不开' if layer is None else (f'乱码（{bad}）' if bad else f'看起来正常，{len(layer)} 字')}")
-                typer.echo(f"    OCR：{'可以用' if pdftext.ocr_available() else '没装（requirements-ocr.txt）'}")
-            text, status = pdftext.extract(ctype, data)
-            typer.echo(f"    识别结果：{pdftext.STATUS_NAMES.get(status, status)}，{len(text)} 字"
-                       + ("" if status in pdftext.USABLE else "  ← 题面不能用"))
+            raw, status, figures = pdftext.extract(ctype, data)
+            typer.echo(f"    程序抽的文字：{pdftext.STATUS_NAMES.get(status, status)}，{len(raw)} 字，示意图 {len(figures)} 张"
+                       + (f"（{pdftext.garbled(pdftext.FIG_MARK.sub('', raw))}）" if status == "garbled" else ""))
+            from . import llm
+
+            if llm.available() and status in ("layer", "garbled"):
+                done = pdftext.tidy(raw, status)
+                typer.echo(f"    大模型整理：{'没通过核对，沿用程序抽的文字' if done is None else pdftext.STATUS_NAMES[done[1]] + f'，{len(done[0])} 字'}")
+            elif not llm.available():
+                typer.echo("    大模型整理：没有配置大模型，先用程序抽的文字" + ("（乱码的不显示）" if status == "garbled" else ""))
 
     typer.echo("\n从头取一条没通过的提交：")
     body = c.post_json("/submission/list.do", {"page": 1, "rows": 100, "sidx": "s.id", "sord": "desc", "search": "false"})
@@ -397,7 +399,7 @@ def _doctor_coverage(s, server_id: int) -> None:
         st = texts.get(p, "还没下载")
         statuses[pdftext.STATUS_NAMES.get(st, st)] = statuses.get(pdftext.STATUS_NAMES.get(st, st), 0) + 1
     typer.echo(f"  作业里的题 {len(pids)} 道：有题面 {usable} 道，有测试点 {len(pids & with_cases)} 道；"
-               f"题面：{json.dumps(statuses, ensure_ascii=False)}；OCR {'可以用' if pdftext.ocr_available() else '没装'}")
+               f"题面：{json.dumps(statuses, ensure_ascii=False)}")
     total = s.scalar(select(func.count()).select_from(m.Submission).where(m.Submission.server_id == server_id)) or 0
     with_src = s.scalar(select(func.count()).select_from(m.SourceSnapshot).where(m.SourceSnapshot.server_id == server_id)) or 0
     done = s.scalar(select(func.count()).select_from(m.Submission).where(

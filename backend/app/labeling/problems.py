@@ -85,7 +85,7 @@ def reference_solution(s: Session, server_id: int, problem_id: int) -> str | Non
             "reference_solution",
             "你是 C 语言课程的助教。根据题面写一份正确、朴素的 C 程序，只用标准库。"
             '输出 JSON：{"code":"完整的 C 源码"}',
-            statement[:4000],
+            pdftext.for_llm(statement[:4000]),
             lambda d: str(d["code"]) if isinstance(d.get("code"), str) and "main" in d["code"] else (_ for _ in ()).throw(ValueError("没有给出完整程序")),
             retries=1, max_tokens=1500)
     except llm.LLMUnavailable:
@@ -130,6 +130,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
     """标注一道题。题面和测试点没变、已经标过时直接返回。没有大模型时返回 None（留到以后标）。"""
     from .labeler import current_problem_label
 
+    pdftext.prepare(s, server_id, problem_id)   # PDF 题面先交给大模型整理（每个文件一次），标注用整理好的
     current = current_problem_label(s, server_id, problem_id)
     if current is not None and not force and current.content_hash == problem_content_hash(s, server_id, problem_id):
         return current
@@ -178,7 +179,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
         f"测试点 {c.testcase_id}\n输入：\n{(decode_bytes(c.input_bytes, c.input_encoding)[0] or '')[:300]}\n"
         f"输出：\n{(decode_bytes(c.output_bytes, c.output_encoding)[0] or '')[:300]}" for c in cases)
     user = (f"【技能表】\n{skill_table}\n\n【题目】{problem.title}\n【XDOJ 的类别和标签】{problem.category} {' '.join(tags)}\n"
-            f"【题面】\n{pdftext.usable_text(text)[:3000]}\n\n【正确代码】\n{(solution or '（暂无）')[:3000]}\n\n【测试点】\n{case_text}")
+            f"【题面】\n{pdftext.for_llm(pdftext.usable_text(text)[:3000])}\n\n【正确代码】\n{(solution or '（暂无）')[:3000]}\n\n【测试点】\n{case_text}")
     try:
         brief, primary, secondary, tcs = llm.call_json("label_problem", course_prompt(_SYSTEM, server.course if server else "C"), user, validate,
                                                        retries=1, max_tokens=1200)
