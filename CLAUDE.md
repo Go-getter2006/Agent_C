@@ -29,10 +29,16 @@
 - 班级的 `classId` 可能是文本或带前导零（如 `000031`）：名单接口按 `classId` 原值筛选（`filters` 里 `field=class_id`），名单按 `user_id` 排序。
 - 登录返回 `userType`，1 是教师。C 语言和数据结构是两台 XDOJ，同一位老师的账号密码可能不同。教师姓名在 `GET /admin/dashboard.do` 页面的 `.user-info` 里第一个 `<small>`。
 - 提交列表里的 `language` 是对象，取 `name`；评测记录的文字结果在 `judgementText`；“未评判”表示还在评测。
+- **请求参数照网页里 jqGrid 实际发的写，不要省略或改写**（名单那次把文本 classId 改成数字就取不到人）：顶层表格（班级、名单、作业、题目、提交）是 POST，搜索开关叫 `search`；展开的子表（`/contest/problems.do`、`/testcase/list.do`、`/submission/listJudge.do`）是 GET，带 `_search`、`page`、`rows`、`sidx`、`sord`、`nd`（`endpoints.grid_json`，被拒绝时换写法并记住）。假 XDOJ 对子表同样严格，改请求时测试会拦住。
+- 某个接口回 400 错误页、回的不是 JSON，**不是掉线**：只有被转到登录页才重新登录。接口错误只让当前任务失败、退避重试（`ResponseError`、`ClientError`），不能抛 `SessionError` 让整个同步停下来。
+- 一样取不到不能拖累另一样：题面和测试点互不依赖；源码最先取，不依赖评测记录；每组测试点、每组程序输出单独取。
+- 题面是 PDF（`viewTextFile.do`），**不能直接复制文字**（字体映射不对会乱码）：用 OCR 识别、和文字层核对（`app/pdftext.py`）；乱码不给学生和大模型看。读题面文字一律用 `pdftext.usable_text`。
+- 诊断：`cli doctor` 列出最近 24 小时每个接口成功几次、失败的状态码，题面、测试点、源码各有多少；`cli xdoj-probe` 用同步程序自己的函数把题面、测试点、源码、评测记录、程序输出各取一遍，只打印成没成功和长度。
 
 ## 还没确认的
 
 - 测试点运行结果 `result` 的数字（1、2……）和评测记录 `judgement` 的数字各代表什么。确认后写进 `backend/app/taxonomy/enums.py`，现在只能在整条提交通过时推断各组都通过。
 - 作业列表里“布置给哪些班”的真实写法（现在兼容数字 id、文本 classId、对象数组三种）。
+- 子表接口当初被拒绝的确切原因（缺 `_search`，还是 `sidx`、`sord`）没有在真服务器上看过状态码；现在照网页的写法发，被拒绝时还会换写法。`xdoj-probe` 的“从头取一遍”和 `doctor` 的按接口统计能看出来。
 
 可以直接请求真实的 XDOJ 来核对，但要遵守上面的只读和间隔要求，输出里遮掉学号、姓名，不要打印任何密码。

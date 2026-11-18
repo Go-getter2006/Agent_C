@@ -107,6 +107,7 @@ def xdoj_probe() -> None:
                 total = sb.get("totalCount") if isinstance(sb, dict) else None
                 typer.echo(f"/user/listStudents.do 按班级的 {label} 筛  共 {total} 人\n  {json.dumps(shape, ensure_ascii=False)}")
         _probe_judging(c)
+        _probe_fetch(c)
 
 
 def _probe_judging(c) -> None:
@@ -134,7 +135,9 @@ def _probe_judging(c) -> None:
     if bad is None:
         typer.echo("最近 100 条里没有没通过的提交，评测详情跳过")
         return
-    judges = rows_of(c.get_json("/submission/listJudge.do", {"submissionId": bad.get("id"), "page": 1, "rows": 20}))
+    from .xdoj.endpoints import grid_json   # 子表：和网页一样带 _search、sidx、sord
+
+    judges = rows_of(grid_json(c, "/submission/listJudge.do", {"submissionId": bad.get("id"), "page": 1, "rows": 20}))
     if not judges:
         typer.echo("/submission/listJudge.do  没有评测记录")
         return
@@ -151,6 +154,75 @@ def _probe_judging(c) -> None:
             # 只说有哪些字段、是不是空、有多长；内容是测试数据，不打印
             desc = {k: (f"{type(v).__name__}，长度 {len(v)}" if isinstance(v, str) else type(v).__name__) for k, v in body.items()}
             typer.echo(f"/submission/getRunOutput.do（只列字段，不打印内容）\n  {json.dumps(desc, ensure_ascii=False)}")
+
+
+def _probe_fetch(c) -> None:
+    """用同步程序自己的函数，把一道作业题、一条没通过的提交从头取一遍：题面、测试点、源码、评测记录、程序输出。
+
+    每一步只打印成没成功、状态码、用了哪种参数写法、多长；题面只打印识别的结果和字数。内容一律不打印。
+    同步哪一步取不到，这里就会在哪一步报错（和后台同步走的是同一段代码）。
+    """
+    from . import pdftext
+    from .xdoj import endpoints as ep
+    from .xdoj.client import SessionError, XdojError
+
+    def step(name: str, fn):
+        try:
+            out = fn()
+        except SessionError:
+            raise
+        except XdojError as exc:
+            typer.echo(f"  ✗ {name}：{exc}")
+            return None
+        typer.echo(f"  ✓ {name}：{out[1] if isinstance(out, tuple) else out}")
+        return out[0] if isinstance(out, tuple) else out
+
+    typer.echo("\n从头取一道作业题（和后台同步同一段代码）：")
+    contests = ep.list_contests(c)
+    pid = next((p for ct in contests for p in (ct.problem_ids or [])), None)
+    if pid is None and contests:   # 作业列表里没带题：从展开的子表取（也是一个 GET 子表）
+        ids = step("作业里的题 /contest/problems.do", lambda: (r := ep.contest_problem_ids(c, contests[0].contest_id), f"{len(r)} 道"))
+        pid = ids[0] if ids else None
+    if pid is None:
+        typer.echo("  没有作业里的题")
+    else:
+        typer.echo(f"  题号 {pid}")
+        cases = step("测试点列表 /testcase/list.do", lambda: (r := ep.list_testcases(c, pid), f"{len(r)} 组"))
+        if cases:
+            step("测试点输入 downloadInputFile.do", lambda: (None, f"{len(ep.testcase_input(c, cases[0].testcase_id))} 字节"))
+            step("测试点输出 downloadOutputFile.do", lambda: (None, f"{len(ep.testcase_output(c, cases[0].testcase_id))} 字节"))
+        got = step("题面文件 viewTextFile.do", lambda: (r := ep.problem_text_file(c, pid), f"{r[1] or '没有类型'}，{len(r[0])} 字节"))
+        if got:
+            data, ctype = got
+            if pdftext.is_pdf(ctype, data):
+                layer = pdftext.layer_text(data)
+                bad = pdftext.garbled(layer or "")
+                typer.echo(f"    PDF 自带的文字层：{'打不开' if layer is None else (f'乱码（{bad}）' if bad else f'看起来正常，{len(layer)} 字')}")
+                typer.echo(f"    OCR：{'可以用' if pdftext.ocr_available() else '没装（requirements-ocr.txt）'}")
+            text, status = pdftext.extract(ctype, data)
+            typer.echo(f"    识别结果：{pdftext.STATUS_NAMES.get(status, status)}，{len(text)} 字"
+                       + ("" if status in pdftext.USABLE else "  ← 题面不能用"))
+
+    typer.echo("\n从头取一条没通过的提交：")
+    body = c.post_json("/submission/list.do", {"page": 1, "rows": 100, "sidx": "s.id", "sord": "desc", "search": "false"})
+    rows = body.get("data") if isinstance(body, dict) else body
+    sub = next((r for r in rows or [] if str(r.get("judgementText") or r.get("judgementStr") or "") not in ("正确", "未评判", "")), None)
+    if sub is None:
+        typer.echo("  最近 100 条里没有没通过的提交")
+    else:
+        sid = sub.get("id")
+        step("源码 downloadSource.do", lambda: (None, f"{len(ep.download_source(c, sid))} 字节"))
+        judges = step("评测记录 /submission/listJudge.do", lambda: (r := ep.list_judges(c, sid), f"{len(r)} 条"))
+        if judges:
+            runs = step("测试点运行记录 listAllJudgeRun.do", lambda: (r := ep.list_judge_runs(c, judges[-1].judge_id), f"{len(r)} 组"))
+            if runs:
+                def output():
+                    o = ep.run_output(c, runs[-1].run_id)
+                    return None, "，".join(f"{k} {'有' if v is not None else '没有'}（{len(v or '')} 字）" for k, v in
+                                          (("程序输出", o.program_output), ("标准输入", o.standard_input), ("标准输出", o.standard_output)))
+                step("程序输出 getRunOutput.do", output)
+    if c.grid_styles:
+        typer.echo("\n子表用的参数写法：" + "，".join(f"{p} 第 {i + 1} 种" for p, i in c.grid_styles.items()))
 
 
 @cli.command("sync-meta")
@@ -274,14 +346,63 @@ def doctor() -> None:
                        f"题目 {s.scalar(select(func.count()).select_from(m.Problem).where(m.Problem.server_id == server.id))} 道；"
                        f"提交 {s.scalar(select(func.count()).select_from(m.Submission).where(m.Submission.server_id == server.id))} 条")
             typer.echo(f"  队列：{json.dumps(store.queue_backlog(s, server.id), ensure_ascii=False)}")
-            failed = s.scalars(select(m.FetchTask).where(m.FetchTask.server_id == server.id, m.FetchTask.status == "failed")
-                               .order_by(m.FetchTask.id.desc()).limit(5)).all()
+            failed = s.scalars(select(m.FetchTask).where(
+                m.FetchTask.server_id == server.id, m.FetchTask.status.in_(("failed", "queued")),
+                m.FetchTask.last_error.is_not(None), m.FetchTask.last_error != "")
+                .order_by(m.FetchTask.id.desc()).limit(8)).all()
             for t in failed:
-                typer.echo(f"  失败的任务：{t.kind} {t.target_id}：{t.last_error[:120]}")
-            bad = s.scalars(select(m.RequestLog).where(m.RequestLog.server_id == server.id, m.RequestLog.ok.is_(False))
-                            .order_by(m.RequestLog.id.desc()).limit(5)).all()
-            for r in bad:
-                typer.echo(f"  失败的请求：{r.endpoint} → {r.status_code}")
+                state = "放弃了（每天夜里再试）" if t.status == "failed" else f"第 {t.attempts} 次没成功，等着重试"
+                typer.echo(f"  出错的任务：{t.kind} {t.target_id}，{state}：{t.last_error[:120]}")
+            _doctor_requests(s, server.id)
+            _doctor_coverage(s, server.id)
+
+
+def _doctor_requests(s, server_id: int) -> None:
+    """最近 24 小时每个接口成功几次、失败的状态码。哪一步一直失败一眼就看得出来。"""
+    import datetime as dt
+
+    since = db.now() - dt.timedelta(hours=24)
+    rows = s.execute(select(m.RequestLog.endpoint, m.RequestLog.ok, m.RequestLog.status_code, func.count())
+                     .where(m.RequestLog.server_id == server_id, m.RequestLog.ts >= since)
+                     .group_by(m.RequestLog.endpoint, m.RequestLog.ok, m.RequestLog.status_code)).all()
+    if not rows:
+        typer.echo("  最近 24 小时没有请求记录")
+        return
+    by: dict[str, dict] = {}
+    for endpoint, ok, status, n in rows:
+        d = by.setdefault(endpoint, {"ok": 0, "bad": {}})
+        if ok:
+            d["ok"] += n
+        else:
+            d["bad"][status] = d["bad"].get(status, 0) + n
+    typer.echo("  最近 24 小时的请求：")
+    for endpoint in sorted(by):
+        d = by[endpoint]
+        bad = "，".join(f"{code or '网络'}×{n}" for code, n in sorted(d["bad"].items()))
+        typer.echo(f"    {endpoint:36} 成功 {d['ok']:>5}" + (f"  失败 {bad}" + ("  ← 一次都没成功" if not d["ok"] else "") if bad else ""))
+
+
+def _doctor_coverage(s, server_id: int) -> None:
+    """作业里的题有没有题面、测试点；提交有没有源码、详情。"""
+    from . import pdftext
+
+    pids = set(s.scalars(select(m.ContestProblem.problem_id).where(m.ContestProblem.server_id == server_id)).all())
+    texts = {r.problem_id: r.extract_status for r in s.execute(
+        select(m.ProblemText.problem_id, m.ProblemText.extract_status).where(m.ProblemText.server_id == server_id)).all()}
+    with_cases = set(s.scalars(select(m.Testcase.problem_id).where(
+        m.Testcase.server_id == server_id, m.Testcase.input_bytes.is_not(None))).all())
+    usable = sum(1 for p in pids if texts.get(p) in pdftext.USABLE)
+    statuses: dict[str, int] = {}
+    for p in pids:
+        st = texts.get(p, "还没下载")
+        statuses[pdftext.STATUS_NAMES.get(st, st)] = statuses.get(pdftext.STATUS_NAMES.get(st, st), 0) + 1
+    typer.echo(f"  作业里的题 {len(pids)} 道：有题面 {usable} 道，有测试点 {len(pids & with_cases)} 道；"
+               f"题面：{json.dumps(statuses, ensure_ascii=False)}；OCR {'可以用' if pdftext.ocr_available() else '没装'}")
+    total = s.scalar(select(func.count()).select_from(m.Submission).where(m.Submission.server_id == server_id)) or 0
+    with_src = s.scalar(select(func.count()).select_from(m.SourceSnapshot).where(m.SourceSnapshot.server_id == server_id)) or 0
+    done = s.scalar(select(func.count()).select_from(m.Submission).where(
+        m.Submission.server_id == server_id, m.Submission.detail_status == "done")) or 0
+    typer.echo(f"  提交 {total} 条：有源码 {with_src} 条，评测详情取齐 {done} 条")
 
 
 @cli.command("graph-update")

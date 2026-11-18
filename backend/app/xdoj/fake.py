@@ -56,6 +56,12 @@ class FakeSubmission:
         return self.judges[-1].points if self.judges else 0
 
 
+# 展开的子表：真实网页用 GET 取，参数是 jqGrid 的 _search、nd、page、rows、sidx、sord
+GRID_PATHS = frozenset({"/contest/problems.do", "/testcase/list.do", "/submission/listJudge.do"})
+# 真实服务器下载文件（源码、测试点）时响应头写的就是这个
+DOWNLOAD_TYPE = "multipart/form-data"
+
+
 class FakeXdoj:
     def __init__(self, teacher_id: str = "teacher01", password: str = "fake-password"):
         self.teacher_id = teacher_id
@@ -79,6 +85,12 @@ class FakeXdoj:
         # 和真实接口一样：评测记录、测试点结果只给数字，语言是一个对象（测试用来核对兼容）
         self.numeric_results = False
         self.language_object = False
+        # 和真实接口一样严格：展开的子表（GET）要带网页里 jqGrid 发的分页和搜索参数，不带就是 Tomcat 的 400 错误页（HTML）。
+        # 以前假服务器什么参数都收，测试全过、真服务器却拒绝——名单那次也是这样漏掉的
+        self.strict_grids = True
+        self.fail_paths: dict[str, int] = {}          # 某个接口一直返回这个状态码（HTML 错误页）
+        self.grid_reject_sidx: dict[str, str] = {}    # 某个子表按这个 sidx 排序时报 500（比如联表后 id 有歧义）
+        self.last_args: dict[str, dict[str, str]] = {}  # 每个接口最近一次收到的参数（测试核对请求的写法）
 
     # ------------------------------------------------------------ 造数据
     def add_student(self, user_id: str, name: str, class_id: int) -> None:
@@ -106,6 +118,13 @@ class FakeXdoj:
         return httpx.Response(status, json=payload)
 
     @staticmethod
+    def _error_page(status: int) -> httpx.Response:
+        """Tomcat 的错误页：HTML，不是 JSON。"""
+        return httpx.Response(status, text=f"<html><head><title>HTTP Status {status}</title></head><body>"
+                                           f"<h1>HTTP Status {status}</h1></body></html>",
+                              headers={"content-type": "text/html;charset=utf-8"})
+
+    @staticmethod
     def _page(rows: list[dict], page: int, size: int) -> dict:
         total = len(rows)
         pages = max(1, (total + size - 1) // size)
@@ -122,12 +141,16 @@ class FakeXdoj:
             self.request_times.append(self.clock())
         if self.fail_queue:
             return httpx.Response(self.fail_queue.pop(0), text="error")
+        if path in self.fail_paths:
+            return self._error_page(self.fail_paths[path])
 
         args: dict[str, str] = {k: v for k, v in request.url.params.items()}
         if request.method == "POST":
             body = request.content.decode("utf-8")
             args.update({k: v[0] for k, v in parse_qs(body, keep_blank_values=True).items()})
 
+        if path != "/user/login.do":
+            self.last_args[path] = {**args, "__ajax": request.headers.get("x-requested-with", "")}
         cookie = request.headers.get("cookie", "")
         session_id = ""
         for part in cookie.split(";"):
@@ -155,6 +178,11 @@ class FakeXdoj:
             return httpx.Response(200, text=f'<ul><li class="light-blue"><span class="user-info"><small>{self.teacher_name}</small>'
                                             f'<small>{self.teacher_id}</small></span></li></ul>')
 
+        if request.method == "GET" and path in GRID_PATHS:
+            if self.strict_grids and not {"_search", "page", "rows", "sidx", "sord"} <= set(args):
+                return self._error_page(400)   # 缺了必填的参数（Spring 的 @RequestParam）
+            if self.grid_reject_sidx.get(path) is not None and args.get("sidx") == self.grid_reject_sidx[path]:
+                return self._error_page(500)
         page = int(args.get("page", 1) or 1)
         size = int(args.get("rows", 20) or 20)
         filters = json.loads(args["filters"]) if args.get("filters") else {"rules": []}
@@ -188,7 +216,7 @@ class FakeXdoj:
                 for t in rows:
                     if t["id"] == tid:
                         key = "input" if "Input" in path else "output"
-                        return httpx.Response(200, content=t[key], headers={"content-type": "text/plain"})
+                        return httpx.Response(200, content=t[key], headers={"content-type": DOWNLOAD_TYPE})
             return httpx.Response(404, text="not found")
         if path == "/submission/list.do":
             rows = sorted(self.submissions.values(), key=lambda x: x.id)
@@ -203,7 +231,7 @@ class FakeXdoj:
                      "contestId": r.contest_id, "classId": r.class_id, "submitTime": r.submit_time,
                      "language": ({"id": 1, "name": r.language, "compiler": "gcc " * 30} if self.language_object
                                   else r.language),
-                     "judgementStr": r.judgement, "points": r.points} for r in rows]
+                     "judgementText": r.judgement, "points": r.points} for r in rows]   # 真实接口：文字结果在 judgementText
             return self._json(self._page(data, page, size))
         if path == "/submission/listJudge.do":
             sub = self.submissions.get(int(args.get("submissionId", 0)))
@@ -239,5 +267,5 @@ class FakeXdoj:
             sub = self.submissions.get(int(args.get("id", 0)))
             if sub is None:
                 return httpx.Response(404, text="not found")
-            return httpx.Response(200, content=sub.source, headers={"content-type": "text/plain"})
+            return httpx.Response(200, content=sub.source, headers={"content-type": DOWNLOAD_TYPE})
         return httpx.Response(404, text="not found")

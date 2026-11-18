@@ -2,16 +2,25 @@
 
 字段名以《XDOJ 探查报告》为准；报告里没有逐一列出的字段，这里按候选名依次尝试，
 第一次连真实服务器时要用 `cli xdoj-probe` 核对（见 docs/问题清单.md）。
+
+请求的参数照网页里 jqGrid 实际发的写，不要自己省略或改写（名单那次就是把 classId 改成了数字才取不到人）：
+- 顶层的管理表格（班级、名单、作业、题目、提交）：POST 表单，page、rows、sidx、sord、nd，搜索开关叫 search；
+- 展开的子表（作业里的题、测试点、评测记录）：GET，同样的分页参数，搜索开关叫 _search。
+子表以前没带 _search（评测记录连 sidx、sord 都没带），服务器拒绝时整条链都断了。
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Iterator
 
-from .client import XdojClient
+from .client import ClientError, ResponseError, RetryExhausted, XdojClient
 from .util import parse_time, pick, scrub, to_float, to_int
+
+log = logging.getLogger("xdoj.endpoints")
 
 
 @dataclass
@@ -36,13 +45,58 @@ def _page(body) -> Page:
     )
 
 
+def _nd() -> str:
+    """jqGrid 每次请求带的时间戳（防缓存）。"""
+    return str(int(time.time() * 1000))
+
+
+# 子表（GET）的几种参数写法。第一种和网页一样；服务器拒绝时依次试后面的，试通了就记住，下次直接用。
+GRID_STYLES: tuple[dict[str, str], ...] = (
+    {"_search": "false", "sidx": "id", "sord": "asc"},
+    {"_search": "false", "sidx": "", "sord": "asc"},
+    {"search": "false", "sidx": "id", "sord": "asc"},
+)
+
+
+def grid_json(client: XdojClient, path: str, params: dict):
+    """取一个子表（GET）。参数写法被拒绝（4xx、5xx、不是 JSON）时换下一种写法，每种只试一次；都不行才报错。"""
+    known = client.grid_styles.get(path)
+    order = list(range(len(GRID_STYLES)))
+    if known is not None:
+        order.remove(known)
+        order.insert(0, known)
+    tried: list[str] = []
+    last_status = 0
+    for i in order:
+        query = {**params, **GRID_STYLES[i], "nd": _nd()}
+        try:
+            # 已经试通的写法照常重试；还没试通的只发一次，不在错的写法上反复重试
+            body = client.get_json(path, query, retry=(i == known))
+        except (ClientError, ResponseError, RetryExhausted) as exc:
+            status = getattr(exc, "status", 0)
+            if isinstance(exc, RetryExhausted) and not status:
+                raise  # 网络不通，换写法没有用
+            tried.append(f"写法{i + 1}→{status or type(exc).__name__}")
+            last_status = status or last_status
+            continue
+        if known != i:
+            log.info("%s 用第 %d 种参数写法%s", path, i + 1, f"（之前试过：{'，'.join(tried)}）" if tried else "")
+            client.grid_styles[path] = i
+        return body
+    raise ResponseError(path, last_status, "几种参数写法都被拒绝：" + "，".join(tried))
+
+
 def _paged(client: XdojClient, method: str, path: str, extra: dict | None = None, rows: int = 100,
            sidx: str = "id", sord: str = "asc") -> Iterator[dict]:
     """按页取完一个列表。只用于班级、名单、题目这类总量不大的元数据。"""
     page_no = 1
     while True:
-        params = {"page": page_no, "rows": rows, "sidx": sidx, "sord": sord, **(extra or {})}
-        body = client.post_json(path, params) if method == "POST" else client.get_json(path, params)
+        if method == "POST":
+            params = {"page": page_no, "rows": rows, "sidx": sidx, "sord": sord, "search": "false",
+                      **(extra or {}), "nd": _nd()}
+            body = client.post_json(path, params)
+        else:
+            body = grid_json(client, path, {"page": page_no, "rows": rows, **(extra or {})})
         page = _page(body)
         yield from page.rows
         if page_no >= page.total_pages or not page.rows:
@@ -300,7 +354,8 @@ class JudgeRow:
 
 
 def list_judges(client: XdojClient, submission_id: int) -> list[JudgeRow]:
-    body = client.get_json("/submission/listJudge.do", {"submissionId": submission_id, "page": 1, "rows": 20})
+    """评测记录是提交详情页里的子表（GET）：和网页一样带 _search、sidx、sord。以前只带了页码。"""
+    body = grid_json(client, "/submission/listJudge.do", {"submissionId": submission_id, "page": 1, "rows": 20})
     out = []
     for r in _page(body).rows:
         jid = to_int(r.get("id"))

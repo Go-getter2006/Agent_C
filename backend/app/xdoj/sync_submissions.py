@@ -11,6 +11,7 @@ from .. import models as m
 from ..taxonomy import normalize_judgement
 from . import endpoints as ep
 from .api import request_meta_sync_if_stale
+from .client import SessionError, XdojError
 from .store import SyncContext, enqueue, get_state, set_state, set_time
 from .util import decode_bytes, detect_encoding
 
@@ -93,15 +94,25 @@ class NotJudgedYet(Exception):
 
 
 def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = False) -> str:
-    """取齐一条提交的详情。返回 done；还没评测完时抛 NotJudgedYet。每一步都按 XDOJ 的编号写入，可重复执行。"""
+    """取齐一条提交的详情。返回 done；还没评测完时抛 NotJudgedYet。每一步都按 XDOJ 的编号写入，可重复执行。
+
+    源码最先取，而且不依赖评测记录（只要提交编号）：以前源码排在最后，评测记录一取不到，源码也跟着没有。
+    每组测试点的输出单独取，一组出错不耽误别的组。有一步出错，拿到的先存下，最后把错误抛出去，任务过一会儿重试。
+    """
     with db.session_scope() as s:
         sub = s.get(m.Submission, (ctx.server_id, submission_id))
         if sub is None:
             raise LookupError(f"库里没有提交 {submission_id}")
         problem_id = sub.problem_id
         list_code, list_text = sub.judgement, sub.judgement_text
-    if source_first:  # P0：先拿到源码
+    errors: list[XdojError] = []
+    try:
         _fetch_source(ctx, submission_id)
+    except SessionError:
+        raise
+    except XdojError as exc:
+        log.warning("提交 %s 的源码没取到：%s", submission_id, exc)
+        errors.append(exc)
 
     judges = ep.list_judges(ctx.client, submission_id)
     if not judges:
@@ -152,14 +163,21 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
         with db.session_scope() as s:
             if s.get(m.RunOutput, (ctx.server_id, r.run_id)) is not None:
                 continue
-        out = ep.run_output(ctx.client, r.run_id)
+        try:
+            out = ep.run_output(ctx.client, r.run_id)
+        except SessionError:
+            raise
+        except XdojError as exc:
+            errors.append(exc)
+            continue
         with db.session_scope() as s:
             data = (out.program_output or "").encode("utf-8")
             s.add(m.RunOutput(server_id=ctx.server_id, run_id=r.run_id, program_output_bytes=data,
                               encoding="utf-8", truncated=False, fetched_at=ctx.now()))
             _crosscheck_testcase(s, ctx, problem_id, r.testcase_id, out)
 
-    _fetch_source(ctx, submission_id)
+    if errors:
+        raise errors[0]
     with db.session_scope() as s:
         sub = s.get(m.Submission, (ctx.server_id, submission_id))
         sub.detail_status = "done"

@@ -1,10 +1,9 @@
-"""同步用到的小工具：时间、编码、哈希、去掉敏感字段、题面抽文字。"""
+"""同步用到的小工具：时间、编码、哈希、去掉敏感字段。题面识别在 app/pdftext.py。"""
 from __future__ import annotations
 
 import base64
 import datetime as dt
 import hashlib
-import io
 import json
 import re
 from typing import Any
@@ -120,31 +119,6 @@ def decode_bytes(data: bytes | None, encoding: str = "") -> tuple[str | None, bo
         except (UnicodeDecodeError, LookupError):
             continue
     return base64.b64encode(data).decode("ascii"), False
-
-
-def extract_problem_text(content_type: str, data: bytes) -> tuple[str, str]:
-    """题面抽文字。返回 (文字, 状态)：ok / empty_needs_ocr / failed。"""
-    if not data:
-        return "", "failed"
-    is_pdf = data[:5] == b"%PDF-" or "pdf" in (content_type or "").lower()
-    if not is_pdf:
-        text, ok = decode_bytes(data, detect_encoding(data))
-        if not ok or not (text or "").strip():
-            return "", "failed"
-        if "<html" in text.lower() or "<body" in text.lower() or "<p" in text.lower():
-            text = re.sub(r"<(script|style)[\s\S]*?</\1>", "", text, flags=re.I)
-            text = re.sub(r"<br\s*/?>|</p>|</div>|</li>|</h\d>", "\n", text, flags=re.I)
-            text = re.sub(r"<[^>]+>", "", text)
-        return text.strip(), "ok"
-    try:
-        import pdfplumber
-
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            pages = [page.extract_text() or "" for page in pdf.pages]
-    except Exception:
-        return "", "failed"
-    text = "\n".join(pages).strip()
-    return (text, "ok") if text else ("", "empty_needs_ocr")
 
 
 def first_diff_line(a: str, b: str) -> int | None:

@@ -176,7 +176,7 @@ class ProblemText(Base):
     file_bytes: Mapped[bytes] = mapped_column(LargeBinary, default=b"")
     file_hash: Mapped[str] = mapped_column(String(64), default="")
     extracted_text: Mapped[str] = mapped_column(Text, default="")
-    extract_status: Mapped[str] = mapped_column(String(24), default="ok")  # ok / empty_needs_ocr / failed
+    extract_status: Mapped[str] = mapped_column(String(24), default="ok")  # 见 pdftext.STATUS_NAMES；USABLE 里的才能用
     fetched_at: Mapped[Dt] = _ts()
 
 

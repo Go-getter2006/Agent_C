@@ -17,7 +17,9 @@ from .. import accounts, db
 from .. import models as m
 from . import endpoints as ep
 from .store import SyncContext, enqueue, get_state, get_time, set_state, set_time
-from .util import detect_encoding, extract_problem_text, json_hash, sha256, to_int
+from .. import pdftext
+from .client import SessionError, XdojError
+from .util import detect_encoding, json_hash, sha256, to_int
 
 log = logging.getLogger("xdoj.meta")
 
@@ -263,16 +265,39 @@ def queue_assigned(ctx: SyncContext) -> int:
 
 def sync_problem_assets(ctx: SyncContext, problem_id: int, force_files: bool = True, is_new: bool = False,
                         priority: int | None = None) -> bool:
-    """下载一道题的测试点和题面；有变化就入队重新标注。返回有没有变化。"""
-    tc_changed = _sync_testcases(ctx, problem_id, force_files=force_files)
-    text_changed = _sync_problem_text(ctx, problem_id)
+    """下载一道题的题面和测试点；有变化就入队重新标注。返回有没有变化。
+
+    题面和测试点互不依赖：一样出错不耽误另一样（以前测试点列表一失败，题面也跟着没下载）。
+    两样都齐了才算下载过；有一样出错，拿到的那一样先存下，再把错误抛出去，任务过一会儿重试。
+    """
+    with db.session_scope() as s:
+        if s.get(m.Problem, (ctx.server_id, problem_id)) is None:  # 题库列表里还没有这道题：先建一行
+            s.add(m.Problem(server_id=ctx.server_id, problem_id=problem_id))
+    errors: list[XdojError] = []
+    text_changed = tc_changed = False
+    try:
+        text_changed = _sync_problem_text(ctx, problem_id)
+    except SessionError:
+        raise
+    except XdojError as exc:
+        log.warning("题目 %s 的题面没取到：%s", problem_id, exc)
+        errors.append(exc)
+    try:
+        tc_changed = _sync_testcases(ctx, problem_id, force_files=force_files)
+    except SessionError:
+        raise
+    except XdojError as exc:
+        log.warning("题目 %s 的测试点没取全：%s", problem_id, exc)
+        errors.append(exc)
     with db.session_scope() as s:
         row = s.get(m.Problem, (ctx.server_id, problem_id))
         first = not row.assets_fetched
-        row.assets_fetched = True
-        changed = is_new or first or tc_changed or text_changed
+        row.assets_fetched = not errors
+        changed = is_new or (first and not errors) or tc_changed or text_changed
         if changed:
             enqueue(s, ctx.server_id, "label_problem", problem_id, priority if priority is not None else 2)
+    if errors:
+        raise errors[0]
     return changed
 
 
@@ -283,7 +308,6 @@ def _sync_testcases(ctx: SyncContext, problem_id: int, force_files: bool) -> boo
         prob = s.get(m.Problem, (ctx.server_id, problem_id))
         list_changed = prob.testcase_list_hash != list_hash
         had_list = bool(prob.testcase_list_hash)
-        prob.testcase_list_hash = list_hash
         existing = {t.testcase_id: t for t in s.scalars(select(m.Testcase).where(
             m.Testcase.server_id == ctx.server_id, m.Testcase.problem_id == problem_id)).all()}
         for seq, r in enumerate(rows, start=1):
@@ -296,11 +320,18 @@ def _sync_testcases(ctx: SyncContext, problem_id: int, force_files: bool) -> boo
         missing = {r.testcase_id for r in rows
                    if r.testcase_id not in existing or existing[r.testcase_id].input_bytes is None}
     changed = list_changed and had_list
+    errors: list[XdojError] = []
     for r in rows:
         if not (force_files or list_changed or r.testcase_id in missing):
             continue
-        data_in = ep.testcase_input(ctx.client, r.testcase_id)
-        data_out = ep.testcase_output(ctx.client, r.testcase_id)
+        try:  # 每组单独下载：一组出错不耽误别的组
+            data_in = ep.testcase_input(ctx.client, r.testcase_id)
+            data_out = ep.testcase_output(ctx.client, r.testcase_id)
+        except SessionError:
+            raise
+        except XdojError as exc:
+            errors.append(exc)
+            continue
         io_hash = sha256(data_in + b"\x00" + data_out)
         with db.session_scope() as s:
             t = s.get(m.Testcase, (ctx.server_id, r.testcase_id))
@@ -313,29 +344,36 @@ def _sync_testcases(ctx: SyncContext, problem_id: int, force_files: bool) -> boo
             t.input_bytes, t.input_encoding = data_in, detect_encoding(data_in)
             t.output_bytes, t.output_encoding = data_out, detect_encoding(data_out)
             t.io_hash, t.fetched_at = io_hash, ctx.now()
+    if errors:
+        raise errors[0]  # 列表的哈希不记：下次还会把没下载到的补上
+    with db.session_scope() as s:
+        s.get(m.Problem, (ctx.server_id, problem_id)).testcase_list_hash = list_hash
     return changed
 
 
 def _sync_problem_text(ctx: SyncContext, problem_id: int) -> bool:
+    """题面是一个文件（多半是 PDF）。PDF 不能直接抽文字（字体映射不对会乱码），由 app/pdftext.py 识别。"""
     data, content_type = ep.problem_text_file(ctx.client, problem_id)
     file_hash = sha256(data)
     with db.session_scope() as s:
         row = s.get(m.ProblemText, (ctx.server_id, problem_id))
-        if row is not None and row.file_hash == file_hash:
+        if row is not None and row.file_hash == file_hash and not pdftext.needs_redo(row.extract_status, row.file_bytes):
             return False
-        changed = row is not None
+        changed = row is not None and row.file_hash != file_hash
         if row is None:
             row = m.ProblemText(server_id=ctx.server_id, problem_id=problem_id)
             s.add(row)
-        else:
+        elif changed:
             s.add(m.Archive(server_id=ctx.server_id, kind="problem_text", target_id=problem_id,
                             content_hash=row.file_hash,
                             payload={"content_type": row.content_type,
                                      "file_b64": base64.b64encode(row.file_bytes or b"").decode("ascii")}))
-        text, status = extract_problem_text(content_type, data)
+        old_text = row.extracted_text or ""
+        text, status = pdftext.extract(content_type, data)
         row.content_type, row.file_bytes, row.file_hash = content_type[:64], data, file_hash
         row.extracted_text, row.extract_status, row.fetched_at = text, status, ctx.now()
-        return changed
+        log.info("题目 %s 的题面：%s，%d 字", problem_id, pdftext.STATUS_NAMES.get(status, status), len(text))
+        return changed or text != old_text
 
 
 def sync_metadata(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> dict:

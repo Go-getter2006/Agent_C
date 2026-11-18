@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models as m
+from .. import pdftext
 from ..db import BEIJING
 from ..taxonomy import JUDGEMENTS
 from .util import decode_bytes, first_diff_line
@@ -68,7 +69,7 @@ def assemble_submission(s: Session, server_id: int, submission_id: int, include_
     }
     if include_problem_text:
         text = s.get(m.ProblemText, (server_id, sub.problem_id))
-        out["problemText"] = text.extracted_text if text else None
+        out["problemText"] = pdftext.usable_text(text) or None
 
     testcases = {t.testcase_id: t for t in s.scalars(select(m.Testcase).where(
         m.Testcase.server_id == server_id, m.Testcase.problem_id == sub.problem_id)).all()}

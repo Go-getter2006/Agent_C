@@ -50,7 +50,11 @@ class NotAllowed(XdojError):
 
 
 class SessionError(XdojError):
-    """登录失败，或重新登录后会话仍然无效。应当停下报错。"""
+    """登录本身失败（账号或密码不对、账号停用、登录接口不对劲）。应当停下报错。
+
+    注意：某一个接口拒绝了请求（400、返回的不是 JSON、重新登录后仍被转到登录页）不是这个错，
+    是 ResponseError：只让这一个任务失败、过一会儿重试，不能让整个后台同步停下来。
+    """
 
 
 class ClientError(XdojError):
@@ -63,6 +67,18 @@ class ClientError(XdojError):
 
 class RetryExhausted(XdojError):
     """网络错误、超时、5xx、429 重试用尽。"""
+
+    def __init__(self, message: str, status: int = 0):
+        super().__init__(message)
+        self.status = status
+
+
+class ResponseError(XdojError):
+    """接口回的东西不对：该是 JSON 却不是、重新登录后这个接口仍然转到登录页。只记状态码和类型，不记内容。"""
+
+    def __init__(self, endpoint: str, status: int, what: str):
+        super().__init__(f"{endpoint} 返回 {status}：{what}")
+        self.status = status
 
 
 class RateLimiter:
@@ -140,6 +156,7 @@ class XdojClient:
         )
         self.logged_in = False
         self.user_type = None
+        self.grid_styles: dict[str, int] = {}  # 子表接口试通的参数写法（见 endpoints.grid_json）
         self.request_count = 0
         self.consecutive_failures = 0
 
@@ -150,7 +167,7 @@ class XdojClient:
         self._http.close()
 
     # ------------------------------------------------------------ 底层
-    def _send_once(self, method: str, path: str, params, data) -> httpx.Response:
+    def _send_once(self, method: str, path: str, params, data, ajax: bool = False) -> httpx.Response:
         key = (method.upper(), path)
         if key not in WHITELIST:
             raise NotAllowed(f"接口不在白名单里，已拒绝：{method.upper()} {path}")
@@ -160,7 +177,8 @@ class XdojClient:
             t0 = time.monotonic()
             status, ok = 0, False
             try:
-                headers = {"X-Requested-With": "XMLHttpRequest"} if method.upper() == "POST" else None
+                # 和网页一样：页面里用 jQuery 取的 JSON 接口都带这个头；下载文件是直接打开链接，不带
+                headers = {"X-Requested-With": "XMLHttpRequest"} if ajax else None
                 resp = self._http.request(method.upper(), url, params=params, data=data, headers=headers)
                 status = resp.status_code
                 ok = 200 <= status < 300
@@ -176,12 +194,15 @@ class XdojClient:
                     except Exception:  # 记日志失败不能影响同步
                         log.exception("写请求日志失败")
 
-    def _send_with_retry(self, method: str, path: str, params, data) -> httpx.Response:
+    def _send_with_retry(self, method: str, path: str, params, data, ajax: bool = False,
+                         retries: int | None = None) -> httpx.Response:
         delay = 1.0
         last: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        last_status = 0
+        retries = self.max_retries if retries is None else retries
+        for attempt in range(retries + 1):
             try:
-                resp = self._send_once(method, path, params, data)
+                resp = self._send_once(method, path, params, data, ajax)
             except NotAllowed:
                 raise
             except (httpx.TransportError, httpx.TimeoutException) as exc:
@@ -189,15 +210,17 @@ class XdojClient:
             else:
                 if resp.status_code == 429 or resp.status_code >= 500:
                     last = XdojError(f"{path} 返回 {resp.status_code}")
+                    last_status = resp.status_code
                     retry_after = resp.headers.get("Retry-After", "")
                     if retry_after.isdigit():
                         delay = max(delay, float(retry_after))
                 else:
                     return resp
-            if attempt < self.max_retries:
+            if attempt < retries:
                 self._sleep(delay)
                 delay = min(delay * 2, 60.0)
-        raise RetryExhausted(f"{path} 重试 {self.max_retries} 次后仍失败：{type(last).__name__}")
+        what = f"状态码 {last_status}" if last_status else type(last).__name__
+        raise RetryExhausted(f"{path} 重试 {retries} 次后仍失败：{what}", last_status)
 
     # ------------------------------------------------------------ 登录
     def login(self) -> None:
@@ -205,7 +228,7 @@ class XdojClient:
         self._send_with_retry("GET", "/", None, None)
         resp = self._send_with_retry(
             "POST", "/user/login.do", None,
-            {"userId": self._user_id, "password": self._password, "preferLanguage": "zh_CN"},
+            {"userId": self._user_id, "password": self._password, "preferLanguage": "zh_CN"}, ajax=True,
         )
         try:
             body = resp.json()
@@ -237,40 +260,57 @@ class XdojClient:
         return None
 
     @staticmethod
-    def _looks_logged_out(resp: httpx.Response, expect: str) -> bool:
-        if resp.status_code in (301, 302, 303, 307, 401):
+    def _sent_to_login(resp: httpx.Response) -> bool:
+        """会话失效：被转到登录页（302，或 200 但内容就是登录页）。
+
+        只有这种情况才重新登录。400、500 这类错误页、返回的不是 JSON，都不是会话的问题：以前把它们也当成
+        “掉线了”，重新登录后照样不对就报“会话无效”，整个后台同步停下来、过 30 秒重启、又卡在同一个任务上。
+        """
+        if resp.status_code in (301, 302, 303, 307, 308, 401):
             return True
-        if expect == "json":
-            try:
-                resp.json()
-            except ValueError:
-                return True
+        if resp.status_code == 200 and "html" in resp.headers.get("content-type", "").lower():
+            head = resp.text[:20000]
+            return "loginform" in head or "/user/login.do" in head
         return False
 
     # ------------------------------------------------------------ 对外
     def request(self, method: str, path: str, *, params: dict | None = None, data: dict | None = None,
-                expect: str = "json") -> httpx.Response:
-        """发一个白名单内的请求。会话失效时重新登录一次再试；仍失效就抛 SessionError。"""
+                expect: str = "json", retry: bool = True) -> httpx.Response:
+        """发一个白名单内的请求。被转到登录页时重新登录一次再试。
+
+        - 登录本身失败：SessionError（停下报错）；
+        - 这个接口拒绝了请求（4xx）：ClientError；5xx、网络问题重试用尽：RetryExhausted；
+        - 该是 JSON 却不是、重新登录后仍被转到登录页：ResponseError。
+        后三种只让当前任务失败，过一会儿重试。retry=False 时 5xx 不重试（试参数写法时用）。
+        """
         if (method.upper(), path) not in WHITELIST:
             raise NotAllowed(f"接口不在白名单里，已拒绝：{method.upper()} {path}")
         if not self.logged_in:
             self.login()
-        resp = self._send_with_retry(method, path, params, data)
-        if self._looks_logged_out(resp, expect):
+        ajax = expect == "json"
+        retries = None if retry else 0
+        resp = self._send_with_retry(method, path, params, data, ajax, retries)
+        if self._sent_to_login(resp):
             self.logged_in = False
             self.login()
-            resp = self._send_with_retry(method, path, params, data)
-            if self._looks_logged_out(resp, expect):
-                raise SessionError(f"{path}：重新登录后会话仍然无效")
+            resp = self._send_with_retry(method, path, params, data, ajax, retries)
+            if self._sent_to_login(resp):
+                raise ResponseError(path, resp.status_code, "重新登录后这个接口仍然转到登录页")
         if 400 <= resp.status_code < 500:
             raise ClientError(resp.status_code, path)
+        if expect == "json":
+            try:
+                resp.json()
+            except ValueError:
+                ctype = resp.headers.get("content-type", "").split(";")[0] or "没有类型"
+                raise ResponseError(path, resp.status_code, f"不是 JSON（{ctype}）") from None
         return resp
 
-    def get_json(self, path: str, params: dict | None = None):
-        return self.request("GET", path, params=params).json()
+    def get_json(self, path: str, params: dict | None = None, retry: bool = True):
+        return self.request("GET", path, params=params, retry=retry).json()
 
-    def post_json(self, path: str, data: dict | None = None):
-        return self.request("POST", path, data=data).json()
+    def post_json(self, path: str, data: dict | None = None, retry: bool = True):
+        return self.request("POST", path, data=data, retry=retry).json()
 
     def get_bytes(self, path: str, params: dict | None = None) -> tuple[bytes, str]:
         resp = self.request("GET", path, params=params, expect="bytes")
