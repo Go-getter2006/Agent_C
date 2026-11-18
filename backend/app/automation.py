@@ -6,7 +6,7 @@
 - 结束超时的对话回合（学生走开了也会结束），这样才能评估；
 - 智能体评估刚结束的回合的“理解”（assess.py）；
 - 给有了新数据的学生自动写（或重写）学情评语（profile.py）；
-- 以前直接抽文字（可能乱码）、或者当时没有 OCR 的 PDF 题面，重新识别（pdftext.py）。
+- 以前的程序处理的 PDF 题面重新抽一遍，抽好了还没交给大模型整理的整理一遍（pdftext.py）。
 
 每天夜里（graphmodel.nightly）：把没评完的回合评完、图模型全图更新、补记预测、重新学融合权重、
 所有该写评语的学生写评语、跨课程联系自动补充、检验、采用或不用（cross.auto_links）。
@@ -22,7 +22,7 @@ from .chat import workflow
 log = logging.getLogger("automation")
 
 _last: dict[str, float] = {}
-EVERY = {"rounds": 60.0, "reviews": 300.0, "assess": 10.0, "pdftext": 120.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
+EVERY = {"rounds": 60.0, "reviews": 300.0, "assess": 10.0, "pdftext": 60.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
 
 
 def _due(name: str) -> bool:
@@ -50,7 +50,7 @@ def idle_work() -> int:
     if _due("reviews"):
         done += profile.refresh_reviews(limit=profile.config.PROFILE["reviews_per_run"])
     if _due("pdftext"):
-        # 以前直接抽文字的 PDF 题面（可能是乱码）、当时没有 OCR 的题面：自动重新识别，每次一道
+        # 以前的程序处理的 PDF 题面重新抽；还没交给大模型整理的整理（每次两道）
         with db.session_scope() as s:
             redone = pdftext.redo_stored(s)
         if redone:

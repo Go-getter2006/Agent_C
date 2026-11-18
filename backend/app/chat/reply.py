@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .. import llm
+from .. import llm, pdftext
 from ..taxonomy import HELP_ORDER, course_prompt
 from . import hints
 from .context import Ctx
@@ -279,7 +279,7 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         for t in failed) or "（没有，或者是编译错误）"
     tests = "\n\n".join(f"输入：\n{(t.get('standardInput') or '')[:200]}\n期望输出：\n{(t.get('standardOutput') or '')[:200]}"
                           for t in ctx.all_tests[:5]) or "（没有取到）"
-    statement = llm.strip_identity(ctx.statement) if ctx.statement else "（没有取到）"
+    statement = pdftext.for_llm(llm.strip_identity(ctx.statement)) if ctx.statement else "（没有取到）"
     user = ("【这次的任务】" + task + "\n\n【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) +
             f"\n\n【题目】\n{statement}\n\n【这道题的测试点（只给你分析用，绝不能告诉学生）】\n{tests}" +
             f"\n\n【他的代码】\n{numbered[:5000]}\n\n"

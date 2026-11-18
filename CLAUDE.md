@@ -32,7 +32,7 @@
 - **请求参数照网页里 jqGrid 实际发的写，不要省略或改写**（名单那次把文本 classId 改成数字就取不到人）：顶层表格（班级、名单、作业、题目、提交）是 POST，搜索开关叫 `search`；展开的子表（`/contest/problems.do`、`/testcase/list.do`、`/submission/listJudge.do`）是 GET，带 `_search`、`page`、`rows`、`sidx`、`sord`、`nd`（`endpoints.grid_json`，被拒绝时换写法并记住）。假 XDOJ 对子表同样严格，改请求时测试会拦住。
 - 某个接口回 400 错误页、回的不是 JSON，**不是掉线**：只有被转到登录页才重新登录。接口错误只让当前任务失败、退避重试（`ResponseError`、`ClientError`），不能抛 `SessionError` 让整个同步停下来。
 - 一样取不到不能拖累另一样：题面和测试点互不依赖；源码最先取，不依赖评测记录；每组测试点、每组程序输出单独取。
-- 题面是 PDF（`viewTextFile.do`），**不能直接复制文字**（字体映射不对会乱码）：用 OCR 识别、和文字层核对（`app/pdftext.py`）；乱码不给学生和大模型看。读题面文字一律用 `pdftext.usable_text`。
+- 题面是 PDF（`viewTextFile.do`），都带文字层。**禁止 OCR。** 做法（`app/pdftext.py`）：文字层用 pdfplumber、PDFium 两种办法抽，挑乱码少的，编码错位程序还原；示意图从页面上裁成 PNG、文字里写 `[图N]`；再交给大模型整理排版（标注这道题之前、空闲时，每个文件一次），程序核对数字、`[图N]`、汉字来源，不合格就用程序抽的文字。乱码不给学生和大模型看，学生端一直有“看原题”（原 PDF）。读题面文字一律用 `pdftext.usable_text`，发给大模型前过 `pdftext.for_llm`。
 - 诊断：`cli doctor` 列出最近 24 小时每个接口成功几次、失败的状态码，题面、测试点、源码各有多少；`cli xdoj-probe` 用同步程序自己的函数把题面、测试点、源码、评测记录、程序输出各取一遍，只打印成没成功和长度。
 
 ## 还没确认的

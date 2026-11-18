@@ -1,5 +1,0 @@
-# 题面 PDF 的 OCR（离线、认中文，CPU 就行）。XDOJ 的题面是 PDF，直接抽文字会乱码，要靠它识别（见 app/pdftext.py）。
-# 单独放一个文件：装不上也不影响运行（run.sh 会接着跑），只是乱码的题面先不显示。
-# rapidocr 3.x 第一次用的时候会下载识别模型（几十 MB）。
-rapidocr>=3.0,<4
-onnxruntime>=1.17

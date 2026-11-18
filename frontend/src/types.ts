@@ -55,7 +55,9 @@ export interface ProblemDetail {
   title: string;
   brief: string;
   homeworkKey: string | null;
-  statement: string;
+  statement: string;   // 题面文字，[图N] 是示意图的位置
+  figures: { n: number; url: string; width: number; height: number }[];
+  original: string | null;   // 原题 PDF
   submissions: SubmissionView[]; // 新的在前
   changes: Record<string, SubmissionChange>;
   knowledge: KnowledgeLevel[];

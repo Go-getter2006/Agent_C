@@ -22,7 +22,7 @@ def test_probe_fetches_like_the_sync_and_says_where_it_breaks(ctx, fake, capsys)
     out = capsys.readouterr().out
     for step in ("测试点列表", "测试点输入", "题面文件", "源码", "评测记录", "测试点运行记录", "程序输出"):
         assert f"✓ {step}" in out, step
-    assert "识别结果：文字文件" in out and "✗" not in out
+    assert "程序抽的文字：文字文件" in out and "✗" not in out
     assert "2 3" not in out and "两个整数" not in out and "scanf" not in out    # 不打印内容
     fake.fail_paths["/testcase/list.do"] = 400
     _probe_fetch(ctx.client)

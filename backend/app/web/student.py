@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import difflib
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -149,12 +149,42 @@ def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depen
     views = catalog.submissions_view(s, user.student_id, info.server_id, info.problem_id)
     contest = catalog.visible_problems(s, user.student_id, user.course).get((info.server_id, info.problem_id))
     text = s.get(m.ProblemText, (info.server_id, info.problem_id))
+    figures = s.execute(select(m.ProblemFigure.seq, m.ProblemFigure.width, m.ProblemFigure.height).where(
+        m.ProblemFigure.server_id == info.server_id, m.ProblemFigure.problem_id == info.problem_id)
+        .order_by(m.ProblemFigure.seq)).all()
+    has_pdf = text is not None and pdftext.is_pdf(text.content_type, (text.file_bytes or b"")[:5])
     return {"key": info.key, "title": info.title, "brief": info.brief,
             "homeworkKey": catalog.homework_key(*contest) if contest else None,
             "statement": pdftext.usable_text(text)[:6000],
+            # 示意图（题面文字里 [图N] 的位置）和原题 PDF：学生在 XDOJ 上本来就能看到题面
+            "figures": [{"n": n, "url": f"/api/problems/{info.key}/figures/{n}", "width": w, "height": h}
+                        for n, w, h in figures],
+            "original": f"/api/problems/{info.key}/original" if has_pdf else None,
             "submissions": views[::-1],
             "changes": changes.problem_changes(s, user.student_id, info.server_id, info.problem_id),
             "knowledge": progress.problem_knowledge(s, user.student_id, info.server_id, info.problem_id)}
+
+
+@router.get("/problems/{key}/figures/{n}")
+def problem_figure(key: str, n: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> Response:
+    """题面里的第 n 张示意图（从 PDF 页面上裁下来的 PNG）。"""
+    info = _problem(s, user, key)
+    fig = s.get(m.ProblemFigure, (info.server_id, info.problem_id, n))
+    if fig is None:
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    return Response(fig.png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/problems/{key}/original")
+def problem_original(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> Response:
+    """原题（XDOJ 上的题面 PDF），在浏览器里直接打开。"""
+    info = _problem(s, user, key)
+    text = s.get(m.ProblemText, (info.server_id, info.problem_id))
+    if text is None or not pdftext.is_pdf(text.content_type, text.file_bytes):
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    return Response(text.file_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{info.problem_id}.pdf"',
+                             "Cache-Control": "private, max-age=3600"})
 
 
 # ------------------------------------------------------------ 提交、源码、差异
