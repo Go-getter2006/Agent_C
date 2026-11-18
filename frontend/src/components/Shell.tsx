@@ -1,8 +1,11 @@
 // 外壳：深色侧边栏 + 内容。
-// 很宽（学生端 1440 以上、教师端 1280 以上）时侧边栏展开，带文字；中等宽度收成图标竖条；手机上学生端是底部标签栏，教师端是顶栏加抽屉。
+// 学生端：上面三个栏目按来意排（知识问答、作业引导、复习提升），“我的学情”在左下角；侧边栏一直是窄的图标竖条。
+// 每个栏目记着自己最近的位置：从别的栏目点回来，还是上次那道题、那个问答（lib/memory.ts）。
+// 教师端：很宽（1280 以上）时侧边栏展开，带文字；中等宽度收成图标竖条。手机上学生端是底部标签栏，教师端是顶栏加抽屉。
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
-import { BarChart3, Braces, ListChecks, LogOut, Menu, MessageSquare, RotateCcw, type LucideIcon } from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
+import { BarChart3, Braces, LogOut, Menu, MessagesSquare, NotebookPen, RotateCcw, type LucideIcon } from "lucide-react";
+import { sectionTarget } from "../lib/memory";
 import { useSession, useStatus } from "../session";
 import { useSlider } from "./Slider";
 import { Avatar, Drawer } from "./ui";
@@ -13,14 +16,23 @@ export interface NavItem {
   icon: LucideIcon;
   badge?: number;
   section?: string;
+  match?: string[];   // 哪些路径算在这一项里（不写就是 to 本身）
 }
 
 export const studentNav = (dueReviews = 0): NavItem[] => [
-  { to: "/chat", label: "对话", icon: MessageSquare },
-  { to: "/submissions", label: "提交", icon: ListChecks },
-  { to: "/review", label: "复习", icon: RotateCcw, badge: dueReviews },
-  { to: "/progress", label: "学情", icon: BarChart3 },
+  { to: sectionTarget("ask"), match: ["/ask"], label: "知识问答", icon: MessagesSquare },
+  { to: sectionTarget("homework"), match: ["/homework"], label: "作业引导", icon: NotebookPen },
+  { to: sectionTarget("review"), match: ["/review"], label: "复习提升", icon: RotateCcw, badge: dueReviews },
 ];
+
+/** 左下角：我的学情（全部提交记录也算在这里）。 */
+export const studentBottom = (): NavItem[] => [
+  { to: sectionTarget("progress"), match: ["/progress", "/submissions"], label: "我的学情", icon: BarChart3 },
+];
+
+function isActive(item: NavItem, path: string): boolean {
+  return (item.match ?? [item.to]).some((base) => path === base || path.startsWith(base + "/") || path.startsWith(base + "?"));
+}
 
 function Brand() {
   return (
@@ -42,17 +54,20 @@ function NavList({ nav, onNavigate, name = "side" }: { nav: NavItem[]; onNavigat
       {nav.map((item) => {
         const head = item.section && item.section !== section ? ((section = item.section), <div key={`s-${item.section}`} className="nav-label">{item.section}</div>) : null;
         const Icon = item.icon;
+        const active = isActive(item, location.pathname);
         return [
           head,
-          <NavLink key={item.to} to={item.to} className="nav-item" onClick={onNavigate}
-            aria-label={item.badge ? `${item.label}，${item.badge} 项待处理` : undefined}>
+          // 当前所在的栏目点了不跳走；别的栏目回到它最近的位置
+          <Link key={item.label} to={active ? location.pathname + location.search : item.to}
+            className={active ? "nav-item active" : "nav-item"} aria-current={active ? "page" : undefined}
+            onClick={onNavigate} aria-label={item.badge ? `${item.label}，${item.badge} 项待处理` : undefined}>
             <span className="nav-icon">
               <Icon size={20} aria-hidden="true" />
               {!!item.badge && <span className="nav-dot" aria-hidden="true" />}
             </span>
             <span className="nav-text">{item.label}</span>
             {!!item.badge && <span className="nav-badge num" aria-hidden="true">{item.badge}</span>}
-          </NavLink>,
+          </Link>,
         ];
       })}
     </div>
@@ -88,14 +103,16 @@ function TabBar({ nav }: { nav: NavItem[] }) {
       <span className={`${slider.className} tab-slider`} style={slider.style} aria-hidden="true" />
       {nav.map((item) => {
         const Icon = item.icon;
+        const active = isActive(item, location.pathname);
         return (
-          <NavLink key={item.to} to={item.to} aria-label={item.badge ? `${item.label}，${item.badge} 项待处理` : undefined}>
+          <Link key={item.label} to={active ? location.pathname + location.search : item.to} className={active ? "active" : undefined}
+            aria-current={active ? "page" : undefined} aria-label={item.badge ? `${item.label}，${item.badge} 项待处理` : undefined}>
             <span className="nav-icon">
               <Icon size={22} aria-hidden="true" />
               {!!item.badge && <span className="nav-dot" aria-hidden="true" />}
             </span>
             <span>{item.label}</span>
-          </NavLink>
+          </Link>
         );
       })}
     </nav>
@@ -104,15 +121,16 @@ function TabBar({ nav }: { nav: NavItem[] }) {
 
 interface ShellProps {
   nav: NavItem[];
+  bottom?: NavItem[];   // 侧边栏左下角的几项（学生端：我的学情）
   kind?: "student" | "teacher";
   children: ReactNode;
 }
 
-export function Shell({ nav, kind = "student", children }: ShellProps) {
+export function Shell({ nav, bottom = [], kind = "student", children }: ShellProps) {
   const [menu, setMenu] = useState(false);
   const location = useLocation();
   useEffect(() => setMenu(false), [location.pathname]);
-  const current = nav.find((n) => location.pathname.startsWith(n.to));
+  const current = [...nav, ...bottom].find((n) => isActive(n, location.pathname));
 
   return (
     <div className={`shell shell-${kind}`}>
@@ -121,6 +139,11 @@ export function Shell({ nav, kind = "student", children }: ShellProps) {
         <nav className="nav">
           <NavList nav={nav} />
         </nav>
+        {bottom.length > 0 && (
+          <nav className="nav nav-bottom" aria-label="我的">
+            <NavList nav={bottom} name="side-bottom" />
+          </nav>
+        )}
         <UserFoot />
       </aside>
 
@@ -137,7 +160,7 @@ export function Shell({ nav, kind = "student", children }: ShellProps) {
       <div className="shell-main">{children}</div>
 
       {kind === "student" && (
-        <TabBar nav={nav} />
+        <TabBar nav={[...nav, ...bottom]} />
       )}
 
       {menu && (
@@ -155,5 +178,5 @@ export function Shell({ nav, kind = "student", children }: ShellProps) {
 /** 学生端的外壳：侧边栏上“复习”带上该复习的数量。 */
 export function StudentShell({ children }: { children: ReactNode }) {
   const { status } = useStatus();
-  return <Shell nav={studentNav(status?.dueReviews ?? 0)}>{children}</Shell>;
+  return <Shell nav={studentNav(status?.dueReviews ?? 0)} bottom={studentBottom()}>{children}</Shell>;
 }

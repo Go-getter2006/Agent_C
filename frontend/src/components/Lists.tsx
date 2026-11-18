@@ -4,11 +4,11 @@ import { useSlider } from "./Slider";
 import { Link } from "react-router-dom";
 import { Check, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Hourglass, Layers } from "lucide-react";
 import { useEscape } from "../lib/hooks";
-import { deadline, shortTime } from "../lib/time";
+import { deadline, fullTime, shortTime } from "../lib/time";
 import { sortProblems } from "../lib/problems";
 import { statementBlocks } from "../lib/statement";
 import type { Homework, ProblemDetail, ProblemRow, SubmissionChange } from "../types";
-import { Cells, Meter, ResultPill, gridLabel } from "./ui";
+import { Cells, Meter } from "./ui";
 
 export function homeworkSummary(hw: Homework): string {
   return `已通过 ${hw.passed} 题，共 ${hw.total} 题，${deadline(hw.endTime, hw.ended)}`;
@@ -94,7 +94,7 @@ export function ProblemList({ problems, currentKey, onNavigate }: {
           <span className="num">{problems.filter((p) => p.passed).length}/{problems.length} 通过</span>
         </div>
         {ordered.map((p) => (
-          <Link key={p.key} to={`/chat/${p.key}`} className="prow" aria-current={p.key === currentKey ? "true" : undefined} onClick={onNavigate}>
+          <Link key={p.key} to={`/homework/${p.key}`} className="prow" aria-current={p.key === currentKey ? "true" : undefined} onClick={onNavigate}>
             <RowIcon p={p} />
             <span className="prow-main">
               <span className="prow-top">
@@ -203,46 +203,61 @@ function Statement({ text, figures, pages, onDocument }: { text: string; figures
   );
 }
 
-/** 右栏：这道题的提交、这道题用到的知识点。 */
-export function SidePanel({ detail, onDiff, onDocument }: { detail: ProblemDetail; onDiff: (a: string, b: string) => void; onDocument?: () => void }) {
+/** 一次提交改了什么，一句话（代码和完整对照按需打开）。 */
+export function changeSummary(change: SubmissionChange | undefined): string | null {
+  if (!change || !change.available) return null;
+  const where = change.lines.map((l) => (l.from === l.to ? `第 ${l.from} 行` : `第 ${l.from}~${l.to} 行`)).join("、");
+  const parts = [change.changed === 0 ? "代码没改" : change.big ? `大幅改动 ${change.changed} 行` : `改了 ${change.changed} 行${where ? `（${where}）` : ""}`];
+  if (change.fixed.length) parts.push(`修好了：${change.fixed.join("、")}`);
+  if (change.still.length) parts.push(`还在：${change.still.join("、")}`);
+  if (change.new.length) parts.push(`新出现：${change.new.join("、")}`);
+  return parts.join("；");
+}
+
+/** 本题的一次提交：第几次、时间、结果、测试点方块、通过组数、看代码。方块旁边一定有文字。 */
+function SubmissionRow({ sub, change, onCode }: { sub: ProblemDetail["submissions"][number]; change?: SubmissionChange; onCode: () => void }) {
+  const ok = sub.result === "AC";
+  const wait = sub.result === "PENDING" || sub.result === "UNKNOWN";
+  const passedCount = sub.grid ? sub.grid.filter(Boolean).length : 0;
+  const summary = changeSummary(change);
+  return (
+    <div className="srow">
+      <span className="srow-when"><strong>第 {sub.attemptNo} 次</strong><small>{fullTime(sub.time)}</small></span>
+      <span className={ok ? "srow-result ok" : wait ? "srow-result" : "srow-result bad"}>{sub.resultText}</span>
+      <span className="srow-cells">
+        {sub.grid ? <Cells grid={sub.grid} /> : <span className="note">{sub.result === "PENDING" ? "正在评测" : sub.result === "CE" ? "编译错误，没运行测试点" : "测试点结果正在取"}</span>}
+      </span>
+      <span className="srow-count num">{sub.grid ? `${passedCount}/${sub.grid.length} 通过` : ""}</span>
+      <button type="button" className="btn btn-sm" onClick={onCode}>看代码</button>
+      {summary && <p className="srow-change">{summary}</p>}
+    </div>
+  );
+}
+
+/** 右栏：题面、本题的每一次提交（最近的在上，都直接列出来）、用到的知识点。 */
+export function SidePanel({ detail, onDiff, onDocument, onCode }: {
+  detail: ProblemDetail; onDiff: (a: string, b: string) => void; onDocument?: () => void; onCode: (key: string) => void;
+}) {
   const subs = detail.submissions;
-  const latest = subs[0];
   return (
     <div className="side">
       <Statement text={detail.statement ?? ""} figures={detail.figures ?? []} pages={detail.pages ?? []} onDocument={onDocument} />
       <section className="side-card" aria-labelledby="side-subs">
-        <h2 id="side-subs"><History size={16} aria-hidden="true" />这道题的提交</h2>
+        <div className="side-statement-head">
+          <h2 id="side-subs"><History size={16} aria-hidden="true" />本题提交</h2>
+          {subs.length > 0 && <span className="note num">共 {subs.length} 次</span>}
+        </div>
         {subs.length === 0 && <p className="note">还没提交。在 XDOJ 上交一次，这里几秒钟后就能看到。</p>}
-        {latest && (
-          <div className="side-latest">
-            <div className="side-row">
-              <span className="eyebrow">最近一次，第 {latest.attemptNo} 次</span>
-              <span className="side-time">{shortTime(latest.time)}</span>
-            </div>
-            <div className="side-row">
-              <ResultPill sub={latest} />
-              {latest.grid && <span className="note num">{gridLabel(latest.grid)}</span>}
-            </div>
-            {latest.grid && <Cells grid={latest.grid} large />}
-            {subs.length > 1 && <ChangeNote change={detail.changes?.[latest.key]} onDiff={() => onDiff(subs[1].key, latest.key)} />}
-          </div>
-        )}
+        <div className="srows">
+          {subs.map((sub, i) => (
+            <SubmissionRow key={sub.key} sub={sub} change={subs[i + 1] ? detail.changes?.[sub.key] : undefined}
+              onCode={() => onCode(sub.key)} />
+          ))}
+        </div>
         {subs.length > 1 && (
-          <div className="timeline submission-history" aria-label="之前的全部提交">
-            {subs.slice(1).map((sub, i) => (
-              <div key={sub.key} className="tl-item">
-                <span className={sub.result === "AC" ? "tl-dot ok" : sub.result === "PENDING" ? "tl-dot wait" : "tl-dot"} aria-hidden="true" />
-                <span className="tl-main">
-                  <span className="tl-top">
-                    <span>第 {sub.attemptNo} 次，{sub.resultText}{sub.grid && sub.result !== "AC" ? `，过 ${sub.grid.filter(Boolean).length} 组` : ""}</span>
-                    <span className="side-time">{shortTime(sub.time)}</span>
-                  </span>
-                  {sub.grid ? <Cells grid={sub.grid} large /> : <span className="note">{sub.result === "PENDING" ? "正在评测" : sub.result === "CE" ? "编译错误，未运行测试点" : "测试点结果正在取"}</span>}
-                  {subs[i + 2] && <ChangeNote change={detail.changes?.[sub.key]} onDiff={() => onDiff(subs[i + 2].key, sub.key)} />}
-                </span>
-              </div>
-            ))}
-          </div>
+          <button type="button" className="btn btn-sm srow-compare" onClick={() => onDiff(subs[1].key, subs[0].key)}>
+            <GitCompare size={15} aria-hidden="true" />比较最近两次修改
+          </button>
         )}
       </section>
       <section className="side-card" aria-labelledby="side-kp">

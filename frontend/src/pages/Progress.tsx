@@ -2,7 +2,7 @@
 // 只用档位和文字，不显示概率、排名、细技能编码。
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BookOpen, CircleAlert, CircleCheck, ClipboardList, Gauge, ListChecks, RotateCcw } from "lucide-react";
+import { BookOpen, CircleAlert, CircleCheck, ClipboardList, Gauge, History, ListChecks, RotateCcw } from "lucide-react";
 import { api } from "../api";
 import { ColumnChart, StackedBar } from "../components/charts";
 import { StudentShell } from "../components/Shell";
@@ -55,7 +55,7 @@ export default function Progress() {
 
   const practice = (key: string) => {
     void api.event("practice", key);
-    navigate(`/chat/${key}`);
+    navigate(`/homework/${key}`);
   };
 
   const levelCounts = p ? LEVELS.slice(0, 3).map((l) => p.summary.levels[l] ?? 0) : [];
@@ -67,9 +67,12 @@ export default function Progress() {
         <div className="page-inner">
           <div className="page-head">
             <div>
-              <h1>{me?.name ? `${me.name}的学情` : "学情"}</h1>
-              <p className="page-sub">根据你在 XDOJ 上的提交、对话和小题整理。只给档位，不打分，也不和同学比。</p>
+              <h1>我的学情</h1>
+              <p className="page-sub">{me?.courseName}</p>
             </div>
+            <Link to="/submissions" className="btn" onClick={() => void api.event("open_records", "progress")}>
+              <History size={16} aria-hidden="true" />全部提交记录
+            </Link>
           </div>
 
           {progress.loading && !p && <div className="card card-body"><Loading what="正在整理学情" /></div>}
@@ -186,7 +189,7 @@ export default function Progress() {
                               <span className={STATUS_PILL[e.status] ?? "pill"}>{e.status === "已改正" ? <CircleCheck aria-hidden="true" /> : <CircleAlert aria-hidden="true" />}{e.status}</span>
                             </div>
                             <span className="note">
-                              {e.count} 次，最近一次在 <Link to={`/chat/${e.last.key}`} className="link">{e.last.title}</Link>，{shortTime(e.lastTime)}
+                              {e.count} 次，最近一次在 <Link to={`/homework/${e.last.key}`} className="link">{e.last.title}</Link>，{shortTime(e.lastTime)}
                             </span>
                           </li>
                         ))}

@@ -487,6 +487,18 @@ class ChatRound(Base):
     quiz_triggered: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class ChatTopic(Base):
+    """知识问答里的一个问答主题（学生新建）。以前不绑定题目的“综合”对话没有主题（topic_id 为空），列表里叫“以前的问答”。"""
+
+    __tablename__ = "chat_topics"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
+    course: Mapped[str] = mapped_column(String(8), default="C")
+    title: Mapped[str] = mapped_column(String(40), default="")   # 取第一个问题的前一截
+    created_at: Mapped[Dt] = _ts()
+    last_message_at: Mapped[Dt] = _ts()
+
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
@@ -495,6 +507,8 @@ class ChatMessage(Base):
     # 线程：某道题（server_id + problem_id），或不绑定题目的通用线程（都为空）
     server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     problem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # 知识问答的主题（chat_topics.id）；为空：题目对话，或以前的“综合”对话
+    topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     course: Mapped[str] = mapped_column(String(8), default="C")  # 两门课的对话分开（“综合”对话也各有一个）
     role: Mapped[str] = mapped_column(String(8))  # student / agent
     kind: Mapped[str] = mapped_column(String(8), default="text")  # text / quiz

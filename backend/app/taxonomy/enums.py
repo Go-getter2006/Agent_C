@@ -91,6 +91,10 @@ UI_EVENTS = (
     "review_wait",       # 自动出题暂不可用，短暂退避
     "review_seed",       # 补排历史错误技能的复习
     "open_problem_text", # 打开题目
+    "ask_with_problem",  # 知识问答里选了“结合当前题”再问
+    "open_code",         # 作业引导右栏点“看代码”
+    "open_knowledge",    # 打开知识问答
+    "open_records",      # 学情页点“全部提交记录”
 )
 
 # 进入掌握程度计算的事件

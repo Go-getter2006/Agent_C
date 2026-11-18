@@ -37,6 +37,7 @@ class Ctx:
     problem: catalog.ProblemInfo | None = None   # 绑定到的题
     bind_by: str = ""
     candidates: list[catalog.ProblemInfo] = field(default_factory=list)
+    knowledge: bool = False   # 知识问答：没有题目列表，问到具体作业时引导他“结合当前题”或去作业引导
     plabel: m.ProblemLabel | None = None
     submission: m.Submission | None = None
     attempt_no: int = 0
@@ -136,9 +137,20 @@ def _visible_infos(s: Session, user_id: str, course: str = "C") -> dict[tuple[in
 
 def bind(s: Session, user_id: str, thread: tuple[int, int] | None, submission_key: str | None,
          text: str, pasted: str, now: dt.datetime,
-         course: str = "C") -> tuple[tuple[int, int] | None, m.Submission | None, str, list]:
-    """第 2 步：绑定到哪道题、哪次提交。只在这个学生可见的、这门课的题里绑定。"""
+         course: str = "C", knowledge: bool = False,
+         pin: tuple[int, int] | None = None) -> tuple[tuple[int, int] | None, m.Submission | None, str, list]:
+    """第 2 步：绑定到哪道题、哪次提交。只在这个学生可见的、这门课的题里绑定。
+
+    知识问答（knowledge）：不自动绑；学生选了“结合当前题”（pin）才绑到那道题（他选的那次提交，没选就是最近一次）。
+    """
     visible = _visible_infos(s, user_id, course)
+    if knowledge:
+        if pin is None or pin not in visible:
+            return None, None, "", []
+        subs = catalog.user_submissions(s, user_id, *pin, until=now)
+        picked = catalog.parse_key(submission_key or "", "s")
+        chosen = next((x for x in subs if (x.server_id, x.submission_id) == picked), subs[-1] if subs else None)
+        return pin, chosen, "chosen", []
     if thread is not None:
         if thread not in visible:
             return None, None, "", []
@@ -177,11 +189,14 @@ def bind(s: Session, user_id: str, thread: tuple[int, int] | None, submission_ke
 
 
 def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_key: str | None,
-          text: str, pasted: str, rnd: m.ChatRound | None, now: dt.datetime | None = None, course: str = "C") -> Ctx:
+          text: str, pasted: str, rnd: m.ChatRound | None, now: dt.datetime | None = None, course: str = "C",
+          knowledge: bool = False, pin: tuple[int, int] | None = None) -> Ctx:
     now = now or db.now()
     student = s.get(m.Student, user_id)
-    ctx = Ctx(user_id=user_id, user_name=student.name if student else "", thread=thread, course=course)
-    key, sub, ctx.bind_by, ctx.candidates = bind(s, user_id, thread, submission_key, text, pasted, now, course)
+    ctx = Ctx(user_id=user_id, user_name=student.name if student else "", thread=thread, course=course,
+              knowledge=knowledge)
+    key, sub, ctx.bind_by, ctx.candidates = bind(s, user_id, thread, submission_key, text, pasted, now, course,
+                                                 knowledge=knowledge, pin=pin)
     if key is not None:
         ctx.problem = catalog.problem_info(s, *key)
         ctx.plabel = labeler.current_problem_label(s, *key)

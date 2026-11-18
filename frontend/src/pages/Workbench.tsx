@@ -1,18 +1,77 @@
-// 对话页（工作台）。题目在左边，对话在中间，这道题的情况在右边；窄了以后两边收进抽屉。
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ChevronDown, CloudOff, List, PanelRight } from "lucide-react";
+// 作业引导。左栏：全部作业 → 本次题目；中间：这道题的对话；右栏：题面和本题的每一次提交。窄了以后两边收进抽屉。
+// - 进入一次作业自动选排序第一的题（最近没通过的）；返回只退左栏，这道题的对话、右栏、草稿都留着；
+// - 没选题时可以先写下问题，选了题自动带进那道题的输入框；
+// - 右栏每次提交可以“看代码”，“就这一版问”把那次提交带进下一条消息（从全部提交记录点回来也是这样）。
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ArrowUp, ChevronDown, CloudOff, List, MessagesSquare, PanelRight, X } from "lucide-react";
 import { api } from "../api";
 import DiffOverlay from "../components/Diff";
 import { SidePanel } from "../components/Lists";
 import HomeworkNavigator from "../components/HomeworkNavigator";
 import { StudentShell } from "../components/Shell";
-import Thread from "../components/Thread";
-import { Cells, Drawer, Loading, Problem, ResultPill, gridLabel } from "../components/ui";
-import { useLayout, useLoad } from "../lib/hooks";
+import Thread, { type ThreadContext } from "../components/Thread";
+import { Cells, CodeBlock, Drawer, Loading, Problem, ResultPill, gridLabel, resultLine } from "../components/ui";
+import { useEscape, useLayout, useLoad } from "../lib/hooks";
+import { forgetSection, readDraft, writeDraft } from "../lib/memory";
 import { clock } from "../lib/time";
 import { sortProblems } from "../lib/problems";
 import { useHomeworks, useStatus } from "../session";
+import type { SubmissionView } from "../types";
+
+const INDEX_DRAFT = "homework:index";
+
+/** 看某一次提交的代码。可以就这一版提问。 */
+function CodeView({ sub, onAsk, onClose }: { sub: SubmissionView; onAsk: () => void; onClose: () => void }) {
+  useEscape(onClose);
+  const code = useLoad(() => api.source(sub.key), [sub.key]);
+  return (
+    <div className="diff" role="dialog" aria-modal="true" aria-label={`第 ${sub.attemptNo} 次提交的代码`}>
+      <div className="diff-head">
+        <div className="chat-head-main">
+          <h1>第 {sub.attemptNo} 次提交的代码</h1>
+          <span className="chat-head-brief">{resultLine(sub, true)}</span>
+        </div>
+        <button type="button" className="btn btn-sm" onClick={onAsk}>就这一版问</button>
+        <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭" autoFocus><X size={20} /></button>
+      </div>
+      <div className="diff-body">
+        {code.loading && !code.data && <Loading what="正在取代码" />}
+        {code.error && <Problem message={code.error} onRetry={code.reload} />}
+        {code.data && <CodeBlock caption={`第 ${sub.attemptNo} 次提交`} lines={code.data.lines} />}
+      </div>
+    </div>
+  );
+}
+
+/** 还没选题：可以先写下问题，选了题以后带进那道题的输入框。 */
+function HomeworkIntro({ noHomework }: { noHomework: boolean }) {
+  const [text, setText] = useState(() => readDraft(INDEX_DRAFT));
+  return (
+    <>
+      <div className="chat-scroll">
+        <div className="chat-list">
+          <div className="chat-empty homework-intro">
+            <strong>{noHomework ? "还没有作业" : "这次想讨论哪道作业题？"}</strong>
+            <span>{noHomework ? "老师还没有布置作业。可以先去知识问答问概念。" : "在左边选一次作业，进入题目。也可以先写下问题，选了题会带过去。"}</span>
+            {noHomework && <Link className="btn" to="/ask"><MessagesSquare size={16} aria-hidden="true" />去知识问答</Link>}
+          </div>
+        </div>
+      </div>
+      {!noHomework && (
+        <form className="composer" onSubmit={(e) => e.preventDefault()}>
+          <div className="composer-box">
+            <label className="sr-only" htmlFor="intro-input">先记下你的作业问题</label>
+            <textarea id="intro-input" rows={1} value={text} placeholder="先记下你的作业问题…" spellCheck={false}
+              onChange={(e) => { setText(e.target.value); writeDraft(INDEX_DRAFT, e.target.value); }} />
+            <button type="submit" className="send" disabled aria-label="选一道题以后发送"><ArrowUp size={20} strokeWidth={2.2} /></button>
+          </div>
+          <p className="composer-hint">选一道题以后再发送。</p>
+        </form>
+      )}
+    </>
+  );
+}
 
 function ProblemDocument({ problemKey }: { problemKey: string }) {
   const doc = useLoad(() => api.problemDocument(problemKey), [problemKey], 2500);
@@ -31,7 +90,7 @@ export default function Workbench() {
   const [search, setSearch] = useSearchParams();
   const { homeworks, current, pick, loading: hwLoading, error: hwError } = useHomeworks();
   const { status, reload: reloadStatus } = useStatus();
-  const isProblem = !!key && key !== "general";
+  const isProblem = !!key;
   const [entered, setEntered] = useState(isProblem);
   const [selectFirstFor, setSelectFirstFor] = useState<string | null>(null);
   const needsList = entered || isProblem;
@@ -79,7 +138,7 @@ export default function Workbench() {
     setSelectFirstFor(null);
     if (!first) return;
     syncedFor.current = first.key;
-    navigate(`/chat/${first.key}`);
+    navigate(`/homework/${first.key}`);
   }, [entered, selectFirstFor, listOk, shownList, navigate]);
 
   const refresh = useCallback(() => {
@@ -88,8 +147,27 @@ export default function Workbench() {
     reloadStatus();
   }, [list.reload, detail.reload, reloadStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const ask = search.get("ask");
+  const picked = search.get("sub");   // 带进下一条消息的那次提交
   const diff = search.get("diff")?.split("~") ?? null;
+  const [codeOf, setCodeOf] = useState<string | null>(null);
+
+  // 没选题时写下的问题：进了题、而那道题自己没有草稿，就带过去（在对话读草稿之前做）
+  useMemo(() => {
+    if (!key) return;
+    const intro = readDraft(INDEX_DRAFT);
+    if (intro && !readDraft(key)) {
+      writeDraft(key, intro);
+      writeDraft(INDEX_DRAFT, "");
+    }
+  }, [key]);
+
+  // 记着的题不在作业里了（换了班、题被撤了）：退回作业引导首页
+  useEffect(() => {
+    if (isProblem && detail.error && !detail.data) {
+      forgetSection("homework");
+      navigate("/homework", { replace: true });
+    }
+  }, [isProblem, detail.error, detail.data, navigate]);
   const setParam = (name: string, value: string | null) => {
     const next = new URLSearchParams(search);
     if (value === null) next.delete(name);
@@ -103,39 +181,35 @@ export default function Workbench() {
   const shown = detail.data;   // 右栏：新的没到时先留着上一道题的（变淡），不闪
   const latest = d?.submissions[0] ?? null;
   const passed = !!d?.submissions.some((x) => x.result === "AC");
-  const threadKey = isProblem ? key! : "general";
-  const title = isProblem ? (d?.title ?? row?.title ?? "") : "其他问题";
-  const brief = isProblem ? (d?.brief ?? row?.brief ?? "") : "概念、题意，或者不确定是哪道题";
-  const due = status?.dueReviews ?? 0;
+  const title = d?.title ?? row?.title ?? "";
+  const brief = d?.brief ?? row?.brief ?? "";
+  const pickedSub = d?.submissions.find((x) => x.key === picked) ?? null;
+  const context: ThreadContext | null = pickedSub
+    ? { label: `针对第 ${pickedSub.attemptNo} 次提交`, submissionKey: pickedSub.key, onClear: () => setParam("sub", null) } : null;
   const xdoj = status?.xdoj;
 
   const listPane = (onNavigate?: () => void) => (
     <HomeworkNavigator homeworks={homeworks} current={current} problems={problems} currentKey={key ?? null}
-      entered={entered} loading={hwLoading} ready={listOk} error={list.error ?? hwError} dueReviews={due}
+      entered={entered} loading={hwLoading} ready={listOk} error={list.error ?? hwError}
       onEnter={pickHomework} onBack={() => { setSelectFirstFor(null); setEntered(false); }} onNavigate={onNavigate} />
   );
   const sidePane = shown && isProblem ? (
     <div className={detailOk ? "fade-swap" : "fade-swap is-stale"}>
       <SidePanel detail={shown}
         onDocument={() => { setDrawer(null); setShowDocument(true); }}
+        onCode={(sub) => { setDrawer(null); void api.event("open_code", sub); setCodeOf(sub); }}
         onDiff={(a, b) => { setDrawer(null); void api.event("open_diff", shown.key); setParam("diff", `${a}~${b}`); }} />
     </div>
   ) : null;
 
-  let emptyTitle = "选一道题，或者直接问";
-  let emptyText = "左边是这次作业的题目。也可以在下面直接问概念和题意。";
-  if (isProblem && passed) {
+  let emptyTitle = "这道题哪里卡住了？";
+  let emptyText = "说说你的想法，或把代码贴过来。";
+  if (passed) {
     emptyTitle = "这道题已经通过了";
-    emptyText = "可以回顾一下你是怎么改对的，也可以接着问这道题里不明白的地方。";
-  } else if (isProblem) {
-    emptyTitle = latest ? "这道题哪里卡住了？" : "这道题还没提交";
-    emptyText = latest ? "直接说你的想法，也可以把代码贴过来。我会先问你几个问题，再一点点给提示。" : "可以照常提问。交过一次以后，我能看到你的代码和哪几组测试点没过。";
-  } else if (!current && !hwLoading) {
-    emptyTitle = "还没有作业";
-    emptyText = "老师还没有给你的班级布置作业。";
-  } else if (!isProblem) {
-    emptyTitle = "其他问题";
-    emptyText = "概念、题意，或者不确定是哪道题，都可以在这里问。";
+    emptyText = "可以回顾怎么改对的，也可以接着问。";
+  } else if (!latest) {
+    emptyTitle = "这道题还没提交";
+    emptyText = "可以先问题意。交过一次后，能看到你的代码和没过的测试点。";
   }
 
   const status_ = latest ? (
@@ -206,10 +280,13 @@ export default function Workbench() {
               </>
             )}
           </header>
-          <Thread threadKey={threadKey} layout={layout} emptyTitle={key ? emptyTitle : "有什么想弄明白的？"}
-            emptyText={key ? emptyText : "直接问，也可以从左侧选一道题。"}
-            welcomeKey={!passed && latest && !["AC", "PENDING", "UNKNOWN"].includes(latest.result) ? latest.key : null}
-            askKey={isProblem ? ask : null} onAsked={() => setParam("ask", null)} onActivity={refresh} />
+          {isProblem ? (
+            <Thread threadKey={key!} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
+              welcomeKey={!passed && latest && !["AC", "PENDING", "UNKNOWN"].includes(latest.result) ? latest.key : null}
+              context={context} onActivity={refresh} />
+          ) : (
+            <HomeworkIntro noHomework={!current && !hwLoading && homeworks.length === 0} />
+          )}
         </main>
         {layout === "four" && sidePane && <aside className="wb-side" aria-label="这道题的情况">{sidePane}</aside>}
       </div>
@@ -222,6 +299,11 @@ export default function Workbench() {
       {diff && diff.length === 2 && isProblem && (
         <DiffOverlay problemKey={key!} a={diff[0]} b={diff[1]} onClose={() => (window.history.length > 1 ? navigate(-1) : setParam("diff", null))} />
       )}
+      {codeOf && isProblem && d && (() => {
+        const sub = d.submissions.find((x) => x.key === codeOf);
+        return sub ? <CodeView sub={sub} onClose={() => setCodeOf(null)}
+          onAsk={() => { setCodeOf(null); setParam("sub", sub.key); }} /> : null;
+      })()}
       {showDocument && isProblem && <Drawer side="right" title="题目内容" onClose={() => setShowDocument(false)}>
         <ProblemDocument problemKey={key!} />
       </Drawer>}

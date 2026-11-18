@@ -12,7 +12,7 @@ function Item({ item }: { item: ReviewItemView }) {
   const segments = item.memory.segments;
   return <li className="review-plan-item">
     <div><strong>{item.title}</strong><p className="note">{item.detail}</p><p className="note">
-      {item.why}{item.origin && <> · <Link className="link" to={`/chat/${item.origin.key}`}>{item.origin.title}</Link></>}
+      {item.why}{item.origin && <> · <Link className="link" to={`/homework/${item.origin.key}`}>{item.origin.title}</Link></>}
     </p></div>
     <Meter level={segments >= 3 ? "已掌握" : segments === 2 ? "基本掌握" : "待加强"} segments={segments} label={item.memory.text} />
   </li>;
@@ -24,7 +24,7 @@ export default function Review() {
   return <StudentShell><main className="page"><div className="page-inner">
     <div className="page-head"><div><h1>复习安排</h1>
       <p className="page-sub">优先回顾做错、改正过和需要帮助的地方，偶尔抽查独立做对的题。小题会在空闲的对话里主动出现。</p>
-    </div><Link className="btn" to="/chat"><MessageCircle size={16} />回到对话</Link></div>
+    </div><Link className="btn" to="/homework"><MessageCircle size={16} />回到作业引导</Link></div>
     {data.loading && !d && <Loading what="正在整理复习安排" />}
     {data.error && <Problem message={data.error} onRetry={data.reload} />}
     {d && <div className="stack">

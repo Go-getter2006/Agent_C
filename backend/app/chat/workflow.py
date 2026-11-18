@@ -29,20 +29,23 @@ _PUSHBACK = re.compile(r"(没关系|不影响|没问题吧|不对吧|不是吧|�
 
 
 # ------------------------------------------------------------ 线程和回合
-def thread_filter(user_id: str, thread: tuple[int, int] | None, course: str | None = None):
-    """一个对话线程里的消息。没绑定题的“综合”对话两门课各有一个，按课程分开。"""
+def thread_filter(user_id: str, thread: tuple[int, int] | None, course: str | None = None,
+                  topic: int | None = None):
+    """一个对话线程里的消息。没绑定题的对话按课程分开：知识问答的每个主题一个线程（topic），
+    以前的“综合”对话（没有主题）两门课各一个。"""
     cond = [m.ChatMessage.user_id == user_id]
     if thread is None:
         cond += [m.ChatMessage.server_id.is_(None), m.ChatMessage.problem_id.is_(None),
-                 m.ChatMessage.course == (course or "C")]
+                 m.ChatMessage.course == (course or "C"),
+                 m.ChatMessage.topic_id.is_(None) if topic is None else m.ChatMessage.topic_id == topic]
     else:
         cond += [m.ChatMessage.server_id == thread[0], m.ChatMessage.problem_id == thread[1]]
     return cond
 
 
 def thread_messages(s: Session, user_id: str, thread: tuple[int, int] | None,
-                    course: str | None = None) -> list[m.ChatMessage]:
-    return list(s.scalars(select(m.ChatMessage).where(*thread_filter(user_id, thread, course))
+                    course: str | None = None, topic: int | None = None) -> list[m.ChatMessage]:
+    return list(s.scalars(select(m.ChatMessage).where(*thread_filter(user_id, thread, course, topic))
                           .order_by(m.ChatMessage.id)).all())
 
 
@@ -231,10 +234,13 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
 # ------------------------------------------------------------ 入口
 def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str = "", action: str | None = None,
            submission_key: str | None = None, now: dt.datetime | None = None,
-           course: str | None = None) -> list[m.ChatMessage]:
+           course: str | None = None, topic: int | None = None, knowledge: bool = False,
+           pin: tuple[int, int] | None = None) -> list[m.ChatMessage]:
     """处理学生的一条消息（或一次按钮点击）。返回新增的消息：学生这一条和智能体的回复。
 
     course：这次登录的课程。绑定了题的线程按题所在的服务器定；综合对话按登录的课程。
+    knowledge：知识问答。不按题名、贴的代码、最近的提交自动绑到作业题上；学生选了“结合当前题”（pin）才带上那道题。
+    知识问答里不出小题（小题在“复习提升”里做）。topic：知识问答的主题。
     """
     now = now or db.now()
     course = catalog.server_course(s, thread[0]) if thread is not None else (course or "C")
@@ -251,7 +257,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         sync_api.request_priority(s, picked[0], picked[1])
 
     prose, pasted = (text, "") if action else split_message(text)
-    last_agent = next((x for x in reversed(thread_messages(s, user_id, thread, course)) if x.role == "agent"), None)
+    last_agent = next((x for x in reversed(thread_messages(s, user_id, thread, course, topic)) if x.role == "agent"), None)
     last_agent_text = message_text(last_agent) if last_agent is not None and last_agent.kind == "text" else ""
     awaiting = last_agent_text.rstrip().endswith(("？", "?"))
     if awaiting and thread is not None and last_agent is not None:
@@ -263,7 +269,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     since_reply = (now - last_agent.created_at).total_seconds() if last_agent is not None else None
 
     # 第 2 步 绑定 → 回合
-    key, _sub, _by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now, course)
+    key, _sub, _by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now, course,
+                                          knowledge=knowledge, pin=pin)
     rnd = _round_for(s, user_id, key, now, course)
     awaiting = awaiting or rnd.recall_stage in ("asked", "blanked")  # 让他回忆时也在等他回答
     if not awaiting and not action and rnd.help_count > 0 and _PUSHBACK.search(prose or text):
@@ -272,13 +279,13 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     if pasted:
         blocks.append({"t": "code", "caption": "我贴的代码", "start": 1, "lines": pasted.split("\n"), "mark": []})
     student_msg = m.ChatMessage(user_id=user_id, round_id=rnd.id, server_id=thread[0] if thread else None,
-                                problem_id=thread[1] if thread else None, course=course, role="student", kind="text",
-                                content={"blocks": blocks}, created_at=now)
+                                problem_id=thread[1] if thread else None, topic_id=topic, course=course,
+                                role="student", kind="text", content={"blocks": blocks}, created_at=now)
     s.add(student_msg)
     s.flush()
 
     # 第 3~5 步 取证、诊断、状态
-    ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course)
+    ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course, knowledge=knowledge, pin=pin)
     if ctx.submission is not None and ctx.submission.detail_status != "done" and picked is None:
         sync_api.request_priority(s, ctx.submission.server_id, ctx.submission.submission_id)
     ctx._located = bool(rnd.located)
@@ -298,6 +305,9 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
                            ctx.fill(hint.why) if awaiting else "", options, bound=ctx.problem is not None, course=course)
         if analysis.intent == "REPLY" and awaiting and analysis.answer_correct is None and not analysis.understood:
             analysis.answer_correct = bool(hints.answered(text, hint))  # 判不了按没答对处理：多帮一点比错夸要稳妥
+    # 知识问答里没带上作业题、也没贴代码：“为什么……”“怎么……”按概念问题直接答，不反问是哪道题
+    if knowledge and ctx.problem is None and not pasted and analysis.intent in ("DEBUG", "STUCK", "TASK"):
+        analysis.intent = "CONCEPT"
     in_recall = rnd.recall_stage in ("asked", "blanked") and action is None \
         and analysis.intent in ("REPLY", "STUCK", "ANSWER", "DEBUG")
     willingness = willingness_of(analysis.intent, analysis.has_attempt, action, since_reply,
@@ -350,7 +360,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         info = catalog.problem_info(s, sid, pid)
         if info is not None:
             visible_titles[info.title] = info.brief
-    history = [(x.role, message_text(x)) for x in thread_messages(s, user_id, thread, course)[-6:] if x.kind == "text"]
+    history = [(x.role, message_text(x)) for x in thread_messages(s, user_id, thread, course, topic)[-6:] if x.kind == "text"]
     draft, source, check_result, retries = _produce(ctx, decision, flow, text, history, prior, prior_ref,
                                                     decision.kind, visible_titles)
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
@@ -360,8 +370,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         actions = list(reply.HELP_ACTIONS)
     content = {"blocks": reply.to_blocks(draft, ctx), "actions": actions}
     agent_msg = m.ChatMessage(user_id=user_id, round_id=rnd.id, server_id=thread[0] if thread else None,
-                              problem_id=thread[1] if thread else None, course=course, role="agent", kind="text",
-                              content=content, created_at=now + dt.timedelta(milliseconds=1))
+                              problem_id=thread[1] if thread else None, topic_id=topic, course=course, role="agent",
+                              kind="text", content=content, created_at=now + dt.timedelta(milliseconds=1))
     s.add(agent_msg)
     s.flush()
     out = [student_msg, agent_msg]
@@ -384,7 +394,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     if draft.quote is not None:
         rnd.located = True
     quiz_msg = None
-    if flow == "stubborn" and quiz.can_start(s, user_id, ctx.root_skill, now):
+    if flow == "stubborn" and not knowledge and quiz.can_start(s, user_id, ctx.root_skill, now):
         item = quizgen.generate(s, user_id, ctx.root_skill, "revisit", origin=thread)
         if item is not None:
             quiz_msg = quiz.start(s, user_id, item, "revisit", "", thread[0] if thread else None,
