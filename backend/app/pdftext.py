@@ -11,7 +11,7 @@
    程序核对：数字只能来自原文、原文的数字基本都在（样例不能丢）、[图N] 都在、汉字绝大多数来自原文（原文不是乱码时）、
    长度相当。不合格重写一次，还不行就用程序抽的文字。
 4. 原文有认不出的乱码（字体没有文字对照表）时，大模型能按上下文还原，但没法核对，状态记 llm_guess；
-   学生端照样显示，旁边一直有“看原题”（原 PDF）。没有大模型时，乱码的题面不显示，只给“看原题”。
+   学生端照样显示。没有大模型时乱码的文字不显示，学生端直接显示 PDF 的页面（渲染成图，`page_png`）。
 
 能用的状态是 USABLE；别的状态题面文字一律当作没有。
 """
@@ -391,6 +391,52 @@ def usable_text(row) -> str:
     if row is None or (row.extract_status or "") not in USABLE:
         return ""
     return row.extracted_text or ""
+
+
+def page_count(row) -> int:
+    """题面 PDF 有几页（最多 MAX_PAGES）；不是 PDF 返回 0。"""
+    if row is None or not is_pdf(row.content_type, (row.file_bytes or b"")[:5]):
+        return 0
+    try:
+        import pypdfium2 as pdfium
+
+        doc = pdfium.PdfDocument(row.file_bytes)
+        try:
+            return min(len(doc), MAX_PAGES)
+        finally:
+            doc.close()
+    except Exception:
+        return 0
+
+
+_page_cache: dict[tuple, bytes] = {}
+
+
+def page_png(row, n: int) -> bytes | None:
+    """题面 PDF 的第 n 页渲染成 PNG，裁掉四周的空白（右栏窄，留白太多字就小了）。"""
+    if not 1 <= n <= page_count(row):
+        return None
+    key = (row.server_id, row.problem_id, row.file_hash, n)
+    if key in _page_cache:
+        return _page_cache[key]
+    import pypdfium2 as pdfium
+    from PIL import ImageChops, Image
+
+    doc = pdfium.PdfDocument(row.file_bytes)
+    try:
+        img = doc[n - 1].render(scale=RENDER_SCALE).to_pil().convert("RGB")
+    finally:
+        doc.close()
+    box = ImageChops.difference(img, Image.new("RGB", img.size, "white")).getbbox()
+    if box:
+        pad = 16
+        img = img.crop((max(0, box[0] - pad), max(0, box[1] - pad), min(img.width, box[2] + pad), min(img.height, box[3] + pad)))
+    buf = io.BytesIO()
+    img.save(buf, "PNG", optimize=True)
+    if len(_page_cache) > 64:
+        _page_cache.clear()
+    _page_cache[key] = buf.getvalue()
+    return _page_cache[key]
 
 
 def for_llm(text: str) -> str:

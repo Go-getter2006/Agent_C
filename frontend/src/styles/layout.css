@@ -1550,8 +1550,36 @@
   font-size: var(--fs-13);
   line-height: 1.65;
   color: var(--ink-2);
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.stmt-p {
+  margin: 0 0 var(--sp-6);
+  white-space: pre-wrap;
+}
+
+.stmt-h {
+  margin: var(--sp-10) 0 var(--sp-4);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stmt-h:first-child {
+  margin-top: 0;
+}
+
+.stmt-sample {
+  margin: 0 0 var(--sp-6);
+  padding: var(--sp-8) var(--sp-10);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-family: var(--font-code);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre;
+  overflow-x: auto;
 }
 
 .stmt-fig {
@@ -1564,30 +1592,20 @@
   background: #fff;
 }
 
-.side-card-head {
+/* 文字整理不出来时：题面 PDF 的各页直接显示 */
+.stmt-pages {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: var(--sp-8);
-  margin-bottom: var(--sp-12);
 }
 
-.side-card-head h2 {
-  margin-bottom: 0;
-}
-
-.side-card-head .side-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--fs-12);
-}
-
-.stmt-clip {
-  max-height: 9.9em;   /* 大约六行 */
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
-  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+.stmt-pages img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: #fff;
 }
 
 .tl-item {

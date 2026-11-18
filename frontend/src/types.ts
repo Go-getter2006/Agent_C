@@ -57,7 +57,7 @@ export interface ProblemDetail {
   homeworkKey: string | null;
   statement: string;   // 题面文字，[图N] 是示意图的位置
   figures: { n: number; url: string; width: number; height: number }[];
-  original: string | null;   // 原题 PDF
+  pages: string[];   // 文字整理不出来时：题面 PDF 各页的图，直接显示
   submissions: SubmissionView[]; // 新的在前
   changes: Record<string, SubmissionChange>;
   knowledge: KnowledgeLevel[];

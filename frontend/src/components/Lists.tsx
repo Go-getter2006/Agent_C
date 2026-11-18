@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSlider } from "./Slider";
 import { Link } from "react-router-dom";
-import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Circle, CircleCheck, CircleX, ExternalLink, FileText, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
+import { Check, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Layers, MessageCircle, MessagesSquare, RotateCcw } from "lucide-react";
 import { useEscape } from "../lib/hooks";
 import { deadline, shortTime } from "../lib/time";
 import type { Homework, ProblemDetail, ProblemRow, SubmissionChange } from "../types";
@@ -164,15 +164,41 @@ export function ChangeNote({ change, onDiff }: { change: SubmissionChange | unde
 /** 题目内容：默认收起，只露前几行。 */
 type Figure = ProblemDetail["figures"][number];
 
-/** 题面文字里的 [图N] 换成图；文字里没提到的图放在最后。 */
-function StatementBody({ text, figures }: { text: string; figures: Figure[] }) {
-  const byN = new Map(figures.map((f) => [f.n, f]));
-  const used = new Set<number>();
+// 题面的小标题：整理后的题面每部分标题单独一行
+const HEADING = /^(题目描述|问题描述|题目内容|输入格式|输出格式|输入说明|输出说明|输入|输出|样例输入\s*\d*|样例输出\s*\d*|输入样例\s*\d*|输出样例\s*\d*|样例\s*\d*|提示|说明|数据范围|注意)\s*[:：]?$/;
+
+interface Block {
+  kind: "h" | "p" | "sample";
+  text: string;
+}
+
+/** 题面文字分成小标题、正文、样例（样例照原样等宽显示）。 */
+function blocks(text: string): Block[] {
+  const out: Block[] = [];
+  let cur: Block | null = null;
+  let inSample = false;
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (HEADING.test(t)) {
+      out.push({ kind: "h", text: t.replace(/[:：]$/, "") });
+      cur = null;
+      inSample = t.includes("样例");
+      continue;
+    }
+    const kind = inSample ? "sample" : "p";
+    if (!cur || cur.kind !== kind) {
+      cur = { kind, text: line };
+      out.push(cur);
+    } else {
+      cur.text += "\n" + line;
+    }
+  }
+  return out.map((b) => ({ ...b, text: b.text.replace(/^\n+|\n+$/g, "") })).filter((b) => b.kind === "h" || b.text.trim());
+}
+
+/** 正文里的 [图N] 换成图。 */
+function WithFigures({ text, byN }: { text: string; byN: Map<number, Figure> }) {
   const parts = text.split(/\[图(\d+)\]/);
-  const img = (f: Figure) => (
-    <img key={`fig-${f.n}`} className="stmt-fig" src={f.url} alt={`示意图 ${f.n}`} loading="lazy"
-      width={f.width} height={f.height} style={{ aspectRatio: `${f.width} / ${f.height}` }} />
-  );
   return (
     <>
       {parts.map((part, i) => {
@@ -184,34 +210,38 @@ function StatementBody({ text, figures }: { text: string; figures: Figure[] }) {
           return s ? <span key={i}>{s}</span> : null;
         }
         const f = byN.get(Number(part));
-        if (!f) return null;
-        used.add(f.n);
-        return img(f);
+        return f ? <FigureImg key={`f${f.n}`} f={f} /> : null;
       })}
-      {figures.filter((f) => !used.has(f.n)).map(img)}
     </>
   );
 }
 
-function Statement({ text, figures, original }: { text: string; figures: Figure[]; original: string | null }) {
-  const [open, setOpen] = useState(false);
-  if (!text.trim() && figures.length === 0 && !original) return null;
-  const long = text.length > 260 || text.split("\n").length > 8 || figures.length > 0;
+function FigureImg({ f }: { f: Figure }) {
+  return <img className="stmt-fig" src={f.url} alt={`示意图 ${f.n}`} loading="lazy"
+    width={f.width} height={f.height} style={{ aspectRatio: `${f.width} / ${f.height}` }} />;
+}
+
+/** 右栏最上面：题目内容，直接显示全文。文字整理不出来时直接显示题面 PDF 的各页。 */
+function Statement({ text, figures, pages }: { text: string; figures: Figure[]; pages: string[] }) {
+  if (!text.trim() && pages.length === 0) return null;
+  const byN = new Map(figures.map((f) => [f.n, f]));
+  // 文字里提到了的图放在提到的位置，没提到的放在最后
+  const mentioned = new Set(Array.from(text.matchAll(/\[图(\d+)\]/g), (x) => Number(x[1])));
   return (
     <section className="side-card" aria-labelledby="side-stmt">
-      <div className="side-card-head">
-        <h2 id="side-stmt"><FileText size={16} aria-hidden="true" />题目</h2>
-        {original && <a className="link side-link" href={original} target="_blank" rel="noreferrer">看原题<ExternalLink size={13} aria-hidden="true" /></a>}
-      </div>
+      <h2 id="side-stmt"><FileText size={16} aria-hidden="true" />题目</h2>
       {text.trim() ? (
-        <div className={open || !long ? "stmt" : "stmt stmt-clip"}><StatementBody text={text} figures={figures} /></div>
+        <div className="stmt">
+          {blocks(text).map((b, i) =>
+            b.kind === "h" ? <h3 key={i} className="stmt-h">{b.text}</h3>
+              : b.kind === "sample" ? <pre key={i} className="stmt-sample">{b.text}</pre>
+                : <p key={i} className="stmt-p"><WithFigures text={b.text} byN={byN} /></p>)}
+          {figures.filter((f) => !mentioned.has(f.n)).map((f) => <FigureImg key={`f${f.n}`} f={f} />)}
+        </div>
       ) : (
-        <p className="note">题目内容还在整理，先看原题。</p>
-      )}
-      {text.trim() && long && (
-        <button type="button" className="link side-link" aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? <><ChevronUp size={14} aria-hidden="true" />收起</> : <><ChevronDown size={14} aria-hidden="true" />展开全部</>}
-        </button>
+        <div className="stmt-pages">
+          {pages.map((url, i) => <img key={url} src={url} alt={`题目第 ${i + 1} 页`} loading="lazy" />)}
+        </div>
       )}
     </section>
   );
@@ -224,7 +254,7 @@ export function SidePanel({ detail, onDiff, onAsk }: { detail: ProblemDetail; on
   const canAsk = latest && latest.result !== "AC" && latest.result !== "PENDING";
   return (
     <div className="side">
-      <Statement text={detail.statement ?? ""} figures={detail.figures ?? []} original={detail.original ?? null} />
+      <Statement text={detail.statement ?? ""} figures={detail.figures ?? []} pages={detail.pages ?? []} />
       <section className="side-card" aria-labelledby="side-subs">
         <h2 id="side-subs"><History size={16} aria-hidden="true" />这道题的提交</h2>
         {subs.length === 0 && <p className="note">还没提交。在 XDOJ 上交一次，这里几秒钟后就能看到。</p>}
