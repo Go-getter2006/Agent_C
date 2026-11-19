@@ -28,6 +28,8 @@ _backend: Callable | None = None
 class LLMUnavailable(RuntimeError):
     """没有配置大模型，或者调用、校验反复失败。调用方要有不依赖大模型的退路。"""
 
+    invalid = False   # True：连上了、但输出反复不合格（换个时间再问多半还是不合格）；False：没配置、没连上
+
 
 def set_backend(fn: Callable | None) -> None:
     global _backend
@@ -86,7 +88,7 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
     if "json" not in system.lower():
         system += "\n只输出一个 JSON 对象，不要输出别的内容。"
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    started, tin, tout, last = time.monotonic(), 0, 0, ""
+    started, tin, tout, last, invalid = time.monotonic(), 0, 0, "", False
     for attempt in range(1, retries + 2):
         try:
             text, a, b = backend(messages, True, max_tokens, 0.0)
@@ -98,13 +100,15 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
             _record(prompt_id, True, attempt, started, tin, tout)
             return result
         except ValueError as exc:
-            last = f"校验不通过：{exc}"
+            last, invalid = f"校验不通过：{exc}", True
             messages = messages[:2] + [{"role": "user", "content": f"上一次的输出不合格（{exc}）。请严格按要求重新输出。"}]
         except Exception as exc:  # 网络、接口错误
-            last = f"{type(exc).__name__}"
+            last, invalid = f"{type(exc).__name__}", False
             time.sleep(0.5 * attempt)
     _record(prompt_id, False, retries + 1, started, tin, tout, last)
-    raise LLMUnavailable(last)
+    err = LLMUnavailable(last)
+    err.invalid = invalid
+    raise err
 
 
 def evidence_for_model(evidence: dict, user_id: str = "", name: str = "") -> dict:

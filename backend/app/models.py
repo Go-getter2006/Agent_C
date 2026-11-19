@@ -181,6 +181,8 @@ class ProblemText(Base):
     # 程序从 PDF 文字层抽出来的原文（带 [图N] 占位）：大模型整理时拿它核对；extracted_text 是给人看的
     raw_text: Mapped[str] = mapped_column(Text, default="")
     tidied_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)  # 交给大模型整理过（成没成都记）
+    # 按哪一版整理要求整理的（pdftext.TIDY_VERSION）。版本变了，后台把整理过的题面按新要求各重整一次
+    tidy_version: Mapped[str | None] = mapped_column(String(16), nullable=True, default="")
 
 
 class ProblemFigure(Base):
