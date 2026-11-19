@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import accounts, assess, catalog, config, cross, crypto, db, graphmodel, kpdesc, logs, mastery, profile, review
+from .. import accounts, assess, catalog, config, cross, crypto, db, diagnosis, graphmodel, kpdesc, logs, mastery, profile, review
 from .. import models as m
 from ..labeling.labeler import current_problem_label
 from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
@@ -638,7 +638,9 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
             "stuck": stuck, "rounds": rounds, "quizzes": quizzes,
             "rootCauses": [{"skill": _skill_view(r["skill"]), "root": _skill_view(r["root"]), "p": r["p"]} for r in roots],
             "reviews": reviews, "copies": copies, "readiness": readiness,
-            "graphUpdatedAt": max((r.updated_at for r in post.values()), default=None)}
+            "graphUpdatedAt": max((r.updated_at for r in post.values()), default=None),
+            # 判断、定位、修改三维和最近一次作答的证据（界面改造方案第 5 节）
+            "diagnosis": diagnosis.teacher_rows(s, diagnosis.by_student(s, [user_id], course)[user_id])}
 
 
 def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) -> dict:
@@ -918,8 +920,13 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
     edges = [e for e in kp_edges() if not e[3]] + \
         ([(a, b, n, True) for a, b, n in cross.kp_cross_edges(s)] if course == "D" else [])
     ref = lambda c, is_x: {"code": c, "name": KNOWLEDGE_POINTS.get(c, ""), "course": course_of(c), "cross": is_x}  # noqa: E731
+    dims = {} if other else diagnosis.by_student(s, ids, course)
+    per = {uid: diagnosis.summary(d.get(kp)) for uid, d in dims.items() if d.get(kp) is not None}
     return {"code": kp, "name": KNOWLEDGE_POINTS[kp], "course": course_of(kp), "topicName": TOPICS.get(kp[:3], ""),
             "foundation": other,
+            # 全班在这个知识点上的判断、定位、修改（小题首次独立作答）；每个学生的另给，点进学生明细看作答依据
+            "diagnosis": None if other else diagnosis.summary(diagnosis.for_class(s, ids, course).get(kp)),
+            "studentDims": per,
             "skills": skills, "weak": weak, "students": everyone, "summary": summary,
             "errors": [{"code": c, "name": error_name(c), "count": n}
                                                        for c, n in errs.most_common(6)],

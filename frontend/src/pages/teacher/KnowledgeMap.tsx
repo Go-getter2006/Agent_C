@@ -25,6 +25,9 @@ interface KpDetail {
   skills: { code: string; name: string; kp: string; dist: number[] }[];
   weak: { userId: string; name: string; level: string; p: number; predicted: boolean }[];
   summary: string;   // 全班一句话
+  // 小题首次独立作答的判断、定位、修改（全班、每个学生）；颜色仍表示原来的掌握档位
+  diagnosis: { judge: Ratio; locate: Ratio; edit: Ratio; shown: number } | null;
+  studentDims: Record<string, { judge: Ratio; locate: Ratio; edit: Ratio; shown: number }>;
   students: { userId: string; name: string; level: string; p: number | null; score: number | null; predicted: boolean; text: string }[];
   errors: { code: string; name: string; count: number }[];
   problems: { problemId: number; title: string; brief: string; primary: boolean }[];
@@ -34,6 +37,8 @@ interface KpDetail {
 }
 
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
+type Ratio = { n: number; d: number } | null;
+const frac = (r: Ratio) => (r ? `${r.n}/${r.d}` : "尚无记录");
 
 function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
   cls: ClassInfo; node: KMNode; home: "C" | "D"; studentId: string; studentName: string | null;
@@ -110,6 +115,17 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                 <p className="kg-panel-text">{d.summary}</p>
               </section>
             )}
+            {d.diagnosis && d.diagnosis.shown > 0 && (
+              <section>
+                <h3>小题：判断、定位、修改</h3>
+                <dl className="kg-dims">
+                  <div><dt>判断</dt><dd className="num">{frac(d.diagnosis.judge)}</dd></div>
+                  <div><dt>定位</dt><dd className="num">{frac(d.diagnosis.locate)}</dd></div>
+                  <div><dt>修改</dt><dd className="num">{frac(d.diagnosis.edit)}</dd></div>
+                </dl>
+                <p className="note">全班首次独立作答；定位、修改的分母只算实际进入这一步的次数</p>
+              </section>
+            )}
             {d.students.length > 0 && (
               <section>
                 <h3>每个学生</h3>
@@ -122,6 +138,12 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                         {w.score !== null ? <ScoreBadge score={w.score} /> : w.p !== null && <span className="note num">{w.p.toFixed(2)}</span>}
                       </div>
                       {w.text && <p className="kg-people-text">{w.text}</p>}
+                      {d.studentDims?.[w.userId] && (
+                        <p className="kg-people-text num">
+                          判断 {frac(d.studentDims[w.userId].judge)} · 定位 {frac(d.studentDims[w.userId].locate)} · 修改 {frac(d.studentDims[w.userId].edit)}
+                          {" "}<Link to={`/teacher/students/${w.userId}`} className="link">查看作答依据</Link>
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
