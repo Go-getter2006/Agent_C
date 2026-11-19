@@ -399,6 +399,12 @@ def _doctor_coverage(s, server_id: int) -> None:
         statuses[pdftext.STATUS_NAMES.get(st, st)] = statuses.get(pdftext.STATUS_NAMES.get(st, st), 0) + 1
     typer.echo(f"  作业里的题 {len(pids)} 道：有题面 {usable} 道，有测试点 {len(pids & with_cases)} 道；"
                f"题面：{json.dumps(statuses, ensure_ascii=False)}")
+    T = m.ProblemText
+    stale = s.scalar(select(func.count()).select_from(T).where(
+        T.server_id == server_id, T.tidied_at.is_not(None),
+        (T.tidy_version.is_(None)) | (T.tidy_version != pdftext.TIDY_VERSION))) or 0
+    if stale:
+        typer.echo(f"  按旧要求整理过的题面 {stale} 道，后台空闲时按新要求（{pdftext.TIDY_VERSION}）各重整一次")
     total = s.scalar(select(func.count()).select_from(m.Submission).where(m.Submission.server_id == server_id)) or 0
     with_src = s.scalar(select(func.count()).select_from(m.SourceSnapshot).where(m.SourceSnapshot.server_id == server_id)) or 0
     done = s.scalar(select(func.count()).select_from(m.Submission).where(

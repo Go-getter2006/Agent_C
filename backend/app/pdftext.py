@@ -12,6 +12,8 @@
    长度相当。不合格重写一次，还不行就用程序抽的文字。
 4. 原文有认不出的乱码（字体没有文字对照表）时，大模型能按上下文还原，但没法核对，状态记 llm_guess；
    学生端照样显示。没有大模型时乱码的文字不显示，学生端直接显示 PDF 的页面（渲染成图，`page_png`）。
+5. 整理要求（`_SYSTEM`）改了就改 `TIDY_VERSION`：后台空闲时把以前整理过的题面按新要求各重整一次（`retidy`）。
+   题面按（服务器, 题目）存，同一台 XDOJ 的老师、学生共用：每道题整理一次，学生、老师打开页面都不会触发。
 
 能用的状态是 USABLE；别的状态题面文字一律当作没有。
 """
@@ -30,6 +32,10 @@ STATUS_NAMES = {
     "llm_guess": "大模型还原了乱码（没法核对）", "garbled": "PDF 文字层是乱码，等大模型整理",
     "unreadable": "PDF 打不开", "failed": "没有内容",
 }
+# 整理要求的版本：改了 _SYSTEM 要求的格式就改这里（latex-1：公式写成 $...$）
+TIDY_VERSION = "latex-1"
+# 交给大模型整理过的题面可能停在这些状态（核对不过的仍是 layer / garbled）
+_TIDIED = frozenset({"layer", "garbled", "llm", "llm_guess"})
 # 现在的程序给 PDF 写的状态；不在这里面的（以前直接抽文字的 ok、OCR 那一版的状态……）都要重新抽一遍
 _PDF_STATUS = frozenset({"layer", "llm", "llm_guess", "garbled", "unreadable"})
 
@@ -342,10 +348,18 @@ def check_tidy(raw: str, out: str, raw_garbled: bool) -> str | None:
 
 def tidy(raw: str, status: str) -> tuple[str, str] | None:
     """交给大模型整理。返回 (文字, 状态 llm / llm_guess)；没有大模型或核对不过返回 None（沿用程序抽的文字）。"""
+    return _tidy(raw, status)[0]
+
+
+def _tidy(raw: str, status: str) -> tuple[tuple[str, str] | None, bool]:
+    """(整理结果, 要不要以后再试)。核对不过不再试（同一份原文、同一个要求，再问多半还是不过）；
+    没有大模型、没连上（网络、接口错误）以后再试，免得一次断网就把整个题库记成“整理过了”。"""
     from . import llm
 
-    if not llm.available() or not raw.strip():
-        return None
+    if not raw.strip():
+        return None, False
+    if not llm.available():
+        return None, True
     raw_garbled = status == "garbled"
 
     def validate(d: dict) -> str:
@@ -361,8 +375,8 @@ def tidy(raw: str, status: str) -> tuple[str, str] | None:
                              retries=1, max_tokens=min(8000, max(2500, 2 * len(raw))))
     except llm.LLMUnavailable as exc:
         log.info("题面整理没成功（%s），用程序抽的文字", exc)
-        return None
-    return text, ("llm_guess" if raw_garbled else "llm")
+        return None, not exc.invalid
+    return (text, "llm_guess" if raw_garbled else "llm"), False
 
 
 # ------------------------------------------------------------ 存库、读库
@@ -375,7 +389,7 @@ def store(s, row, content_type: str, data: bytes) -> bool:
 
     text, status, figures = extract(content_type, data)
     old = row.extracted_text or ""
-    row.raw_text, row.extract_status, row.tidied_at = text, status, None
+    row.raw_text, row.extract_status, row.tidied_at, row.tidy_version = text, status, None, ""
     row.extracted_text = text if status in USABLE else ""
     s.execute(delete(m.ProblemFigure).where(m.ProblemFigure.server_id == row.server_id,
                                             m.ProblemFigure.problem_id == row.problem_id))
@@ -398,8 +412,10 @@ def prepare(s, server_id: int, problem_id: int) -> bool:
     row = s.get(m.ProblemText, (server_id, problem_id))
     if row is None or row.extract_status not in ("layer", "garbled") or row.tidied_at is not None or not llm.available():
         return False
-    got = tidy(row.raw_text or row.extracted_text or "", row.extract_status)
-    row.tidied_at = db.now()
+    got, again = _tidy(row.raw_text or row.extracted_text or "", row.extract_status)
+    if again:
+        return False   # 没连上大模型：先用程序抽的文字，下次再整理
+    row.tidied_at, row.tidy_version = db.now(), TIDY_VERSION
     if got is None:
         return False
     text, status = got
@@ -407,6 +423,42 @@ def prepare(s, server_id: int, problem_id: int) -> bool:
     row.extracted_text, row.extract_status = text, status
     log.info("题目 %s 的题面：%s", problem_id, STATUS_NAMES.get(status, status))
     return changed
+
+
+def retidy(s, server_id: int, problem_id: int) -> bool | None:
+    """以前整理过、但不是按现在的要求（TIDY_VERSION）整理的题面，按现在的要求重整一次。
+
+    后台空闲时做（redo_stored），每道题一次：题面按（服务器, 题目）存，这台 XDOJ 的老师、学生共用。
+    核对不过就留着原来的文字，也记下版本，不再重试。返回给人看的文字变没变；没连上大模型返回 None（下次再试）。
+    只是排版变了时标注照旧有效（不重新标）；以前乱码、这次才读得出来的，重新标注这道题。
+    """
+    from . import db, llm
+    from . import models as m
+    from .labeling.labeler import current_problem_label
+    from .labeling.problems import problem_content_hash
+    from .xdoj.store import enqueue
+
+    row = s.get(m.ProblemText, (server_id, problem_id))
+    if (row is None or row.tidied_at is None or row.tidy_version == TIDY_VERSION
+            or row.extract_status not in _TIDIED or not llm.available()):
+        return False
+    was_usable = row.extract_status in USABLE
+    before = problem_content_hash(s, server_id, problem_id)
+    source = "garbled" if row.extract_status in ("garbled", "llm_guess") else "layer"
+    got, again = _tidy(row.raw_text or row.extracted_text or "", source)
+    if again:
+        return None
+    row.tidied_at, row.tidy_version = db.now(), TIDY_VERSION
+    if got is None or got == (row.extracted_text or "", row.extract_status):
+        return False
+    row.extracted_text, row.extract_status = got
+    log.info("题目 %s 的题面按新要求重整：%s", problem_id, STATUS_NAMES.get(got[1], got[1]))
+    label = current_problem_label(s, server_id, problem_id)
+    if not was_usable:
+        enqueue(s, server_id, "label_problem", problem_id, 2)
+    elif label is not None and label.content_hash == before:
+        label.content_hash = problem_content_hash(s, server_id, problem_id)
+    return True
 
 
 def needs_redo(status: str | None, file_bytes: bytes | None, content_type: str = "") -> bool:
@@ -476,7 +528,8 @@ def for_llm(text: str) -> str:
 
 def redo_stored(s, limit: int = 2) -> int:
     """后台空闲时自动做：以前的程序处理的 PDF 题面重新抽一遍（文件本身存着，不用再请求 XDOJ）；
-    抽好了还没交给大模型整理的整理一遍。有变化就重新标注这道题。返回处理了几道。"""
+    抽好了还没交给大模型整理的整理一遍（有变化就重新标注这道题）；按旧要求整理过的按新要求重整一遍（retidy）。
+    返回处理了几道。题面按服务器存，每道题各做一次，和多少老师、学生打开过无关。"""
     from sqlalchemy import and_, func, or_, select
 
     from . import llm
@@ -505,5 +558,14 @@ def redo_stored(s, limit: int = 2) -> int:
         for server_id, problem_id in pending:
             if prepare(s, server_id, problem_id):
                 enqueue(s, server_id, "label_problem", problem_id, 2)
+            done += 1
+    if llm.available() and done < limit:
+        stale = s.execute(select(T.server_id, T.problem_id).where(
+            T.tidied_at.is_not(None), T.extract_status.in_(sorted(_TIDIED)),
+            or_(T.tidy_version.is_(None), T.tidy_version != TIDY_VERSION))
+            .order_by(T.server_id, T.problem_id).limit(limit - done)).all()
+        for server_id, problem_id in stale:
+            if retidy(s, server_id, problem_id) is None:
+                break   # 大模型没连上：这一轮停下，下一轮再试
             done += 1
     return done

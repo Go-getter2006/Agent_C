@@ -235,3 +235,120 @@ def test_student_sees_the_statement_directly(demo, monkeypatch):
         assert page.status_code == 200 and page.content[:8] == b"\x89PNG\r\n\x1a\n"
         assert c.get(f"/api/problems/{key}/pages/2").status_code == 404
         assert c.get(f"/api/problems/p{sid}-999999/pages/1").status_code == 404     # 看不到的题
+
+
+# ------------------------------------------------------------ 整理要求改了：按新要求重整一次
+OLD_TIDY = "题目描述\n" + "\n".join(LINES)
+NEW_TIDY = OLD_TIDY.replace("(1 <= a, b <= 1000)", "($1 \\le a, b \\le 1000$)")
+
+
+def _old_tidied(s, server_id: int, problem_id: int, status: str = "llm") -> m.ProblemText:
+    """以前按旧要求整理过的题面：tidy_version 是空的（迁移前的库）。"""
+    row = m.ProblemText(server_id=server_id, problem_id=problem_id, content_type="application/pdf",
+                        file_bytes=make_pdf(LINES), file_hash=f"h{problem_id}", raw_text="\n".join(LINES),
+                        extracted_text=OLD_TIDY, extract_status=status, tidied_at=db.now(), tidy_version=None)
+    s.add(row)
+    return row
+
+
+def test_old_tidied_statements_are_retidied_once_per_problem(ctx, fake_llm):
+    """按旧要求整理过的题面，后台空闲时按新要求各重整一次（一道题一次大模型调用），再跑不会再调。"""
+    with db.session_scope() as s:
+        _old_tidied(s, ctx.server_id, 4301)
+        _old_tidied(s, ctx.server_id, 4302)
+    seen = fake_llm({"text": NEW_TIDY, "restored": False})
+    with db.session_scope() as s:
+        assert pdftext.redo_stored(s, limit=5) == 2
+    assert len(seen) == 2
+    with db.session_scope() as s:
+        for pid in (4301, 4302):
+            row = s.get(m.ProblemText, (ctx.server_id, pid))
+            assert (pdftext.usable_text(row), row.tidy_version) == (NEW_TIDY, pdftext.TIDY_VERSION)
+        assert pdftext.redo_stored(s, limit=5) == 0
+    assert len(seen) == 2                                                   # 不再重复调用
+    with db.session_scope() as s:                                           # 只是排版变了：不重新标注
+        assert s.scalars(select(m.FetchTask).where(m.FetchTask.kind == "label_problem")).first() is None
+
+
+def test_retidy_keeps_old_text_when_the_check_fails(ctx, fake_llm):
+    """重整的结果核对不过（编了数字）：留着原来整理好的文字，也记下版本，不再重试。"""
+    with db.session_scope() as s:
+        _old_tidied(s, ctx.server_id, 4303)
+    seen = fake_llm({"text": NEW_TIDY.replace("\n8", "\n42"), "restored": False})
+    with db.session_scope() as s:
+        assert pdftext.redo_stored(s) == 1
+        row = s.get(m.ProblemText, (ctx.server_id, 4303))
+        assert (pdftext.usable_text(row), row.extract_status, row.tidy_version) == (OLD_TIDY, "llm", pdftext.TIDY_VERSION)
+    calls = len(seen)
+    with db.session_scope() as s:
+        assert pdftext.redo_stored(s) == 0
+    assert len(seen) == calls
+
+
+def test_retidy_waits_when_the_model_is_unreachable(ctx):
+    """大模型没连上（网络、接口错误）：不记成“整理过了”，下一轮再试；第一次整理也一样。"""
+    def down(messages, json_mode, max_tokens, temperature):
+        raise ConnectionError("down")
+
+    with db.session_scope() as s:
+        _old_tidied(s, ctx.server_id, 4304)
+        s.add(m.ProblemText(server_id=ctx.server_id, problem_id=4305, content_type="application/pdf",
+                            file_bytes=make_pdf(LINES), file_hash="h4305", raw_text="\n".join(LINES),
+                            extracted_text="\n".join(LINES), extract_status="layer"))
+    llm.set_backend(down)
+    try:
+        with db.session_scope() as s:
+            assert pdftext.retidy(s, ctx.server_id, 4304) is None
+            assert not pdftext.prepare(s, ctx.server_id, 4305)
+    finally:
+        llm.set_backend(None)
+    with db.session_scope() as s:
+        assert s.get(m.ProblemText, (ctx.server_id, 4304)).tidy_version != pdftext.TIDY_VERSION
+        row = s.get(m.ProblemText, (ctx.server_id, 4305))
+        assert (row.tidied_at, row.extract_status) == (None, "layer")
+
+
+def test_retidy_keeps_the_label_when_only_formatting_changed(ctx, fake_llm):
+    """标注是按题面内容做的：重整只改了排版，标注照旧算数（不会因此把整个题库重标一遍）；
+    以前乱码、这次才读得出来的，重新标注。"""
+    from app.labeling.labeler import current_problem_label
+    from app.labeling.problems import problem_content_hash, save_problem_label
+
+    with db.session_scope() as s:
+        _old_tidied(s, ctx.server_id, 4306)
+        _old_tidied(s, ctx.server_id, 4307, status="garbled")
+        s.flush()
+        label = save_problem_label(s, ctx.server_id, 4306, "a+b", "io.scanf", [], [], "llm")
+        label.content_hash = problem_content_hash(s, ctx.server_id, 4306)
+    fake_llm({"text": NEW_TIDY, "restored": True})
+    with db.session_scope() as s:
+        assert pdftext.retidy(s, ctx.server_id, 4306) and pdftext.retidy(s, ctx.server_id, 4307)
+    with db.session_scope() as s:
+        assert current_problem_label(s, ctx.server_id, 4306).content_hash == problem_content_hash(s, ctx.server_id, 4306)
+        assert s.get(m.ProblemText, (ctx.server_id, 4307)).extract_status == "llm_guess"
+        tasks = s.scalars(select(m.FetchTask.target_id).where(m.FetchTask.kind == "label_problem")).all()
+        assert tasks == [4307]
+
+
+def test_opening_problems_never_tidies(demo, fake_llm):
+    """题面按（服务器, 题目）存，老师、学生共用：学生打开题目、作业页只读库，不会触发整理；
+    重整只在后台做，这台服务器上每道题一次。"""
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        row = s.get(m.ProblemText, (sid, 406))
+        row.content_type, row.file_bytes, row.raw_text = "application/pdf", make_pdf(LINES), "\n".join(LINES)
+        row.extracted_text, row.extract_status, row.tidied_at, row.tidy_version = OLD_TIDY, "llm", db.now(), None
+    seen = fake_llm({"text": NEW_TIDY, "restored": False})
+    key = f"p{sid}-406"
+    for login in ("2500000001", "2500000002"):
+        with TestClient(create_app()) as c:
+            if c.post("/api/auth/login", json={"loginName": login, "password": "test-pass"}).status_code != 200:
+                continue
+            for _ in range(3):
+                d = c.get(f"/api/problems/{key}")
+                assert d.status_code != 200 or d.json()["statement"] == OLD_TIDY
+    assert seen == []
+    with db.session_scope() as s:
+        assert s.get(m.ProblemText, (sid, 406)).tidy_version is None
+        pdftext.retidy(s, sid, 406)
+    assert len(seen) == 1
