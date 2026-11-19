@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 /** 当前属于哪一档布局。和 layout.css 里的断点保持一致。 */
 export type Layout = "phone" | "two" | "three" | "four";
@@ -34,9 +34,11 @@ interface Loaded<T> {
  *  取的时候数据的版本（fresh）和现在一样就不再请求，不一样才在后台取新的。 */
 const memo = new Map<string, { value: unknown; fresh?: string }>();
 const MEMO_MAX = 40;
+let memoSession = 0;
 
 export function clearLoadMemo() {
   memo.clear();
+  memoSession += 1;
 }
 
 function remember(key: string, value: unknown, fresh?: string) {
@@ -65,25 +67,26 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
 
   const run = useCallback((silent: boolean) => {
     const mine = ++seq.current;
+    const session = memoSession;
     if (!silent) setLoading(true);
     fnRef.current()
       .then((value) => {
-        if (mine !== seq.current) return;
+        if (mine !== seq.current || session !== memoSession) return;
         if (keyRef.current) remember(keyRef.current, value, freshRef.current);
         setData(value);
         setStale(false);
         setError(null);
       })
       .catch((err: Error) => {
-        if (mine !== seq.current) return;
+        if (mine !== seq.current || session !== memoSession) return;
         if (!silent) setError(err.message);
       })
       .finally(() => {
-        if (mine === seq.current) setLoading(false);
+        if (mine === seq.current && session === memoSession) setLoading(false);
       });
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setError(null);
     const hit = memoKey ? memo.get(memoKey) : undefined;
     if (hit && fresh !== undefined && hit.fresh === fresh) {
@@ -112,7 +115,17 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
   }, [pollMs, run]);
 
   const reload = useCallback(() => run(true), [run]);
-  return { data, error, loading, stale, reload, setData };
+  const session = memoSession;
+  const replace = useCallback((value: T) => {
+    if (session !== memoSession) return;
+    seq.current += 1;
+    if (keyRef.current) remember(keyRef.current, value, freshRef.current);
+    setData(value);
+    setLoading(false);
+    setStale(false);
+    setError(null);
+  }, [session]);
+  return { data, error, loading, stale, reload, setData: replace };
 }
 
 /** 按 Esc 关闭。 */

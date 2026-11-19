@@ -6,7 +6,7 @@ import json
 
 from sqlalchemy import select
 
-from app import config, db, llm, mastery, pipeline
+from app import config, db, llm, mastery, pipeline, review
 from app import models as m
 from app.chat import context, validate, workflow
 from app.chat.policy import PolicyInput, decide
@@ -97,7 +97,9 @@ def test_seeded_story(demo):
         assert [(p.problem_id, p.skill_code, p.nth, p.resolution, p.passed_after) for p in stuck] == [
             (301, "C02.01.02", 1, "example_given", None), (410, "C06.03.02", 1, "example_given", True)]
         assert mastery.skill_state(s, UID, "C06.03.02").level == "待加强"
-        assert mastery.skill_state(s, UID, "C02.01.02").level == "待加强"
+        # 整数范围已经做过一次间隔复习，早先的卡点仍保留在证据中。
+        state = mastery.skill_state(s, UID, "C02.01.02")
+        assert state.events >= 2 and state.f > 0
 
 
 def test_second_time_stuck_recall_then_blank(demo):
@@ -234,7 +236,7 @@ def test_pass_closes_round_and_queues_review(demo):
         msgs = workflow.thread_messages(s, UID, (sid, 406))
         assert all(msg.kind != "quiz" for msg in msgs)
         ri = s.scalar(select(m.ReviewItem).where(m.ReviewItem.user_id == UID, m.ReviewItem.skill_code == "C06.03.02"))
-        assert ri.trigger_submission_id == new_id and ri.due_at <= db.now()
+        assert ri.trigger_submission_id == new_id and review.available_at(ri) > db.now()
         pipeline.process_submission(s, sid, new_id)   # 重复处理：不重复记证据，不重复出题
         assert len(workflow.thread_messages(s, UID, (sid, 406))) == len(msgs)
         del last

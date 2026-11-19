@@ -11,7 +11,7 @@ import Attempt from "../components/Attempt";
 import Quiz from "../components/Quiz";
 import { StudentShell } from "../components/Shell";
 import { AgentMark } from "../components/Thread";
-import { Card, Drawer, Empty, Inline, Loading, Meter, Problem } from "../components/ui";
+import { Card, Drawer, Empty, Inline, Loading, Problem } from "../components/ui";
 import { useLayout, useLoad, type Layout } from "../lib/hooks";
 import { dayLabel, futureDay } from "../lib/time";
 import { useStatus } from "../session";
@@ -24,8 +24,7 @@ function Plan({ items }: { items: ReviewItemView[] }) {
         <li key={item.id}>
           <span className="review-date">{item.dueNow ? "今天" : futureDay(item.due)}</span>
           <div className="review-row-main"><strong>{item.title}</strong><span className="note">{item.why}</span></div>
-          <Meter level={item.memory.segments >= 3 ? "已掌握" : item.memory.segments === 2 ? "基本掌握" : "待加强"}
-            segments={item.memory.segments} label={item.memory.text} />
+          <span className="note">{item.memory.text}</span>
         </li>
       ))}
     </ul>
@@ -188,7 +187,7 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
 
 /** 一道做完的复习题：题和反馈，接着可以问。 */
 function HistoryChat({ id, layout, onAsked }: { id: number; layout: Layout; onAsked: () => void }) {
-  const one = useLoad(() => api.reviewAttempt(id), [id]);
+  const one = useLoad(() => api.reviewAttempt(id), [id], 0, false, `s:review-attempt:${id}`);
   if (one.error) return <div className="chat-scroll"><div className="chat-list"><Problem message={one.error} onRetry={one.reload} /></div></div>;
   if (!one.data) return <div className="chat-scroll"><div className="chat-list"><Loading what="正在取这道题" /></div></div>;
   return <ReviewChat quiz={one.data.quiz} layout={layout} onChange={() => undefined} onAsked={onAsked} />;
@@ -207,8 +206,9 @@ function PlanView({ d, waiting }: { d: ReviewPage; waiting: boolean }) {
           </div>
         )}
         {!waiting && d.due.length === 0 && (
-          <div className="card"><Empty icon={CircleCheck} title="今天没有要做的题">做错过、改过几次才通过的地方，快忘的时候会出现在这里。</Empty></div>
+          <div className="card"><Empty icon={CircleCheck} title="今天没有要做的题">需要巩固或重新练习的知识点，会在间隔一段时间后出现在这里。</Empty></div>
         )}
+        {d.due.length > 0 && <Card title="待复习"><Plan items={d.due} /></Card>}
         <Card title="接下来">
           {d.upcoming.length ? <Plan items={d.upcoming} /> : <p className="note">暂时没有别的安排。</p>}
         </Card>
@@ -230,8 +230,8 @@ export default function Review() {
   const layout = useLayout();
   const { reload: reloadStatus } = useStatus();
   const [poll, setPoll] = useState(0);
-  const data = useLoad(() => api.review(), [], poll);
-  const history = useLoad(() => api.reviewAttempts(), [], 0, true);
+  const data = useLoad(() => api.review(), [], poll, false, "s:review");
+  const history = useLoad(() => api.reviewAttempts(), [], 0, true, "s:review-attempts");
   const [shown, setShown] = useState<QuizView | null>(null);   // 正在做的这道（做的过程中不被刷新冲掉）
   const [dismissed, setDismissed] = useState<number | undefined>();
   const [drawer, setDrawer] = useState(false);
@@ -246,7 +246,7 @@ export default function Review() {
 
   const currentTitle = quiz ? (d?.due.find((x) => x.id === current?.itemId)?.title ?? "今天的复习") : null;
   const rows = (history.data?.attempts ?? []).filter((a) => a.attemptId !== quiz?.attemptId);
-  const key = param ?? "";
+  const key = param ?? (d ? (quiz ? "now" : "plan") : "");
 
   // /review：有备好的题就进这道，没有就看复习安排
   useEffect(() => {
@@ -257,6 +257,7 @@ export default function Review() {
   const open = (next: string) => { setDrawer(false); navigate(`/review/${next}`); };
   const update = (q: QuizView) => {
     setShown(q);
+    if (d && current?.quiz.attemptId === q.attemptId) data.setData({ ...d, current: { ...current, quiz: q } });
     if (q.state === "done") { reloadStatus(); history.reload(); }
   };
   const next = () => {

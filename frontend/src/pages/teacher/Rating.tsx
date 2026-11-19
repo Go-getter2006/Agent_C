@@ -123,7 +123,7 @@ function Blind({ cls, d, onDone }: { cls: ClassInfo; d: RatingData; onDone: (nex
 }
 
 export default function Rating({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<RatingData>(`/api/teacher/classes/${cls.key}/rating`), [cls.key]);
+  const data = useLoad(() => get<RatingData>(`/api/teacher/classes/${cls.key}/rating`), [cls.key], 0, false, `t:rating:${cls.key}`);
   const [view, setView] = useState<"blind" | "results">("blind");
   const [cur, setCur] = useState<RatingData | null>(null);
   useEffect(() => { setCur(null); }, [cls.key]);

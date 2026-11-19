@@ -46,11 +46,11 @@ export default function Knowledge() {
   const navigate = useNavigate();
   const layout = useLayout();
   const { me } = useSession();
-  const topics = useLoad(() => api.topics(), [], 60000, true);
+  const topics = useLoad(() => api.topics(), [], 60000, true, "s:topics");
   const [drawer, setDrawer] = useState(false);
   const [withProblem, setWithProblem] = useState(false);
   const list = topics.data?.topics ?? [];
-  const key = topic ?? "";
+  const key = topic ?? (topics.data ? list[0]?.key ?? "new" : "");
   const fresh = useRef(new Set<string>());   // 刚建好的问答：列表还没刷新到它，也不算“没了”
 
   // /ask：回到最近的问答；一个都没有就是新的问答。问答没了（别的课程、被删）：也退回新的问答

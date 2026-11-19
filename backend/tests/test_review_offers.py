@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import func, select
 
-from app import db, llm, quiz, quizgen, review, pdftext
+from app import db, llm, mastery, quiz, quizgen, review, pdftext
 from app import models as m
 from app.chat.analyze import analyze, analyze_rules
 from app.chat import context, reply
@@ -159,12 +159,12 @@ def test_real_wait_is_measured_at_first_judgement(database, monkeypatch):
         item.origin_server_id, item.origin_problem_id = 1, 6
         item = review.enqueue(s, UID, SKILL, "corrected", 1, 6, at, 901)
         monkeypatch.setattr(quizgen, "generate", lambda *_a, **_k: q)
-        _, a = review.start(s, UID, item.id, at + dt.timedelta(seconds=12), "C")
-        assert a.events[0]["phase"] == "recent" and a.events[0]["submissionId"] == 901
-        monkeypatch.setattr(db, "now", lambda: at + dt.timedelta(seconds=300))
+        _, a = review.start(s, UID, item.id, at + dt.timedelta(days=2), "C")
+        assert a.events[0]["phase"] == "delayed" and a.events[0]["submissionId"] == 901
+        monkeypatch.setattr(db, "now", lambda: at + dt.timedelta(days=2, seconds=300))
         quiz.judge2(s, a, q.has_bug)
         quiz.judge2(s, a, not q.has_bug)
-        assert [e["secondsSinceTrigger"] for e in a.events if e["kind"] == "judge"] == [300]
+        assert [e["secondsSinceTrigger"] for e in a.events if e["kind"] == "judge"] == [173100]
 
 
 def test_slow_background_question_does_not_hold_homework_or_review_requests(demo, monkeypatch):
@@ -204,16 +204,34 @@ def test_slow_background_question_does_not_hold_homework_or_review_requests(demo
         assert not errors and not worker.is_alive()
 
 
-def test_worker_prepares_recent_correction_before_student_opens_any_page(database, monkeypatch):
+def test_worker_waits_before_preparing_corrections(database, monkeypatch):
     at = db.now()
     with db.session_scope() as s:
         _, q = setup(s, at)
         item = review.enqueue(s, UID, SKILL, "corrected", 1, 406, at, 901)
-        assert item.due_at == at
+        assert review.available_at(item) >= at + dt.timedelta(days=1)
         qid = q.id
     monkeypatch.setattr(quizgen, "generate", lambda s, *_a, **_k: s.get(m.QuizItem, qid))
-    assert review.prepare_active(at=at) == 1
     assert review.prepare_active(at=at) == 0
+    later = at + dt.timedelta(days=2)
+    assert review.prepare_active(at=later) == 1
+    assert review.prepare_active(at=later) == 0
     with db.session_scope() as s:
         assert review.ready_count(s, UID, "C") == 1
         assert s.scalar(select(m.ChatMessage.id)) is None
+
+
+
+def test_review_ranks_evidence_above_age_and_waits_before_rechecking(database):
+    now = db.now()
+    with db.session_scope() as s:
+        oldest = review.enqueue(s, UID, "C02.01.02", "stuck", at=now - dt.timedelta(days=60))
+        repeated = review.enqueue(s, UID, SKILL, "repeated_fix", 1, 406, now - dt.timedelta(days=2), 100)
+        weak = review.enqueue(s, UID, "C03.03.01", "failed", at=now - dt.timedelta(days=2))
+        verify = review.enqueue(s, UID, "C04.03.01", "verify", 1, 402, now - dt.timedelta(days=2), 200)
+        recent = review.enqueue(s, UID, "C05.02.01", "repeated_fix", 1, 405, now - dt.timedelta(hours=10), 300)
+        mastery.record_stuck(s, UID, weak.skill_code, 2, "stuck:201", ts=now - dt.timedelta(days=2))
+        assert [r.id for r in review.due_items(s, UID, now, "C", candidates=True)] == [
+            weak.id, repeated.id, verify.id, oldest.id]
+        assert not review.item_view(s, UID, recent, now)["dueNow"]
+        assert "雷同" not in review.ORIGIN_TEXT[verify.origin]

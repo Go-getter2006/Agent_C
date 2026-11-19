@@ -213,7 +213,7 @@ def next_block(snap: Snapshot, errors: list[dict]) -> list[dict]:
         ref = review._origin_ref(snap.s, snap.user_id, rv)
         where = f"你在「{ref['title']}」（{ref['brief']}）里{review.ORIGIN_TEXT.get(rv.origin, '卡过')}。" if ref else ""
         out.append({"kind": "review", "reviewId": rv.id, "title": f"复习：{kp}",
-                    "reason": f"{where}现在{review.memory(rv, snap.now)['text']}，做一道小题巩固一下。"})
+                    "reason": f"{where or review.ORIGIN_TEXT.get(rv.origin, '这个知识点需要巩固') + '。'}可以用一道新题复习。"})
     for row in errors:
         if row["status"] == "已改正":
             continue

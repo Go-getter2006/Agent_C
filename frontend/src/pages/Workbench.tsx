@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowUp, ChevronDown, CloudOff, List, MessagesSquare, PanelRight } from "lucide-react";
 import { api, ApiError } from "../api";
-import { KeyCache } from "../lib/keyCache";
 import DiffOverlay from "../components/Diff";
 import { SidePanel } from "../components/Lists";
 import HomeworkNavigator from "../components/HomeworkNavigator";
@@ -17,8 +16,7 @@ import { useLayout, useLoad } from "../lib/hooks";
 import { forgetSection, readDraft, writeDraft } from "../lib/memory";
 import { clock } from "../lib/time";
 import { sortProblems } from "../lib/problems";
-import { useHomeworks, useStatus } from "../session";
-import type { ProblemDetail } from "../types";
+import { useHomeworks, useStatus, useStudentCache } from "../session";
 
 const INDEX_DRAFT = "homework:index";
 
@@ -74,14 +72,11 @@ export default function Workbench() {
   const needsList = entered || isProblem;
 
   // keep：切换作业、题目时先留着上一份，新的到了再换，页面不闪
-  const listCache = useRef(new Map<string, Awaited<ReturnType<typeof api.homework>>>());
   const list = useLoad(async () => {
     if (!current || !needsList) return null;
-    const value = await api.homework(current.key);
-    listCache.current.set(current.key, value);
-    return value;
-  }, [current?.key, needsList], 15000, true);
-  const detailCache = useRef(new KeyCache<ProblemDetail>());
+    return api.homework(current.key);
+  }, [current?.key, needsList], 15000, false, current && needsList ? `s:homework:${current.key}` : undefined);
+  const detailCache = useStudentCache().problems;
   const [detailError, setDetailError] = useState<{ key: string; error: Error } | null>(null);
   const [version, setVersion] = useState(0);
   const reloadDetail = useCallback(() => setVersion(n => n + 1), []);
@@ -96,25 +91,24 @@ export default function Workbench() {
       try {
         const value = await api.problem(key, request.signal);
         if (request.signal.aborted || value.key !== key) return;
-        detailCache.current.put(key, value);
+        detailCache.put(key, value);
         setDetailError(null);
         updateDetail(n => n + 1);
       } catch (err) {
         if (request.signal.aborted) return;
-        if (err instanceof ApiError && (err.status === 403 || err.status === 404)) detailCache.current.delete(key);
+        if (err instanceof ApiError && (err.status === 403 || err.status === 404)) detailCache.delete(key);
         setDetailError({ key, error: err as Error });
       } finally { controller = undefined; }
     };
-    if (!detailCache.current.fresh(key)) void read();
+    if (!detailCache.fresh(key)) void read();
     const timer = window.setInterval(() => { if (!document.hidden) void read(); }, 15000);
     return () => { window.clearInterval(timer); controller?.abort(); };
   }, [key, version]);
-  const d = key ? detailCache.current.get(key) : undefined;
+  const d = key ? detailCache.get(key) : undefined;
   const detailFailure = detailError?.key === key ? detailError?.error : undefined;
   const [drawer, setDrawer] = useState<"list" | "side" | null>(null);
   const [showDocument, setShowDocument] = useState(false);
-  const cachedList = current ? listCache.current.get(current.key) : null;
-  const shownList = list.data?.homework.key === current?.key ? list.data : cachedList ?? list.data;
+  const shownList = list.data?.homework.key === current?.key ? list.data : null;
   const listOk = !!shownList && !!current && shownList.homework.key === current.key;
 
   useEffect(() => { setDrawer(null); setShowDocument(false); }, [key, layout]);
@@ -149,7 +143,7 @@ export default function Workbench() {
 
   const refresh = useCallback(() => {
     list.reload();
-    if (key) detailCache.current.expire(key);
+    if (key) detailCache.expire(key);
     reloadDetail();
     reloadStatus();
   }, [key, list.reload, reloadDetail, reloadStatus]);
@@ -189,8 +183,8 @@ export default function Workbench() {
   const shown = newerRow ? undefined : d;
   const newerAttempt = newerRow ? row.last?.key : undefined;
   useEffect(() => {
-    if (key && newerAttempt && detailCache.current.get(key)) {
-      detailCache.current.expire(key);
+    if (key && newerAttempt && detailCache.get(key)) {
+      detailCache.expire(key);
       reloadDetail();
     }
   }, [key, newerAttempt, reloadDetail]);

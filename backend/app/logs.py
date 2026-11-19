@@ -401,7 +401,8 @@ def versions() -> dict:
     from . import config, diagnosis, rating, stuckstats
 
     return {"stuck": stuckstats.VERSION, "rating": rating.VERSION, "prompt": config.PROMPT_VERSION,
-            "diagnosis": diagnosis.VERSION, "quizProtocol": 2}
+            "diagnosis": diagnosis.VERSION, "quizProtocol": 2,
+            "reviewSchedule": "evidence-priority-1", "mastery": config.MASTERY_VERSION}
 
 
 def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:

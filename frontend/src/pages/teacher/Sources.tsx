@@ -28,7 +28,7 @@ function sourceState(src: SourceRow): { text: string; cls: string } {
 }
 
 export default function Sources() {
-  const data = useLoad(() => get<SourcesData>("/api/teacher/sources"), [], 60000);   // 同步状态页：心跳不算“数据变了”，自己一分钟问一次
+  const data = useLoad(() => get<SourcesData>("/api/teacher/sources"), [], 60000, false, "t:sources");   // 同步状态页：心跳不算“数据变了”，自己一分钟问一次
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在加载" lines={4} /></div>;

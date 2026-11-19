@@ -182,3 +182,29 @@ def test_student_sees_own_description_without_numbers(demo):
         items = [i for g in prog["knowledge"] for i in g["items"] if i["basis"].startswith("做过")]
         assert items and all("score" not in i for i in items)
         assert any("一次就做对" in i["basis"] or "改对" in i["basis"] for i in items)
+
+
+
+def test_repeated_errors_keep_more_weight_after_correction(database):
+    from types import SimpleNamespace
+
+    now = db.now()
+    skill = "C06.03.02"
+    label = SimpleNamespace(primary_skill=skill, secondary_skills=[])
+    with db.session_scope() as s:
+        for uid, misses, reliability in (("single", 1, 1.0), ("repeat", 2, 1.0), ("uncertain", 0, 0.4)):
+            for sid in range(1, misses + 1):
+                failed = m.Submission(user_id=uid, server_id=1, problem_id=201, submission_id=sid + misses * 10,
+                                      judgement="WA", submit_time=now)
+                s.add(failed)
+                mastery.record_failed_submission(s, failed, skill)
+            sid = 100 + misses
+            s.add(m.Submission(user_id=uid, server_id=1, problem_id=201, submission_id=sid,
+                               judgement="AC", submit_time=now))
+            mastery.record_pass(s, uid, label, f"pass:1:{sid}", now, misses, "NA", reliability)
+        single = mastery.skill_states(s, "single", at=now, decay=False, model="v2")[skill]
+        repeat = mastery.skill_states(s, "repeat", at=now, decay=False, model="v2")[skill]
+        uncertain = mastery.skill_states(s, "uncertain", at=now, decay=False, model="v2")[skill]
+        assert repeat.score < single.score and repeat.f > single.f > 0
+        assert uncertain.f == 0 and uncertain.s > 0 and not uncertain.last_independent_success
+        assert uncertain.discounted == 1

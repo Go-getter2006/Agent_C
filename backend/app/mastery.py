@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 
 from sqlalchemy import func, select
@@ -229,7 +230,7 @@ def topo_order() -> list[str]:
 def half_life_days(rows: list[m.SkillEvidence]) -> float:
     """证据半衰期：间隔开的独立成功（按北京时间的不同日期计）每多一天乘 growth，每次失败除以 growth。"""
     cfg = config.MASTERY_V2
-    days = {r.ts.astimezone(db.BEIJING).date() for r in rows if r.success and r.independent and r.weight > 0}
+    days = {r.ts.astimezone(db.BEIJING).date() for r in rows if r.success and r.independent and r.weight > 0 and (r.reliability is None or r.reliability >= 1)}
     fails = sum(1 for r in rows if not r.success and r.weight > 0)
     h = cfg["half_life_base"] * cfg["half_life_growth"] ** (max(0, len(days) - 1) - fails)
     return max(cfg["half_life_min"], min(cfg["half_life_max"], h))
@@ -291,12 +292,16 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
         if r.event_type in AGENT_EVENTS and not include_agent:
             continue
         by_skill.setdefault(r.skill_code, []).append(r)
+    weak_passes = {r.source_key for rows in by_skill.values() for r in rows
+                   if r.success and r.event_type.startswith("pass") and r.reliability is not None and r.reliability < 1}
     out: dict[str, SkillState] = {}
     for code, rows in by_skill.items():
         st = SkillState(code, model="v2")
         h = half_life_days([r for r in rows if r.event_type not in AGENT_EVENTS])
         st.half_life = h
         pass_keys = {r.source_key for r in rows if r.success and r.event_type.startswith("pass")}
+        episodes = Counter(r.source_key.rsplit(":", 1)[0] for r in rows if r.event_type == "submit_failed")
+        credited_fixes = set()
         fixed_problems: set[str] = set()   # 这个技能上改对过的题
         for r in rows:
             days = max(0.0, (at - r.ts).total_seconds() / 86400.0)
@@ -309,12 +314,16 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                 else:
                     st.f += w
                 continue
-            fixed_by = resolved_by(r, history) if not r.success else None
+            fixed_by = resolved_by(r, history) if r.event_type == "submit_failed" else None
+            if fixed_by in weak_passes:
+                fixed_by = None
             if fixed_by is not None:
                 # 后来改对了：失败只算一小部分；这次通过没有记到这个技能上（错在别的技能），改对它算一次会
-                st.f += w * cfg["resolved_fail_factor"]
-                if fixed_by not in pass_keys:
+                repeated = episodes[r.source_key.rsplit(":", 1)[0]] >= 2
+                st.f += w * cfg["repeated_fail_factor" if repeated else "resolved_fail_factor"]
+                if fixed_by not in pass_keys and fixed_by not in credited_fixes:
                     st.s += w * cfg["resolved_fix_credit"]
+                    credited_fixes.add(fixed_by)
             elif r.success:
                 st.s += w
             else:
@@ -327,10 +336,11 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                 fixed_problems.add(":".join(r.source_key.split(":")[1:3]))
             st.raw += r.weight
             st.events += 1
-            if (r.reliability or 1.0) < 1.0:
+            if r.reliability is not None and r.reliability < 1.0:
                 st.discounted += 1
             st.last_ts = r.ts
-            st.last_independent_success = bool((r.success and r.independent) or fixed_by is not None)
+            st.last_independent_success = bool((r.success and r.independent and r.source_key not in weak_passes)
+                                               or fixed_by is not None)
         out[code] = st
 
     # 图先验：按先修顺序走一遍，先修（有证据或能推出来的）的均值决定起点

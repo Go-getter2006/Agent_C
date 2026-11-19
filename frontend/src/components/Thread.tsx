@@ -7,8 +7,7 @@ import type { Layout } from "../lib/hooks";
 import { readDraft, readScroll, saveScroll, writeDraft } from "../lib/memory";
 import { dayLabel, sameDay } from "../lib/time";
 import type { HelpAction, Message, QuizView } from "../types";
-import { KeyCache } from "../lib/keyCache";
-import { useSession } from "../session";
+import { useSession, useStudentCache } from "../session";
 import CourseScene from "./CourseScene";
 import Attempt from "./Attempt";
 import Quiz from "./Quiz";
@@ -63,9 +62,9 @@ function looksLikeCode(text: string): boolean {
 
 export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, onNoticeRead, context, contextOffer,
   emptyReady = true, waitingContext = false, onThread, onActivity }: Props) {
-  const cache = useRef(new KeyCache<Message[]>());
+  const cache = useStudentCache().threads;
   const request = useRef<AbortController | null>(null);
-  const [messages, setMessages] = useState<Message[] | null>(null);
+  const [messages, setMessages] = useState<Message[] | null>(() => cache.get(threadKey) ?? null);
   const [owner, setOwner] = useState(threadKey);
   const stale = owner !== threadKey;
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -101,13 +100,13 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     api.thread(key, controller.signal)
       .then((r) => {
         if (controller.signal.aborted || key !== keyRef.current || seq !== loadSeq.current) return;
-        cache.current.put(key, r.messages);
+        cache.put(key, r.messages);
         setMessages(r.messages);
         setOwner(key);
         setLoadError(null);
       })
       .catch((err: Error) => {
-        if (!controller.signal.aborted && seq === loadSeq.current && key === keyRef.current && (!silent || !cache.current.get(key))) setLoadError(err.message);
+        if (!controller.signal.aborted && seq === loadSeq.current && key === keyRef.current && (!silent || !cache.get(key))) setLoadError(err.message);
       }).finally(() => { if (request.current === controller) request.current = null; });
   }, []);
 
@@ -116,7 +115,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
       created.current = null;
       return;
     }
-    const cached = cache.current.get(threadKey);
+    const cached = cache.get(threadKey);
     setMessages(cached ?? null);
     setOwner(threadKey);
     followBottom.current = true;
@@ -127,7 +126,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     setFailed(failures.current.get(threadKey) ?? null);
     setTextRaw(readDraft(threadKey));
     restoreScroll.current = readScroll(threadKey);
-    if (!cache.current.fresh(threadKey)) load(false);
+    if (!cache.fresh(threadKey)) load(false);
     return () => { request.current?.abort(); loadSeq.current += 1; };
   }, [threadKey, load]);
 
@@ -157,9 +156,9 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
       if (!ids.length) return;
       ids.forEach(id => reading.current.add(id));
       void api.readNotices(threadKey, ids).then(() => {
-        if (keyRef.current === threadKey) setMessages(old => old && cache.current.put(threadKey,
+        if (keyRef.current === threadKey) setMessages(old => old && cache.put(threadKey,
           old.map(m => ids.includes(m.id) ? { ...m, unreadNotice: false } : m)));
-        else cache.current.delete(threadKey);
+        else cache.delete(threadKey);
         onNoticeRead?.();
       }).catch(() => {}).finally(() => ids.forEach(id => reading.current.delete(id)));
     }, { root });
@@ -184,8 +183,8 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     try {
       const r = await api.send(key, payload);
       still = key === keyRef.current;
-      cache.current.delete(key);
-      cache.current.put(r.thread || key, r.messages);
+      cache.delete(key);
+      cache.put(r.thread || key, r.messages);
       if (!still) return;
       loadSeq.current += 1;
       setOwner(r.thread || key);
@@ -247,7 +246,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
 
   const updateQuiz = (id: number, next: QuizView) => {
     if (keyRef.current !== threadKey) return;
-    setMessages(old => old && cache.current.put(threadKey, old.map(m => m.id === id ? { ...m, quiz: next } : m)));
+    setMessages(old => old && cache.put(threadKey, old.map(m => m.id === id ? { ...m, quiz: next } : m)));
     if (next.state === "done") onActivity?.();
   };
 

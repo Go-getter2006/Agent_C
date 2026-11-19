@@ -62,7 +62,7 @@ function KpTile({ kp, quiz, onPractice }: { kp: KnowledgeItem; quiz?: DimRow; on
 export default function Progress() {
   const { me } = useSession();
   const navigate = useNavigate();
-  const progress = useLoad(() => api.progress(), [], 60000);
+  const progress = useLoad(() => api.progress(), [], 60000, false, "s:progress");
   const [all, setAll] = useState(false);
   const p = progress.data;
 

@@ -1,9 +1,10 @@
 // 登录状态，以及学生端几个页面共用的“当前选的是哪个作业”。
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, setUnauthorizedHandler } from "./api";
+import { KeyCache } from "./lib/keyCache";
 import { clearLoadMemo, useLoad } from "./lib/hooks";
 import { clearDrafts, setScope } from "./lib/memory";
-import type { Homework, Me, StatusInfo } from "./types";
+import type { Homework, Me, Message, ProblemDetail, StatusInfo } from "./types";
 
 interface SessionValue {
   me: Me | null;
@@ -94,6 +95,13 @@ function useHomeworksState(): HomeworksValue {
 }
 
 // ---------- 学生端：XDOJ 状态、该复习的数量（侧边栏的小红点用） ----------
+function makeStudentCache() {
+  return { threads: new KeyCache<Message[]>(), problems: new KeyCache<ProblemDetail>() };
+}
+
+const StudentCacheContext = createContext<ReturnType<typeof makeStudentCache> | null>(null);
+export const useStudentCache = () => useContext(StudentCacheContext)!;
+
 interface StatusValue {
   status: StatusInfo | null;
   reload: () => void;
@@ -102,9 +110,12 @@ interface StatusValue {
 const StatusContext = createContext<StatusValue>({ status: null, reload: () => undefined });
 
 export function StatusProvider({ children }: { children: ReactNode }) {
+  const [cache] = useState(makeStudentCache);
   const status = useLoad(() => api.status(), [], 15000);
   const value = useMemo(() => ({ status: status.data, reload: status.reload }), [status.data, status.reload]);
-  return <StatusContext.Provider value={value}>{children}</StatusContext.Provider>;
+  return <StatusContext.Provider value={value}>
+    <StudentCacheContext.Provider value={cache}>{children}</StudentCacheContext.Provider>
+  </StatusContext.Provider>;
 }
 
 export const useStatus = () => useContext(StatusContext);

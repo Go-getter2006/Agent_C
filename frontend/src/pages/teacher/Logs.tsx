@@ -40,7 +40,7 @@ const downloadUrl = (r: RequestView) => `/api/teacher/logs/${r.id}/download?toke
 
 export default function Logs() {
   const [params] = useSearchParams();
-  const meta = useLoad(() => get<LogMeta>("/api/teacher/logs"), []);
+  const meta = useLoad(() => get<LogMeta>("/api/teacher/logs"), [], 0, false, "t:logs");
   const [ids, setIds] = useState(params.get("ids") ?? "");
   const [classKeys, setClassKeys] = useState<string[]>([]);
   const [from, setFrom] = useState(() => isoDay(new Date(Date.now() - 30 * 86400_000)));

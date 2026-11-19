@@ -185,9 +185,9 @@ def _run_timeline(server_id: int, now: dt.datetime, with_story: bool) -> None:
 
     def answer_quiz(minutes_ago: float, confidence: str):
         def run(s, at):
-            # 演示学生稍后进入复习提升，在独立窗口检查刚刚改对的技能。
+            # 演示学生稍后进入复习提升，用一段新的代码复习以前卡过的知识点。
             target = s.scalar(select(m.ReviewItem).where(m.ReviewItem.user_id == uid,
-                              m.ReviewItem.origin_problem_id == 410))
+                              m.ReviewItem.skill_code == "C02.01.02"))
             if target is not None:
                 review.start(s, uid, target.id, at, "C")
             attempt = s.scalars(select(m.QuizAttempt).where(
@@ -201,6 +201,8 @@ def _run_timeline(server_id: int, now: dt.datetime, with_story: bool) -> None:
             quiz.locate(s, attempt, [start + (item.bug_line or 1) - 1])
             if attempt.state == "edit":
                 quiz.submit_fix(s, attempt, item.standard_fix)
+            if attempt.state != "done":
+                quiz.skip(s, attempt)  # 运行环境不可用时，演示记录也能完整收尾
             attempt.finished_at = at
             s.flush()
             for ev in s.scalars(select(m.SkillEvidence).where(
@@ -213,10 +215,11 @@ def _run_timeline(server_id: int, now: dt.datetime, with_story: bool) -> None:
         # 九天前，「阶乘求和」：第一次卡在“估计结果范围”上，拿到了示例代码，之后还是没通过
         say(9 * d + 17, 301, "n 大的时候结果就不对，是哪里的问题？")
         say(9 * d + 14, 301, "不知道怎么改。")
-        # 昨天，「最大差值」：第一次卡在“最值的初值”上，拿到示例代码后通过，顺手做了一道小题
+        # 七天前，完成一道关于整数取值范围的间隔复习题
+        answer_quiz(7 * d, "一半")
+        # 昨天，「最大差值」：第一次卡在“最值的初值”上，拿到示例代码后通过
         say(1 * d + 22, 410, "有几组过不了，我看不出哪里有问题。")
         say(1 * d + 18, 410, "还是不会，不知道该怎么写。")
-        answer_quiz(1 * d - 3, "一半")
         # 今天，「成绩最高分」：同一个地方又错了，对话进行到一半
         say(5, 406, "有一组一直错，我觉得逻辑没问题，是不是比较那里写错了？")
         say(4, 406, "max 是 0 也没关系吧，反正后面会比较。")

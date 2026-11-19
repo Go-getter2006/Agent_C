@@ -48,7 +48,7 @@ function Routed() {
     );
   }
   return (
-    <StatusProvider>
+    <StatusProvider key={`${me.loginName}:${me.course}`}>
       <HomeworksProvider>
       <Routes>
         <Route path="/ask" element={<Knowledge />} />

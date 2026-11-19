@@ -66,9 +66,10 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
     fp = similarity.check_pass(s, sub)
     reliability = config.MASTERY_V2["copy_reliability"] if fp is not None and fp.suspicious else 1.0
     if label is not None:
+        failures = sum(x.judgement not in ("AC", "PENDING", "UNKNOWN", "") for x in earlier)
         mastery.record_pass(s, sub.user_id, label, f"pass:{server_id}:{submission_id}", sub.submit_time or db.now(),
-                            len(earlier), help_before(s, sub), reliability)
-        review.on_independent_practice(s, sub, label, len(earlier), help_before(s, sub), reliability)
+                            failures, help_before(s, sub), reliability)
+        review.on_independent_practice(s, sub, label, failures, help_before(s, sub), reliability)
     from .chat import summary, workflow
 
     summary.on_pass(s, sub, now)
@@ -109,7 +110,8 @@ def backfill_passes(s: Session, limit: int = 100) -> int:
             continue
         earlier = s.scalar(select(func.count()).select_from(m.Submission).where(
             m.Submission.server_id == server_id, m.Submission.user_id == user_id,
-            m.Submission.problem_id == problem_id, m.Submission.submission_id < submission_id)) or 0
+            m.Submission.problem_id == problem_id, m.Submission.submission_id < submission_id,
+            m.Submission.judgement.not_in(("AC", "PENDING", "UNKNOWN", "")))) or 0
         fp = similarity.check_pass(s, sub)
         reliability = config.MASTERY_V2["copy_reliability"] if fp is not None and fp.suspicious else 1.0
         mastery.record_pass(s, user_id, label, f"pass:{server_id}:{submission_id}", sub.submit_time or db.now(),

@@ -21,7 +21,7 @@ Leitner 盒子；半衰期回归（Settles 和 Meeder 2016）。
 6. 不打扰：不弹窗，不往对话里插题。小题在“复习提升”里做（界面改造方案第 4 节）：后台空闲时给最近来过的学生
    提前备好一道（prepare_active），没备好时后台退避重试；
    侧边栏的数字只数已经备好的题（ready_count）。中途离开的，回来接着做同一道。
-   每天最多 daily_limit 道，同一个技能一天最多一道；到期的里面先做记得最不牢的。
+   每天最多 daily_limit 道，同一个技能一天最多一道；到期后按掌握证据、反复修改和独立性确认安排。
 7. 出什么题：正式检查使用同一技能的新场景；刚答错过就降一级，出判断题。
 8. 两门课分开：复习项按技能编码属于哪门课，C 语言登录只看 C 语言的，数据结构只看数据结构的；每天的上限也各算各的。
 """
@@ -33,9 +33,9 @@ import math
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from . import catalog, config, db
+from . import catalog, config, db, mastery
 from . import models as m
-from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill, skill_name
+from .taxonomy import LEVEL_WEAK, KNOWLEDGE_POINTS, course_of, kp_of_skill, skill_name
 
 ACTIVE = "active"
 GRADUATED = "graduated"
@@ -56,14 +56,19 @@ def retention(item: m.ReviewItem, at: dt.datetime | None = None) -> float:
     return 2 ** (-days / max(item.half_life, 0.1))
 
 
+def available_at(item: m.ReviewItem) -> dt.datetime:
+    # 旧版本可能将刚通过的题排到当天；已开始的小题仍可继续。
+    evidence_at = item.trigger_at or item.created_at
+    return max(item.due_at, evidence_at + dt.timedelta(days=cfg()["min_gap_days"]))
+
+
 def memory(item: m.ReviewItem, at: dt.datetime | None = None) -> dict:
-    """给学生看的“记得多牢”：只有文字和三段条，不给数字。"""
-    p = retention(item, at)
-    if p >= cfg()["target_retention"]:
-        return {"text": "还记得比较牢", "segments": 3}
-    if p >= 0.5:
-        return {"text": "开始有点模糊", "segments": 2}
-    return {"text": "可能快忘了", "segments": 1}
+    """显示复习状态。估计的记忆保持率只用于内部安排间隔。"""
+    if item.state == GRADUATED:
+        return {"text": "已巩固", "segments": 3}
+    if item.attempt_id is not None or available_at(item) <= (at or db.now()):
+        return {"text": "建议复习", "segments": 1}
+    return {"text": "已安排复习", "segments": 2}
 
 
 def _schedule(item: m.ReviewItem) -> None:
@@ -90,8 +95,6 @@ def enqueue(s: Session, user_id: str, skill: str, origin: str, server_id: int | 
         if submission_id is not None:
             item.trigger_submission_id, item.trigger_at = submission_id, at
             item.origin_server_id, item.origin_problem_id, item.origin = server_id, problem_id, origin
-            if origin in ("corrected", "heavy_help") and item.attempt_id is None:
-                item.due_at = at
 
     start_h = cfg()["initial_half_life"].get(origin, cfg()["initial_half_life"]["stuck"])
     if item is None:
@@ -181,12 +184,21 @@ def on_independent_practice(s: Session, sub: m.Submission, label: m.ProblemLabel
     """第一次通过一道题。它用到的技能如果正在复习：独立做对算一次成功的回忆；靠讲解或示例代码才做出来算一次遗忘。"""
     at = sub.submit_time or db.now()
     skills = [label.primary_skill, *(label.secondary_skills or [])]
-    if help_level in ("H2", "H3"):
-        enqueue(s, sub.user_id, label.primary_skill, "heavy_help", sub.server_id, sub.problem_id, at, sub.submission_id)
-        return
     if reliability < 1.0:
-        return   # 雷同的通过不当作他自己记住了
-    if earlier_attempts > 0:
+        enqueue(s, sub.user_id, label.primary_skill, "verify", sub.server_id, sub.problem_id, at, sub.submission_id)
+        return
+    if earlier_attempts >= 2:
+        history = mastery.attempt_history(s, sub.user_id, at).get((sub.server_id, sub.problem_id), [])
+        errors = {}
+        for sid, verdict, skill in history:
+            if sid < sub.submission_id and verdict not in ("AC", "PENDING", "UNKNOWN", "") and skill:
+                errors[skill] = errors.get(skill, 0) + 1
+        repeated = [skill for skill, count in errors.items() if count >= 2] or [label.primary_skill]
+        for skill in repeated:
+            enqueue(s, sub.user_id, skill, "repeated_fix", sub.server_id, sub.problem_id, at, sub.submission_id)
+    elif help_level in ("H2", "H3"):
+        enqueue(s, sub.user_id, label.primary_skill, "heavy_help", sub.server_id, sub.problem_id, at, sub.submission_id)
+    elif earlier_attempts:
         enqueue(s, sub.user_id, label.primary_skill, "corrected", sub.server_id, sub.problem_id, at, sub.submission_id)
     elif cfg().get("spot_check_every", 10) > 0:
         # 偶尔抽查独立做对的题；既有薄弱项不被抽查重置，也不占据高优先级。
@@ -199,6 +211,8 @@ def on_independent_practice(s: Session, sub: m.Submission, label: m.ProblemLabel
                                                        m.ReviewItem.skill_code == label.primary_skill))
         if n and n % cfg().get("spot_check_every", 10) == 0 and exists is None:
             enqueue(s, sub.user_id, label.primary_skill, "spot_check", sub.server_id, sub.problem_id, at, sub.submission_id)
+    if help_level not in ("NA", "") or earlier_attempts >= 2:
+        return
     for code in skills:
         item = s.scalar(select(m.ReviewItem).where(
             m.ReviewItem.user_id == sub.user_id, m.ReviewItem.skill_code == code, m.ReviewItem.state == ACTIVE))
@@ -243,9 +257,13 @@ def _today_count(s: Session, user_id: str, at: dt.datetime, course: str | None =
     return len(rows), {r.skill_code for r in rows}
 
 
+def _weak(st: mastery.SkillState | None) -> bool:
+    return st is not None and st.events > 0 and (st.level == LEVEL_WEAK or st.score < config.MASTERY_V2["weak_below"])
+
+
 def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None,
               *, candidates: bool = False) -> list[m.ReviewItem]:
-    """今天可以做的：到期的、今天还没做过这个技能的，记得最不牢的在前，最多 daily_limit 个。"""
+    """今天可以做的：到期的、今天还没做过这个技能的，按掌握证据和复习原因排优先级，最多 daily_limit 个。"""
     at = at or db.now()
     done, skills_today = _today_count(s, user_id, at, course)
     room = max(0, cfg()["daily_limit"] - done)
@@ -253,11 +271,17 @@ def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: s
         m.ReviewItem.user_id == user_id, m.ReviewItem.state == ACTIVE,
         or_(m.ReviewItem.due_at <= at, m.ReviewItem.attempt_id.is_not(None)))).all()
     rows = [r for r in rows if _in_course(r.skill_code, course)
-            and (r.skill_code not in skills_today or r.attempt_id is not None)]
+            and (r.attempt_id is not None or (r.skill_code not in skills_today and available_at(r) <= at))]
+    states = mastery.skill_states(s, user_id, at=at, model="v2") if any(r.attempt_id is None for r in rows) else {}
+
     def priority(r):
-        recent_check = (r.trigger_at is not None and at - dt.timedelta(days=1) <= r.trigger_at <= at
-                        and r.origin in ("corrected", "heavy_help") and r.due_at <= r.trigger_at)
-        return (r.attempt_id is None, r.origin == "spot_check", not recent_check, retention(r, at), r.id)
+        st = states.get(r.skill_code)
+        weak = _weak(st)
+        repeat = r.origin in ("recurrence", "repeated_fix")
+        verify = r.origin == "verify"
+        importance = 3 * weak + 2 * repeat + verify
+        return (r.attempt_id is None, r.origin == "spot_check" and not weak, -importance,
+                st.score if st is not None else 0.5, available_at(r), r.id)
 
     rows.sort(key=priority)
     pending = [r for r in rows if r.attempt_id is not None]
@@ -276,6 +300,8 @@ ORIGIN_TEXT = {
     "stuck": "卡住过", "recurrence": "改正后又出现了同样的错误", "quiz_wrong": "小题没做对",
     "heavy_help": "讲了原理或给了代码才做出来", "lucky": "小题没把握但答对了",
     "failed": "之前提交没有通过", "corrected": "之前做错过，后来改对了", "spot_check": "独立做对后的偶尔抽查",
+    "repeated_fix": "这部分曾多次修改后通过", "verify": "换道题确认能否独立完成",
+    "weak": "以往作答显示这部分还需要巩固",
 }
 
 
@@ -285,7 +311,7 @@ def item_view(s: Session, user_id: str, item: m.ReviewItem, at: dt.datetime) -> 
     return {
         "id": item.id, "title": kp, "detail": skill_name(item.skill_code),
         "why": ORIGIN_TEXT.get(item.origin, ""), "origin": _origin_ref(s, user_id, item),
-        "memory": memory(item, at), "due": item.due_at.isoformat(), "dueNow": item.due_at <= at,
+        "memory": memory(item, at), "due": available_at(item).isoformat(), "dueNow": available_at(item) <= at,
         "reps": item.reps, "streak": item.streak, "toGraduate": max(0, cfg()["graduate_streak"] - item.streak),
         "state": item.state, "pending": item.attempt_id is not None,
     }
@@ -297,7 +323,7 @@ def summary(s: Session, user_id: str, at: dt.datetime | None = None, course: str
     due_ids = {d.id for d in due}
     rows = [r for r in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)).all()
             if _in_course(r.skill_code, course)]
-    upcoming = sorted([r for r in rows if r.state == ACTIVE and r.id not in due_ids], key=lambda r: r.due_at)
+    upcoming = sorted([r for r in rows if r.state == ACTIVE and r.id not in due_ids], key=available_at)
     start = at.astimezone(db.BEIJING).replace(hour=0, minute=0, second=0, microsecond=0)
     completed = select(func.count(m.QuizAttempt.id)).where(
         m.QuizAttempt.user_id == user_id, m.QuizAttempt.reason == "review", m.QuizAttempt.state == "done",
@@ -346,7 +372,7 @@ def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None,
         attempt.events = [{**attempt.events[0], "triggerAt": item.trigger_at.isoformat(),
                            "triggerReason": item.origin, "submissionId": item.trigger_submission_id,
                            "serverId": item.origin_server_id,
-                           "phase": "recent" if item.due_at <= item.trigger_at else "delayed"}]
+                           "phase": "delayed"}]
     item.attempt_id = attempt.id
     return item, attempt
 
@@ -354,35 +380,79 @@ def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None,
 def seed_missing(s: Session, user_id: str, course: str, at: dt.datetime, limit: int = 8) -> int:
     """为旧版本漏掉的错误技能补排复习；每个活跃学生半天检查一次，不重置现有或已巩固项。"""
     checked = s.scalar(select(m.UiEvent.id).where(m.UiEvent.user_id == user_id, m.UiEvent.course == course,
-                       m.UiEvent.kind == "review_seed", m.UiEvent.ts > at - dt.timedelta(hours=12)).limit(1))
+                       m.UiEvent.kind == "review_seed_v2", m.UiEvent.ts > at - dt.timedelta(hours=12)).limit(1))
     if checked:
         return 0
-    existing = set(s.scalars(select(m.ReviewItem.skill_code).where(m.ReviewItem.user_id == user_id)).all())
+    existing = {item.skill_code: item for item in s.scalars(
+        select(m.ReviewItem).where(m.ReviewItem.user_id == user_id))}
+    done = 0
+    states = mastery.skill_states(s, user_id, at=at, model="v2")
+    # 延迟确认以前已检测到的雷同通过。后来有过独立作答或已入队的，无需因为旧记录重开。
+    fp, pl = m.CodeFingerprint, m.ProblemLabel
+    suspect = s.execute(select(fp, pl.primary_skill).join(
+        pl, (pl.server_id == fp.server_id) & (pl.problem_id == fp.problem_id) & pl.is_current.is_(True)
+    ).join(m.Server, m.Server.id == fp.server_id).where(
+        fp.user_id == user_id, fp.suspicious.is_(True), m.Server.course == course,
+        fp.submit_time.between(at - dt.timedelta(days=180), at)
+    ).order_by(fp.submit_time.desc()).limit(50))
+    for fact, skill in suspect:
+        if done >= limit:
+            break
+        if not skill or not _in_course(skill, course) or not catalog.is_visible(
+                s, user_id, fact.server_id, fact.problem_id, course=course):
+            continue
+        st = states.get(skill)
+        if skill in existing or (st and st.last_independent_success and st.last_ts and st.last_ts > fact.submit_time):
+            continue
+        existing[skill] = enqueue(s, user_id, skill, "verify", fact.server_id, fact.problem_id,
+                                  fact.submit_time, fact.submission_id)
+        done += 1
     candidates = s.execute(select(m.Submission, m.SubmissionLabel.skill_code).join(
         m.SubmissionLabel, (m.SubmissionLabel.server_id == m.Submission.server_id)
         & (m.SubmissionLabel.submission_id == m.Submission.submission_id)).join(
         m.Server, m.Server.id == m.Submission.server_id).where(
             m.Submission.user_id == user_id, m.Server.course == course,
-            m.Submission.judgement.not_in(("AC", "PENDING")), m.Submission.submit_time <= at,
+            m.Submission.judgement.not_in(("AC", "PENDING", "UNKNOWN", "")), m.Submission.submit_time <= at,
             m.Submission.submit_time >= at - dt.timedelta(days=180), m.SubmissionLabel.is_current.is_(True),
             m.SubmissionLabel.role == "primary", m.SubmissionLabel.confidence >= .5
         ).order_by(m.Submission.submit_time.desc(), m.Submission.submission_id.desc()).limit(100)).all()
-    done = 0
+    repeats = {}
+    for sub, skill in candidates:
+        key = (sub.server_id, sub.problem_id, skill)
+        repeats[key] = repeats.get(key, 0) + 1
     for sub, skill in candidates:
         if done >= limit:
             break
-        if not skill or skill in existing or not _in_course(skill, course) or not catalog.is_visible(
-                s, user_id, sub.server_id, sub.problem_id, course=course):
+        item = existing.get(skill)
+        repeated = repeats[(sub.server_id, sub.problem_id, skill)] >= 2
+        if not skill or not _in_course(skill, course) or (item is not None and not (
+                item.state == ACTIVE and item.origin == "corrected" and not item.reps and not item.attempt_id
+                and item.origin_server_id == sub.server_id and item.origin_problem_id == sub.problem_id and repeated)):
             continue
-        fixed = s.scalar(select(m.Submission.submission_id).where(
+        if not catalog.is_visible(s, user_id, sub.server_id, sub.problem_id, course=course):
+            continue
+        fixed = s.scalars(select(m.Submission).where(
             m.Submission.user_id == user_id, m.Submission.server_id == sub.server_id,
             m.Submission.problem_id == sub.problem_id, m.Submission.judgement == "AC",
-            m.Submission.submission_id > sub.submission_id, m.Submission.submit_time <= at).limit(1))
-        enqueue(s, user_id, skill, "corrected" if fixed is not None else "failed",
-                sub.server_id, sub.problem_id, sub.submit_time)
-        existing.add(skill)
+            m.Submission.submission_id > sub.submission_id, m.Submission.submit_time <= at)
+            .order_by(m.Submission.submission_id).limit(1)).first()
+        if item is not None:
+            if fixed is not None and item.origin != "repeated_fix":
+                item.origin = "repeated_fix"
+                item.trigger_submission_id, item.trigger_at = fixed.submission_id, fixed.submit_time
+            continue
+        origin = ("repeated_fix" if repeated else "corrected") if fixed is not None else "failed"
+        trigger = fixed or sub
+        existing[skill] = enqueue(s, user_id, skill, origin, sub.server_id, sub.problem_id,
+                                  trigger.submit_time, trigger.submission_id)
         done += 1
-    s.add(m.UiEvent(user_id=user_id, course=course, kind="review_seed", target="", ts=at))
+    if done < limit:
+        weak = sorted((st for st in states.values() if _weak(st) and st.last_ts is not None
+                       and _in_course(st.code, course) and st.code not in existing), key=lambda st: st.score)
+        for st in weak[:limit - done]:
+            enqueue(s, user_id, st.code, "weak", at=st.last_ts)
+            done += 1
+    s.add(m.UiEvent(user_id=user_id, course=course, kind="review_seed_v2", target="", ts=at))
     return done
 
 
@@ -393,9 +463,8 @@ def lead_for(s: Session, user_id: str, item: m.ReviewItem, q: m.QuizItem) -> str
     if q.source == "own_code" and ref and q.source_problem_id == item.origin_problem_id:
         reason = {"failed":"有过没通过的提交", "corrected":"修改后通过了"}.get(item.origin, ORIGIN_TEXT.get(item.origin, "卡过"))
         return f"你在「{ref['title']}」（{ref['brief']}）里{reason}。用你自己当时的代码回忆一下："
-    if item.reps == 0:
-        return "换一段代码，独立判断它能否完成题目要求。"
-    return "换个场景，看看还记不记得："
+    reason = ORIGIN_TEXT.get(item.origin)
+    return f"{reason}。用一段新代码试试。" if reason else "换一段代码，独立判断它能否完成题目要求。"
 
 
 def teacher_stats(s: Session, user_ids: list[str], at: dt.datetime | None = None, course: str | None = None) -> dict:
@@ -403,7 +472,7 @@ def teacher_stats(s: Session, user_ids: list[str], at: dt.datetime | None = None
     rows = s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id.in_(user_ids))).all() if user_ids else []
     rows = [r for r in rows if _in_course(r.skill_code, course)]
     active = [r for r in rows if r.state == ACTIVE]
-    return {"active": len(active), "due": sum(1 for r in active if r.due_at <= at),
+    return {"active": len(active), "due": sum(1 for r in active if available_at(r) <= at),
             "graduated": sum(1 for r in rows if r.state == GRADUATED), "lapses": sum(r.lapses for r in rows),
             "students": len({r.user_id for r in active})}
 
@@ -468,7 +537,7 @@ def prepare_active(limit: int = 3, at: dt.datetime | None = None) -> int:
             m.UiEvent.kind.in_(("login", "open_review", "open_problem", "open_knowledge")),
             m.UiEvent.ts > at - dt.timedelta(days=7)).distinct()).tuples())
         seeded = set(s.execute(select(m.UiEvent.user_id, m.UiEvent.course).where(
-            m.UiEvent.kind == "review_seed", m.UiEvent.ts > at - dt.timedelta(hours=12)).distinct()).tuples())
+            m.UiEvent.kind == "review_seed_v2", m.UiEvent.ts > at - dt.timedelta(hours=12)).distinct()).tuples())
         waiting = set(s.execute(select(m.UiEvent.user_id, m.UiEvent.course).where(
             m.UiEvent.kind == "review_wait", m.UiEvent.ts > at - dt.timedelta(minutes=5)).distinct()).tuples())
         ready = {(uid, course_of(skill)) for uid, skill in s.execute(select(

@@ -122,7 +122,7 @@ LABELER_VERSION = "2026-11-16a"
 PROMPT_VERSION = "2026-11-18d"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
 WORKFLOW_VERSION = "2026-11-18a"
-MASTERY_VERSION = "2026-11-18a"
+MASTERY_VERSION = "2026-11-19b"
 GRAPH_VERSION = "2026-11-17a"
 
 # ---------------------------------------------------------------- 学情（附件一第 8 节）
@@ -174,6 +174,7 @@ MASTERY_V2 = {
     "weak_below": 0.5,          # 有还没改对的失败、而且估计低于它，才算待加强
     # 一道题后来改对了：前面的失败只按这个比例算；错在别的技能上的，改对它按失败分量的这个比例算一次“会”
     "resolved_fail_factor": 0.2,
+    "repeated_fail_factor": 0.55,  # 多次在同一技能上出错，后续改对后仍保留更多失败证据
     "resolved_fix_credit": 1.0,
     "mastered_lower": 0.5,      # 80% 区间的下限不低于它，才算已掌握（大约三道题做得好：一次做对或很快改对）
     "min_current_success": 0.3, # 只有成功证据时：衰减后还剩这么多，才算基本掌握；否则算还没练到（太久没练）
@@ -204,13 +205,13 @@ REVIEW = {
     "target_retention": 0.75,      # 预测的记忆保持降到这么多时到期
     "initial_half_life": {          # 刚进来时的记忆半衰期（天）：第一次复习大约在 0.4 倍半衰期之后
         "stuck": 2.5, "heavy_help": 2.5, "recurrence": 2.5, "quiz_wrong": 2.5, "lucky": 5.0,
-        "failed": 2.5, "corrected": 3.0, "spot_check": 14.0,
+        "failed": 2.5, "corrected": 3.0, "repeated_fix": 2.5, "verify": 3.0, "weak": 2.5, "spot_check": 14.0,
     },
     "growth": {"很有把握": 2.5, "一半": 2.0, "没把握": 1.5, "second_try": 1.3,
                "practice_first_try": 2.5, "practice_fixed": 1.5},
     "min_half_life": 1.2,
     "max_half_life": 120.0,
-    "min_gap_days": 0.75,           # 两次复习至少隔这么久
+    "min_gap_days": 1.0,           # 两次复习至少隔这么久
     "spacing_hours": 12,            # 隔不到这么久的成功不算“间隔开的”，不加长半衰期
     "graduate_streak": 3,
     "graduate_half_life": 20.0,

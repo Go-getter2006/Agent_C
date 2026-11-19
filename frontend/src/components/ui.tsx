@@ -170,6 +170,13 @@ export function Drawer({ side, title, onClose, children, dark = false }: { side:
 
 // ---------- 加载、出错、空状态 ----------
 export function Loading({ what = "正在加载", lines = 3 }: { what?: string; lines?: number }) {
+  // 很短的请求不画占位条，避免在正常切页时闪一下。
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), 240);
+    return () => window.clearTimeout(timer);
+  }, []);
+  if (!visible) return <span className="sr-only" role="status">{what}</span>;
   return (
     <div className="loading" role="status" aria-label={what}>
       {Array.from({ length: lines }, (_, i) => (
