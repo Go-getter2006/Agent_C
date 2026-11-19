@@ -187,12 +187,8 @@ def test_student_sees_dims_without_numbers(demo):
     assert all(isinstance(i["insight"], str) for i in items)
 
 
-def _pending(now=None) -> list[tuple[str, str]]:
-    with db.session_scope() as s:
-        return profile.pending_reviews(s, now=now)
-
-
-def test_teacher_profile_and_agent_review(demo):
+def test_teacher_profile_without_review(demo):
+    """学生明细有画像、理解评估、对话行为；不再给每个学生写评语（老师没时间逐个看），后台也不写。"""
     rid = _round(demo)
     with db.session_scope() as s:
         assess.assess_round(s, s.get(m.ChatRound, rid))
@@ -200,55 +196,10 @@ def test_teacher_profile_and_agent_review(demo):
         c.post("/api/auth/login", json={"loginName": "demo-teacher", "password": "test-pass"})
         d = c.get(f"/api/teacher/students/{UID}").json()
         assert d["profile"] and d["assessments"][0]["levelName"] == "能解释" and d["dialogue"]["total"] >= 2
-        # 演示数据入库时跑过夜里的任务：评语已经自动写好了（没有大模型时按规则）；没有手动入口
-        assert d["agentReview"]["source"] == "rule" and d["agentReview"]["summary"]
-        assert c.post(f"/api/teacher/students/{UID}/agent-review", json={}).status_code in (404, 405)
-        # 刚才有了新的理解评估：一小时内不重写，过了一小时自动重写
-        later = db.now() + dt.timedelta(hours=2)
-        assert (UID, "C") not in _pending() and (UID, "C") in _pending(later)
-        assert profile.refresh_reviews(now=later) >= 1
-        assert (UID, "C") not in _pending(later)
-        # 有大模型：评语里的知识点必须是画像里的；不合格两次就退回规则
-        codes = [x["code"] for x in d["profile"]]
-        good = {"summary": "最值这一块会做，也讲得清原因。", "strengths": [codes[0]],
-                "concerns": [{"kp": codes[-1], "dimension": "independence", "why": "多靠提示"}], "suggestions": ["多让他先说想法"]}
-        llm.set_backend(_fake(good))
-        try:
-            with db.session_scope() as s:
-                row = profile.agent_review(s, UID, "C", force=True)
-                assert row.source == "llm"
-            r = c.get(f"/api/teacher/students/{UID}").json()["agentReview"]
-            assert r["summary"].startswith("最值") and r["concerns"][0]["dimension"] == "独立"
-            llm.set_backend(_fake({**good, "strengths": ["D02.02"]}))
-            with db.session_scope() as s:
-                again = profile.agent_review(s, UID, "C", force=True)
-                assert again.id == row.id                 # 画像没变：用上一次的，不重写
-        finally:
-            llm.set_backend(None)
+        assert "agentReview" not in d and not hasattr(profile, "agent_review")
         key = f"c{demo['server_id']}-31"
         g = c.get(f"/api/teacher/classes/{key}/graph").json()
         assert g["fusion"]["weights"][0]["dim"] == "bias"
         # 一致率在研究 · 理解评估，对话行为和表现在研究 · 求助效果
         assert "agreement" in c.get(f"/api/teacher/classes/{key}/rating").json()["summary"]
         assert "dialogue" in c.get(f"/api/teacher/classes/{key}/help").json()
-
-
-def test_review_rewrite_only_when_conclusions_change():
-    """评语只在结论变了才重写（省掉大模型调用）：各维度的数值随遗忘每天变一点不算；
-    档位、提示、看出来的错误想法、对话的大致比例变了才算。"""
-    import copy
-
-    base = {"knowledge": [{"code": "C06.03", "name": "最值、求和、统计", "level": "基本掌握", "perf": 0.61,
-                           "retention": 0.80, "flags": ["fading"]}],
-            "dialogue": {"total": 7, "constructive": 0.29, "answerSeeking": 0.0}, "misconceptions": ["max 的初值用 0"]}
-    drift = copy.deepcopy(base)
-    drift["knowledge"][0].update(perf=0.58, retention=0.71)
-    drift["dialogue"]["constructive"] = 0.31
-    assert profile._digest(base) == profile._digest(drift)
-    for change in (lambda p: p["knowledge"][0].update(level="待加强"),
-                   lambda p: p["knowledge"][0]["flags"].append("explain_gap"),
-                   lambda p: p["misconceptions"].append("下标从 1 开始"),
-                   lambda p: p["dialogue"].update(answerSeeking=0.4)):
-        other = copy.deepcopy(base)
-        change(other)
-        assert profile._digest(other) != profile._digest(base)

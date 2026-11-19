@@ -1,5 +1,5 @@
 // 学生明细：这个学生卡在哪、怎么帮。分五个页签（docs/教师端结构.md）：
-//   概况：几个数、智能体评语、知识点表（数据结构另有 C 语言基础和准备度）
+//   概况：几个数、知识点表（数据结构另有 C 语言基础和准备度）
 //   求助：卡点、求助回合、理解评估（附原话）、对话行为
 //   小题和复习：判断、定位、修改三维和作答依据、小题记录、复习安排
 //   提交：提交记录、雷同的通过
@@ -7,7 +7,7 @@
 // 只有登录的这门课；数据结构这边不出现 C 语言的答题记录。
 import { useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Copy, FileDown, FlaskConical, Quote, Sparkles, Waypoints } from "lucide-react";
+import { ArrowLeft, Copy, FileDown, FlaskConical, Quote, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, Facts, LevelLegend, Loading, Problem, ResultPill, Tabs, levelClass } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
@@ -43,7 +43,6 @@ interface Detail {
   profile: ProfileRow[];
   assessments: Assessment[];
   dialogue: { total: number; constructive: number | null; answerSeeking: number | null; acts: { code: string; name: string; n: number }[] };
-  agentReview: AgentReview | null;
   graphUpdatedAt: string | null;
   diagnosis?: DiagnosisRow[];
 }
@@ -59,11 +58,6 @@ interface Assessment {
   id: number; skill: string; skillName: string; kp: string; level: number | null; levelName: string; rawLevel: number | null;
   ruleLevel: number | null; confidence: number; evidence: string[]; misconception: string; adjusted: string; source: string;
   problem: string; time: string; basis: "chat" | "code"; basisName: string;
-}
-
-interface AgentReview {
-  summary: string; source: string; time: string; stale: boolean; strengths: { code: string; name: string }[];
-  concerns: { kp: string; name: string; dimension: string; why: string }[]; suggestions: string[];
 }
 
 type Tab = "overview" | "help" | "quiz" | "subs" | "model";
@@ -112,29 +106,6 @@ function Interval({ p, range }: { p: number | null; range: [number, number] | nu
 }
 
 // ------------------------------------------------------------ 概况
-function ReviewCard({ r }: { r: AgentReview | null }) {
-  return (
-    <Card title="智能体评语" sub="根据这个学生的全部数据自动写，有了新数据会重写">
-      {!r ? <p className="note"><Sparkles size={14} aria-hidden="true" /> 这个学生有了做题数据以后，智能体会自动写。</p> : (
-        <div className="agent-review">
-          <p>{r.summary}</p>
-          {r.strengths.length > 0 && <p className="note">掌握得好：{r.strengths.map((x) => x.name).join("、")}</p>}
-          {r.concerns.length > 0 && (
-            <ul className="agent-concerns">
-              {r.concerns.map((c, i) => <li key={i}><b>{c.name}</b><span className="pill">{c.dimension}</span>{c.why}</li>)}
-            </ul>
-          )}
-          {r.suggestions.length > 0 && <ul className="agent-suggest">{r.suggestions.map((x, i) => <li key={i}>{x}</li>)}</ul>}
-          <span className="note">
-            {r.source === "llm" ? "智能体写的" : "没有配置大模型，按规则生成"} · {shortTime(r.time)}
-            {r.stale && " · 数据有更新，这段稍后自动重写；数以上面为准"}
-          </span>
-        </div>
-      )}
-    </Card>
-  );
-}
-
 function OverviewTab({ d }: { d: Detail }) {
   const flags = useMemo(() => Object.fromEntries(d.profile.map((p) => [p.code, p.flags])), [d.profile]);
   const f = d.facts;
@@ -148,7 +119,6 @@ function OverviewTab({ d }: { d: Detail }) {
         { label: "待加强", value: `${f.weak} 个知识点` },
         { label: "最近提交", value: f.lastActive ? shortTime(f.lastActive) : "还没交过" },
       ]} />
-      <ReviewCard r={d.agentReview} />
       <Card title="知识点" sub="掌握分 0~100：一次做对、交几次改对、还没过，和对话里评的理解都算在里面" bodyClass="">
         {d.knowledge.length === 0 ? <Empty title="还没有练过的知识点" /> : (
           <div className="table-scroll">

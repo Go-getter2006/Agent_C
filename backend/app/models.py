@@ -846,7 +846,7 @@ class AgentAssessment(Base):
 
 
 class AgentReview(Base):
-    """智能体根据多维画像写的学情评语（教师端看）。后台自动写：有了新数据、离上一份超过一小时就重写，画像没变就沿用。"""
+    """以前给老师写的学情评语，已经不写了（老师没时间逐个看，大模型用在分析上）。表留着，免得再迁移。"""
 
     __tablename__ = "agent_reviews"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)

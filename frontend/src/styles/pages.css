@@ -2796,3 +2796,6 @@
 /* 知识图谱：表里的全班分布、详情里的小标题 */
 .kg-table-dist { min-width: 160px; }
 .kg-subhead { margin: var(--sp-12) 0 var(--sp-4); font-size: var(--fs-13); font-weight: 600; color: var(--ink-2); }
+
+/* 学情：知识点卡片里的小题几比几 */
+.kp-quiz { font-size: var(--fs-12); color: var(--ink-2); line-height: 1.6; }

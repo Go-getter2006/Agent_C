@@ -5,13 +5,12 @@
 空闲时：
 - 结束超时的对话回合（学生走开了也会结束），这样才能评估；
 - 智能体评估刚结束的回合的“理解”（assess.py）；
-- 给有了新数据的学生自动写（或重写）学情评语（profile.py）；
 - 作业里还没标注的题按 XDOJ 的标签兜底标上，以前没记上的“第一次通过”补记（掌握程度不再只剩失败）；
 - 以前的程序处理的 PDF 题面重新抽一遍，抽好了还没交给大模型整理的整理一遍（pdftext.py）；
 - 给最近来过、有到期复习的学生提前备好一道复习题（review.prepare_active），进“复习提升”就能做。
 
 每天夜里（graphmodel.nightly）：把没评完的回合评完、图模型全图更新、补记预测、重新学融合权重、
-所有该写评语的学生写评语、跨课程联系自动补充、检验、采用或不用（cross.auto_links）。
+跨课程联系自动补充、检验、采用或不用（cross.auto_links）。
 """
 from __future__ import annotations
 
@@ -19,14 +18,14 @@ import logging
 import threading
 import time
 
-from . import assess, db, pdftext, pipeline, profile, review
+from . import assess, db, pdftext, pipeline, review
 from .labeling import problems
 from .chat import workflow
 
 log = logging.getLogger("automation")
 
 _last: dict[str, float] = {}
-EVERY = {"rounds": 60.0, "reviews": 300.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
+EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
 
 
 def _due(name: str) -> bool:
@@ -70,8 +69,6 @@ def idle_work() -> int:
         if assessed:
             _last["assess"] = -1e9   # 还有没评完的：下一轮接着评
         done += assessed
-    if _due("reviews"):
-        done += profile.refresh_reviews(limit=profile.config.PROFILE["reviews_per_run"])
     if _due("labels"):
         # 作业里还没有标注的题，按 XDOJ 的标签兜底标上（不需要大模型）；以前因为没有标注没记上的通过补记
         with db.session_scope() as s:

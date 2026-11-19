@@ -23,8 +23,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import hashlib
-import json
 import logging
 import math
 from collections import defaultdict
@@ -33,10 +31,10 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import config, db, llm, mastery, review
+from . import config, db, mastery, review
 from . import models as m
 from .chat.analyze import ACTS, CONSTRUCTIVE_ACTS
-from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, course_of, course_prompt, kp_of_skill
+from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, course_of, kp_of_skill
 
 log = logging.getLogger("profile")
 
@@ -402,196 +400,3 @@ def dialogue_profile(s: Session, user_id: str, course: str) -> dict:
             "constructive": round(sum(counts[a] for a in CONSTRUCTIVE_ACTS) / n, 2) if n else None,
             "answerSeeking": round(counts["answer_seeking"] / n, 2) if n else None,
             "acts": [{"code": a, "name": ACTS[a], "n": counts[a]} for a in ACTS if counts[a]]}
-
-
-# ------------------------------------------------------------ 智能体写的学情评语（教师端按需）
-_REVIEW_SYSTEM = """你是 C 语言课程的助教，根据一名学生的多维掌握画像，给任课老师写一段简短的学情评估。
-维度：perf 做题、understanding 理解（智能体根据对话或代码修改评的）、independence 独立（不靠提示做出来的比例）、
-debugging 改错（没过的题怎么改对的：次数、同一错误反复、急着重交）、retention 保持（复习时还记得多少）、
-calibration 自知（把握和实际对错的吻合程度）、prereq 前置知识。学生没问过问题不代表有问题，可能是不需要问。数值都在 0~1，越大越好；空表示没有数据。
-输出 JSON：{"summary":"两三句话的总体判断，不超过 120 字","strengths":["知识点编码"],
-"concerns":[{"kp":"知识点编码","dimension":"perf/understanding/independence/debugging/retention/calibration/prereq 之一","why":"不超过 50 字"}],
-"suggestions":["给老师的建议，每条不超过 50 字，最多 3 条"]}
-要求：知识点编码只能从画像里选；结论要有画像里的数据支持，不要编造；不要提学号、姓名。"""
-
-
-def _profile_payload(s: Session, user_id: str, course: str) -> dict:
-    rows = [r for r in teacher_view(s, user_id, course)
-            if r["perf"] is not None or r["understanding"] is not None or r["debugging"] is not None]
-    misconceptions = [a.misconception for a in s.scalars(select(m.AgentAssessment).where(
-        m.AgentAssessment.user_id == user_id, m.AgentAssessment.course == course,
-        m.AgentAssessment.misconception != "").order_by(m.AgentAssessment.id.desc()).limit(5)).all()]
-    keep = ("code", "name", "level", "perf", "understanding", "independence", "debugging", "retention", "calibration",
-            "prereq")
-    return {"knowledge": [{k: r[k] for k in keep} | {"flags": [f["code"] for f in r["flags"]]} for r in rows],
-            "dialogue": dialogue_profile(s, user_id, course), "misconceptions": misconceptions}
-
-
-def _rule_review(payload: dict) -> dict:
-    rows = payload["knowledge"]
-    strengths = [r["code"] for r in rows if r["level"] == "已掌握"][:4]
-    concerns = []
-    dim_of = {"explain_gap": "understanding", "help_reliant": "independence", "fading": "retention",
-              "overconfident": "calibration", "weak_prereq": "prereq", "specific_gap": "perf", "trial_error": "debugging"}
-    for r in rows:
-        for f in r["flags"]:
-            concerns.append({"kp": r["code"], "dimension": dim_of[f], "why": FLAG_TEXT[f]})
-    weak = [r for r in rows if r["level"] == "待加强"]
-    for r in weak:
-        if not any(c["kp"] == r["code"] for c in concerns):
-            concerns.append({"kp": r["code"], "dimension": "perf", "why": "做题表现还不稳定"})
-    dia = payload["dialogue"]
-    names = "、".join(r["name"] for r in weak[:4]) + (" 等" if len(weak) > 4 else "")
-    summary = f"待加强：{names}。" if weak else "练过的知识点里没有待加强的。"
-    if dia["total"]:
-        summary += f"对话里建构性的提问和解释占 {round((dia['constructive'] or 0) * 100)}%，" \
-                   f"索要答案占 {round((dia['answerSeeking'] or 0) * 100)}%。"
-    else:
-        summary += "没有向智能体提过问题（不一定有问题，可能是不需要问），以上依据是 OJ 上的提交。"
-    suggestions = []
-    if any(c["dimension"] == "debugging" for c in concerns):
-        suggestions.append("提醒他没过时先读错误信息、想清楚再改，别急着重交。")
-    if any(c["dimension"] == "understanding" for c in concerns):
-        suggestions.append("对“会做讲不清”的知识点，课上请他讲一讲为什么这样改。")
-    if any(c["dimension"] == "prereq" for c in concerns):
-        suggestions.append("先补前置知识，再练这一块的题。")
-    if (dia["answerSeeking"] or 0) >= 0.3:
-        suggestions.append("提醒他先说自己的想法再求助，少直接要答案。")
-    return {"summary": summary, "strengths": strengths, "concerns": concerns[:6], "suggestions": suggestions[:3]}
-
-
-def _digest(payload: dict) -> str:
-    """评语该不该重写，只看画像的结论：每个知识点的档位和提示、看出来的错误想法、对话里建构性和索要答案的大致比例
-    （一成一档）。各维度的数值每天都会随遗忘曲线变一点，不算变化——不然每个学生每天都要重写一遍，白调大模型。"""
-    dia = payload.get("dialogue") or {}
-    key = {"kp": sorted([r["code"], r["level"], sorted(r["flags"])] for r in payload["knowledge"]),
-           "misconceptions": sorted(set(payload.get("misconceptions") or [])),
-           "dialogue": [round(dia.get("constructive") or 0, 1), round(dia.get("answerSeeking") or 0, 1)]
-           if dia.get("total") else None}
-    return hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-
-
-def review_is_current(s: Session, row: m.AgentReview | None, user_id: str, course: str) -> bool:
-    """评语是按当时的画像写的；画像变了（有了新数据，或者算法改了）就过时了，后台会重写。"""
-    return row is None or row.profile_hash == _digest(_profile_payload(s, user_id, course))
-
-
-def agent_review(s: Session, user_id: str, course: str, requested_by: int | None = None,
-                 force: bool = False) -> m.AgentReview:
-    payload = _profile_payload(s, user_id, course)
-    digest = _digest(payload)
-    last = s.scalars(select(m.AgentReview).where(m.AgentReview.user_id == user_id, m.AgentReview.course == course)
-                     .order_by(m.AgentReview.id.desc())).first()
-    if last is not None:
-        # 画像没变、上一次也是大模型写的（或者现在没有大模型）：直接用上一次的
-        same = last.profile_hash == digest and (last.source == "llm" or not llm.available())
-        recent = db.now() - last.created_at < dt.timedelta(hours=config.PROFILE["review_hours"])
-        if same:
-            if force:   # 后台自动核对过：画像没变，评语沿用，时间记成这次核对的时间
-                last.created_at = db.now()
-            return last
-        if recent and not force:
-            return last
-    codes = {r["code"] for r in payload["knowledge"]}
-    content, source = None, "rule"
-    if llm.available() and payload["knowledge"]:
-        def validate(d: dict) -> dict:
-            summary = str(d.get("summary") or "").strip()
-            if not summary or len(summary) > 160:
-                raise ValueError("summary 要有，不超过 120 字")
-            strengths = [str(x) for x in d.get("strengths") or []]
-            if any(x not in codes for x in strengths):
-                raise ValueError("strengths 里有画像里没有的知识点")
-            concerns = []
-            for c in d.get("concerns") or []:
-                if not isinstance(c, dict) or c.get("kp") not in codes or c.get("dimension") not in DIM_NAMES:
-                    raise ValueError("concerns 的知识点或维度不对")
-                concerns.append({"kp": c["kp"], "dimension": c["dimension"], "why": str(c.get("why") or "")[:60]})
-            suggestions = [str(x)[:60] for x in (d.get("suggestions") or [])][:3]
-            text = summary + "".join(c["why"] for c in concerns) + "".join(suggestions)
-            if llm.strip_identity(text) != text:
-                raise ValueError("评语里不能有学号、姓名")
-            return {"summary": summary, "strengths": strengths, "concerns": concerns[:6], "suggestions": suggestions}
-
-        try:
-            content = llm.call_json("agent_review", course_prompt(_REVIEW_SYSTEM, course),
-                                    json.dumps(payload, ensure_ascii=False), validate, retries=1, max_tokens=700)
-            source = "llm"
-        except llm.LLMUnavailable:
-            content = None
-    if content is None:
-        content = _rule_review(payload)
-    row = m.AgentReview(user_id=user_id, course=course, profile_hash=digest, content=content, source=source,
-                        requested_by=requested_by, created_at=db.now())
-    s.add(row)
-    s.flush()
-    llm.flush_records(s)
-    return row
-
-
-def pending_reviews(s: Session, limit: int | None = None, now: dt.datetime | None = None) -> list[tuple[str, str]]:
-    """哪些学生的哪门课该自动写（或重写）评语了：有了新的数据（做题证据、理解评估），而且离上一份超过 review_hours。"""
-    from sqlalchemy import func
-
-    now = now or db.now()
-    gap = dt.timedelta(hours=config.PROFILE["review_hours"])
-    last = {(u, c): t for u, c, t in s.execute(
-        select(m.AgentReview.user_id, m.AgentReview.course, func.max(m.AgentReview.created_at))
-        .group_by(m.AgentReview.user_id, m.AgentReview.course)).all()}
-    newest: dict[tuple[str, str], dt.datetime] = {}
-    rows = s.execute(select(m.SkillEvidence.user_id, func.substr(m.SkillEvidence.skill_code, 1, 1),
-                            func.max(m.SkillEvidence.ts))
-                     .group_by(m.SkillEvidence.user_id, func.substr(m.SkillEvidence.skill_code, 1, 1))).all()
-    rows += s.execute(select(m.AgentAssessment.user_id, m.AgentAssessment.course, func.max(m.AgentAssessment.created_at))
-                      .group_by(m.AgentAssessment.user_id, m.AgentAssessment.course)).all()
-    for uid, course, t in rows:
-        if course in ("C", "D") and t is not None:
-            t = db.as_utc(t)
-            newest[(uid, course)] = max(t, newest.get((uid, course), t))
-    students = set(s.scalars(select(m.Student.user_id)).all())
-    out = []
-    for key, t in newest.items():
-        if key[0] not in students:
-            continue
-        done = last.get(key)
-        done = db.as_utc(done) if done is not None else None
-        if done is None or (t > done and now - done >= gap):
-            out.append((t, key))
-    out.sort(reverse=True)
-    keys = [k for _t, k in out]
-    return keys[:limit] if limit else keys
-
-
-def refresh_reviews(limit: int | None = None, now: dt.datetime | None = None, include_stale: bool = False) -> int:
-    """后台自动写评语，不用老师去点。返回新写了几份（画像没变的不重写）。
-    include_stale（每天夜里）：已经有评语的学生都核对一遍画像，变了就重写——没有新数据、但算法改了的也会更新。"""
-    n = 0
-    with db.session_scope() as s:
-        keys = pending_reviews(s, limit, now)
-        if include_stale:
-            seen = set(keys)
-            keys += [k for k in s.execute(select(m.AgentReview.user_id, m.AgentReview.course).distinct()).all()
-                     if tuple(k) not in seen]
-        for uid, course in keys:
-            before = s.scalar(select(m.AgentReview.id).where(m.AgentReview.user_id == uid, m.AgentReview.course == course)
-                              .order_by(m.AgentReview.id.desc()))
-            try:
-                row = agent_review(s, uid, course, force=True)
-            except Exception:   # 一个学生出错不影响别的
-                log.exception("自动写评语出错")
-                continue
-            n += row.id != before
-    return n
-
-
-def review_view(row: m.AgentReview | None, stale: bool = False) -> dict | None:
-    """stale：画像变了、评语还没重写（页面上的数以页面为准）。"""
-    if row is None:
-        return None
-    c = row.content or {}
-    name = lambda code: KNOWLEDGE_POINTS.get(code, code)  # noqa: E731
-    return {"summary": c.get("summary", ""), "source": row.source, "time": row.created_at.isoformat(), "stale": stale,
-            "strengths": [{"code": x, "name": name(x)} for x in c.get("strengths", [])],
-            "concerns": [{"kp": x["kp"], "name": name(x["kp"]), "dimension": DIM_NAMES.get(x["dimension"], ""),
-                          "why": x["why"]} for x in c.get("concerns", [])],
-            "suggestions": c.get("suggestions", [])}
