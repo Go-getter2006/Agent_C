@@ -294,42 +294,26 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
     cls = _class(s, user, key)
     data = _ClassData(s, cls)
     now = db.now()
-    # 这个班布置过的题涉及的知识点，每个知识点四档各有多少人
-    kp_codes: list[str] = []
-    for server_id, problem_id in data.problems:
-        label = current_problem_label(s, server_id, problem_id)
-        if label is not None:
-            kp_codes += [kp_of_skill(c) for c in [label.primary_skill, *(label.secondary_skills or [])]]
-    knowledge = []
-    for kp in sorted(set(kp_codes)):
-        counts = Counter(data.kps[uid][kp].level if kp in data.kps[uid] else "还没练到" for uid in data.ids)
-        knowledge.append({"code": kp, "name": KNOWLEDGE_POINTS.get(kp, ""), "topic": TOPICS.get(kp[:3], ""),
-                          "counts": [counts.get(level, 0) for level in LEVELS]})
-    # 全班最常见的错误（最近 30 天）
+    stats = stuckstats.compute(s, data.ids, data.course, data.problems)
+    # 全班最常见的错误（最近 30 天）；也按知识点记下，给“要讲的知识点”配上最常见的错
     since = now - dt.timedelta(days=30)
     err_students: dict[str, set[str]] = defaultdict(set)
     err_count: Counter = Counter()
+    kp_errors: dict[str, Counter] = defaultdict(Counter)
     if data.ids:
         rows = s.execute(
-            select(m.SubmissionLabel.error_code, m.Submission.user_id)
+            select(m.SubmissionLabel.error_code, m.SubmissionLabel.skill_code, m.Submission.user_id)
             .join(m.Submission, (m.Submission.server_id == m.SubmissionLabel.server_id)
                   & (m.Submission.submission_id == m.SubmissionLabel.submission_id))
             .where(m.SubmissionLabel.is_current.is_(True), m.Submission.server_id == cls.server_id,
                    m.Submission.user_id.in_(data.ids), m.Submission.submit_time >= since)).all()
-        for code, uid in rows:
+        for code, skill, uid in rows:
             err_students[code].add(uid)
             err_count[code] += 1
+            if skill:
+                kp_errors[kp_of_skill(skill)][code] += 1
     errors = [{"code": code, "name": error_name(code), "students": len(err_students[code]), "count": n}
               for code, n in err_count.most_common(10)]
-    # 全班“自以为会”的技能：小题里选了“很有把握”却答错
-    sure: dict[str, list[bool]] = defaultdict(list)
-    if data.ids:
-        for a in s.scalars(select(m.QuizAttempt).where(
-                m.QuizAttempt.user_id.in_(data.ids), m.QuizAttempt.state == "done", m.QuizAttempt.skipped.is_(False),
-                m.QuizAttempt.confidence == "很有把握", m.QuizAttempt.skill_code.like(data.course + "%"))).all():
-            sure[a.skill_code].append(bool(a.correct))
-    overconfident = [{**_skill_view(code), "n": len(v), "wrong": v.count(False)} for code, v in sure.items() if v.count(False)]
-    overconfident.sort(key=lambda r: (-r["wrong"] / r["n"], -r["n"]))
     # 作业完成情况
     homeworks = []
     contests = s.scalars(
@@ -366,9 +350,29 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
         "review": review.teacher_stats(s, data.ids, now, data.course),
     }
     return {"class": {"key": key, "name": cls.class_name, "students": len(data.ids), "activeThisWeek": active},
-            "kpis": kpis, "trend": trend, "attention": _attention(s, data, now),
-            "levels": list(LEVELS), "knowledge": knowledge, "errors": errors, "overconfident": overconfident[:8],
-            "homeworks": homeworks}
+            "kpis": kpis, "trend": trend, "attention": _attention(s, data, now, stats),
+            "focus": _focus(data, stats, kp_errors), "errors": errors, "homeworks": homeworks}
+
+
+def _focus(data: "_ClassData", stats: dict, kp_errors: dict[str, Counter], limit: int = 6) -> list[dict]:
+    """要讲的知识点：这个班作业涉及的（和对话里卡住过的）知识点里，待加强的、卡住过的、没来问的人多的排前面，
+    带上最近 30 天这个知识点上最常见的错误。细看在知识图谱的知识点详情。"""
+    rows = []
+    for kp in sorted(set(data.focus) | set(stats)):
+        if not in_course(kp, data.course):
+            continue
+        weak = sum(1 for uid in data.ids if (st := data.kps[uid].get(kp)) is not None and st.level == "待加强")
+        info = stats.get(kp)
+        stuck = info.students if info is not None else set()
+        silent = [u for u in (info.silent if info is not None else {}) if u not in stuck]
+        if not (weak or stuck or silent):
+            continue
+        top = kp_errors.get(kp, Counter()).most_common(1)
+        rows.append({"code": kp, "name": KNOWLEDGE_POINTS.get(kp, ""), "weak": weak, "stuck": len(stuck),
+                     "silent": len(silent),
+                     "error": {"code": top[0][0], "name": error_name(top[0][0]), "count": top[0][1]} if top else None})
+    rows.sort(key=lambda r: (-(r["weak"] + r["stuck"] + r["silent"]), -r["weak"], r["code"]))
+    return rows[:limit]
 
 
 def score(p: float | None) -> int | None:
@@ -413,11 +417,12 @@ def _weekly(s: Session, data: "_ClassData", now: dt.datetime, weeks: int = 8) ->
     return out
 
 
-def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
+def _attention(s: Session, data: "_ClassData", now: dt.datetime, stats: dict | None = None) -> list[dict]:
     """需要留意的学生，每人列出理由。规则是透明的，不是训练出来的预测模型。"""
     out = []
     week = now - dt.timedelta(days=7)
-    stubborn = {sp.user_id for sp in data.stuck_points() if sp.stubborn}
+    stats = stats if stats is not None else stuckstats.compute(s, data.ids, data.course)
+    rounds_by_kp = stuckstats.episodes_by_round(stats)   # 知识点 → 学生 → 卡住过几个回合
     copied = Counter(f.user_id for f in s.scalars(select(m.CodeFingerprint).where(
         m.CodeFingerprint.user_id.in_(data.ids), m.CodeFingerprint.server_id == data.cls.server_id,
         m.CodeFingerprint.suspicious.is_(True))).all()) if data.ids else Counter()
@@ -439,8 +444,10 @@ def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
                 reasons.append(f"平均交 {avg:.1f} 次才通过，全班是 {class_avg:.1f} 次")
         if stuck_week.get(st.user_id, 0) >= 2:
             reasons.append(f"最近 7 天卡住 {stuck_week[st.user_id]} 次")
-        if st.user_id in stubborn:
-            reasons.append("同一个知识点卡住三次以上")
+        many = [(n, kp) for kp, per_uid in rounds_by_kp.items() if (n := per_uid.get(st.user_id, 0)) >= 3]
+        if many:
+            n, kp = max(many)
+            reasons.append(f"在「{KNOWLEDGE_POINTS.get(kp, kp)}」上卡住 {n} 次")
         weak = [kp for kp in data.kps[st.user_id].values() if kp.level == "待加强"]
         if len(weak) >= 3:
             reasons.append(f"{len(weak)} 个知识点待加强")
@@ -518,16 +525,33 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
     return {"class": {"key": key, "name": cls.class_name}, "total": len(data.problems), "students": rows}
 
 
-@router.get("/classes/{key}/stuck")
-@page_cache("stuck")
-def stuck_list(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    """卡点按知识点汇总（app/stuckstats.py）：卡住几个人、卡住以后怎么样了，展开看技能和学生；另列只在 OJ 上反复没过、没来问的。"""
+@router.get("/classes/{key}/help")
+@page_cache("help")
+def help_effect(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """研究 · 求助效果：按知识点的卡点结局（app/stuckstats.py）和对话行为与做题表现。
+    谁卡在哪个知识点（上课用）在知识图谱的知识点详情里看，这里只给比例。"""
     cls = _class(s, user, key)
     people = {st.user_id: st.name for st in class_students(s, cls)}
     course = _course_of_class(s, cls)
     stats = stuckstats.compute(s, list(people), course, class_problems(s, cls))
+    rows = [{k: v for k, v in r.items() if k not in ("studentRows", "silentRows")}
+            for r in stuckstats.kp_rows(s, stats, people)]
+
+    def pooled(name: str) -> dict | None:
+        n = sum(getattr(st, name).n for st in stats.values())
+        d = sum(getattr(st, name).d for st in stats.values())
+        return {"n": n, "d": d} if d else None
+
+    stuck_people = set().union(*(st.students for st in stats.values())) if stats else set()
+    silent_people = {u for st in stats.values() for u in st.silent} - stuck_people
+    data = _ClassData(s, cls)
     return {"class": {"key": key, "name": cls.class_name}, "version": stuckstats.VERSION,
-            "silentFails": stuckstats.SILENT_FAILS, "rows": stuckstats.kp_rows(s, stats, people)}
+            "silentFails": stuckstats.SILENT_FAILS, "rows": rows,
+            "totals": {"students": len(people), "stuck": len(stuck_people),
+                       "episodes": sum(len(st.episodes) for st in stats.values()),
+                       "recall": pooled("recall"), "passed": pooled("passed"), "transfer": pooled("transfer"),
+                       "silent": len(silent_people)},
+            "dialogue": _dialogue_vs_outcome(s, data.ids, course, data.subs)}
 
 
 # ------------------------------------------------------------ 学生明细
@@ -628,10 +652,26 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
         quizzes.append({**_skill_view(a.skill_code), "type": a.quiz_type, "reason": a.reason, "state": a.state,
                         "confidence": a.confidence, "outcome": a.outcome, "correct": a.correct,
                         "time": a.created_at.isoformat()})
+    review_row = s.scalars(select(m.AgentReview).where(
+        m.AgentReview.user_id == user_id, m.AgentReview.course == course).order_by(m.AgentReview.id.desc())).first()
     # 根因：数据结构这边可以追到 C 语言的先修技能（只给估计值，不给记录）
     roots = graphmodel.root_causes(simple, {c: r.p for c, r in post_all.items()})
+    # 概况的几个数（和学生列表同一个算法）
+    by_problem: dict[int, list[m.Submission]] = defaultdict(list)
+    for x in sorted(subs, key=lambda x: x.submission_id):
+        by_problem[x.problem_id].append(x)
+    tries = [k for v in by_problem.values() if (k := tries_to_pass(v)) is not None]
+    practiced = [kp.score for code, kp in kp2.items() if not kp.predicted and in_course(code, course)
+                 and kp.level != "还没练到" and kp.score is not None]
+    last = max((x.submit_time for x in subs if x.submit_time), default=None)
+    facts = {"score": score(sum(practiced) / len(practiced)) if practiced else None,
+             "passed": len(tries), "total": len(problem_set),
+             "avgToPass": round(sum(tries) / len(tries), 1) if tries else None,
+             "weak": sum(1 for k in kps if k["level"] == "待加强"), "stuck": len(stuck),
+             "lastActive": last.isoformat() if last else None}
     return {"student": {"userId": student.user_id, "name": student.name,
                         "class": {"key": class_key(cls.server_id, cls.class_id), "name": cls.class_name}},
+            "facts": facts,
             "course": course, "foundation": cross.c_foundation(s, user_id) if course == "D" else [],
             "joint": cross.joint_state(s, user_id) if course == "D" else [],
             "profile": profile.teacher_view(s, user_id, course),
@@ -639,9 +679,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
                 m.AgentAssessment.user_id == user_id, m.AgentAssessment.course == course,
                 m.AgentAssessment.level.is_not(None)).order_by(m.AgentAssessment.id.desc()).limit(20)).all()],
             "dialogue": profile.dialogue_profile(s, user_id, course),
-            "agentReview": profile.review_view(s.scalars(select(m.AgentReview).where(
-                m.AgentReview.user_id == user_id, m.AgentReview.course == course)
-                .order_by(m.AgentReview.id.desc())).first()),
+            "agentReview": profile.review_view(review_row, stale=not profile.review_is_current(s, review_row, user_id, course)),
             "knowledge": kps, "skills": skills, "submissions": sub_rows, "moreSubmissions": max(0, len(subs) - 80),
             "stuck": stuck, "rounds": rounds, "quizzes": quizzes,
             "rootCauses": [{"skill": _skill_view(r["skill"]), "root": _skill_view(r["root"]), "p": r["p"]} for r in roots],
@@ -728,10 +766,6 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
         "edges": edges,
         "weekly": graphmodel.weekly_accuracy(s, ids, course=course),
         "fusion": _fusion_view(s, course),
-        "agreement": assess.agreement(list(s.scalars(select(m.AgentAssessment).where(
-            m.AgentAssessment.user_id.in_(ids or ["-"]), m.AgentAssessment.course == course)).all())),
-        "dialogue": _dialogue_vs_outcome(s, ids, course, _ClassData(s, cls).subs),
-        "human": rating.agreement(s, ids, course),
     }
 
 
@@ -830,6 +864,7 @@ def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(t
             covered |= {kp_of_skill(c) for c in [label.primary_skill, *(label.secondary_skills or [])]}
     states = {uid: mastery.kp_states(s, uid, model="v2", with_predicted=True) for uid in ids}
     recs = kpdesc.records(s, [student], course, set(class_problems(s, cls))).get(student, {}) if student is not None else {}
+    stuck = stuckstats.compute(s, ids, course, class_problems(s, cls))
     nodes = []
     for code, name in KNOWLEDGE_POINTS.items():
         if course_of(code) not in shown or (course_of(code) != course and code not in linked_c):
@@ -853,6 +888,9 @@ def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(t
                 "dist": [dist.get(level, 0) for level in LEVELS], "mean": round(sum(ps) / len(ps), 2) if ps else None,
                 "score": score(sum(scores) / len(scores)) if scores else None,   # 全班练过的同学的平均掌握分
                 "withEvidence": len(ps), "readiness": round(sum(preds) / len(preds), 2) if preds else None}
+        info = stuck.get(code)
+        node["stuck"] = len(info.students) if info is not None else 0   # 对话里卡住过的人
+        node["silent"] = len([u for u in info.silent if u not in info.students]) if info is not None else 0
         if student is not None:
             st = states[student].get(code)
             node["student"] = None if st is None else {
@@ -934,11 +972,17 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
     ref = lambda c, is_x: {"code": c, "name": KNOWLEDGE_POINTS.get(c, ""), "course": course_of(c), "cross": is_x}  # noqa: E731
     dims = {} if other else diagnosis.by_student(s, ids, course)
     per = {uid: diagnosis.summary(d.get(kp)) for uid, d in dims.items() if d.get(kp) is not None}
+    stuck_rows = [] if other else [r for r in stuckstats.kp_rows(
+        s, stuckstats.compute(s, ids, course, class_problems(s, cls)), {p.user_id: p.name for p in people})
+        if r["code"] == kp]
     return {"code": kp, "name": KNOWLEDGE_POINTS[kp], "course": course_of(kp), "topicName": TOPICS.get(kp[:3], ""),
             "foundation": other,
             # 全班在这个知识点上的判断、定位、修改（小题首次独立作答）；每个学生的另给，点进学生明细看作答依据
             "diagnosis": None if other else diagnosis.summary(diagnosis.for_class(s, ids, course).get(kp)),
             "studentDims": per,
+            # 卡在这里的学生（对话里卡住过，之后过没过）和没来问的（一道题反复没过、没就这道题求助）
+            "stuck": {"students": stuck_rows[0]["studentRows"] if stuck_rows else [],
+                      "silent": stuck_rows[0]["silentRows"] if stuck_rows else [], "silentFails": stuckstats.SILENT_FAILS},
             "skills": skills, "weak": weak, "students": everyone, "summary": summary,
             "errors": [{"code": c, "name": error_name(c), "count": n}
                                                        for c, n in errs.most_common(6)],
@@ -987,8 +1031,12 @@ def _rating_scope(s: Session, user: m.User, key: str) -> tuple[list[str], str]:
 
 @router.get("/classes/{key}/rating")
 def rating_next(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """研究 · 理解评估：盲评的下一条，和一致率（大模型和规则；老师和大模型原始、约束后、规则；老师之间）。"""
     ids, course = _rating_scope(s, user, key)
-    return rating.next_item(s, user, ids, course)
+    rows = list(s.scalars(select(m.AgentAssessment).where(
+        m.AgentAssessment.user_id.in_(ids or ["-"]), m.AgentAssessment.course == course)).all())
+    return {**rating.next_item(s, user, ids, course),
+            "summary": {"agreement": assess.agreement(rows), "human": rating.agreement(s, ids, course)}}
 
 
 @router.post("/classes/{key}/rating")

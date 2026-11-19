@@ -52,7 +52,10 @@ def test_blind_rating_flow(demo):
         assert aid in seen and len(seen) == len(set(seen)) == cur["rated"] == cur["total"]
         assert c.post(f"/api/teacher/classes/{key}/rating", json={"assessmentId": aid, "level": 7}).status_code == 400
         assert c.post(f"/api/teacher/classes/{key}/rating", json={"assessmentId": 10 ** 8, "level": 1}).status_code == 400
-        human = c.get(f"/api/teacher/classes/{key}/graph").json()["human"]
+        summary = c.get(f"/api/teacher/classes/{key}/rating").json()["summary"]
+        human = summary["human"]
+        assert "human" not in c.get(f"/api/teacher/classes/{key}/graph").json()   # 一致率在“理解评估”页，不在模型检验
+        assert set(summary["agreement"]) >= {"n", "exact", "kappa", "within1"}
         assert human["llmRaw"]["n"] == 1 and human["llmRaw"]["exact"] == 0     # 老师 2，原始 3
         assert human["llmFinal"]["exact"] == 1                                 # 下调到 2 以后一致
         assert human["adjusted"] == {"n": 1, "closer": 1, "same": 0, "farther": 0}

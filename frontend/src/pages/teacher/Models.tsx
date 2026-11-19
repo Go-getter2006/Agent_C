@@ -1,5 +1,6 @@
-// 模型对比：掌握程度算法 v1、v2、图模型（试验中）和多维融合在同一批预测上谁更准；智能体评估的消融和一致率；
-// 融合学到的维度权重；对话行为和表现的关系；根因推断、差别大的地方、前置关系的描述统计。
+// 研究 · 模型检验：掌握程度算法 v1、v2、图模型（试验中）和多维融合在同一批预测上谁更准；v2 去掉智能体评估的消融；
+// 融合学到的维度权重；根因推断、差别大的地方、前置关系的描述统计。
+// 智能体评估的一致率在“理解评估”，对话行为和表现在“求助效果”。
 import { Link } from "react-router-dom";
 import { FlaskConical } from "lucide-react";
 import { get } from "../../api";
@@ -22,43 +23,6 @@ interface GraphData {
     nFused: number; fusedBrier: number | null; v2BaseBrier: number | null; v2SameBrier: number | null;
   }[];
   fusion: { learned: boolean; n: number; minSamples: number; updatedAt: string | null; weights: { dim: string; name: string; w: number; default: number }[] };
-  agreement: { n: number; exact: number | null; kappa: number | null; within1: number | null };
-  dialogue: { students: number; constructive: number | null; answerSeeking: number | null };
-  human: {
-    rated: number; unsure: number; raters: number;
-    llmRaw: Agree; llmFinal: Agree; rule: Agree; betweenRaters: Agree;
-    adjusted: { n: number; closer: number; same: number; farther: number };
-  };
-}
-
-type Agree = { n: number; exact: number | null; kappa: number | null; within1: number | null; weighted: number | null };
-
-function Human({ h }: { h: GraphData["human"] }) {
-  const k = (x: number | null) => (x === null ? "—" : x.toFixed(2));
-  const rows: [string, Agree][] = [["大模型（原始）", h.llmRaw], ["大模型（约束后）", h.llmFinal], ["规则", h.rule]];
-  if (h.betweenRaters.n) rows.push(["两位老师之间", h.betweenRaters]);
-  return (
-    <Card title="老师盲评" sub="老师按同一个量规评同样的材料，和各方对照" bodyClass="">
-      {h.rated === 0 ? <p className="card-body note">还没有评过。<Link className="link" to="/teacher/rating">去盲评</Link></p> : (
-        <>
-          <div className="table-scroll">
-            <table className="table">
-              <thead><tr><th scope="col">和老师对照</th><th scope="col" className="num">回合</th><th scope="col" className="num">完全一致</th><th scope="col" className="num">差一档内</th><th scope="col" className="num">κ</th><th scope="col" className="num">加权 κ</th></tr></thead>
-              <tbody>
-                {rows.map(([name, a]) => (
-                  <tr key={name}><td>{name}</td><td className="num">{a.n}</td><td className="num">{pct(a.exact)}</td><td className="num">{pct(a.within1)}</td><td className="num">{k(a.kappa)}</td><td className="num">{k(a.weighted)}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="card-foot">
-            {h.adjusted.n ? `下调过的 ${h.adjusted.n} 个：离老师更近 ${h.adjusted.closer}、一样 ${h.adjusted.same}、更远 ${h.adjusted.farther}。` : ""}
-            评了 {h.rated} 个，看不出来 {h.unsure} 个，{h.raters} 位老师。加权 κ 按二次加权，差两档比差一档扣得多。
-          </p>
-        </>
-      )}
-    </Card>
-  );
 }
 
 /** 几周合起来的 Brier：按每周的预测条数加权。 */
@@ -68,28 +32,31 @@ function pooled(weeks: GraphData["weekly"], key: "fusedBrier" | "v2BaseBrier" | 
   return n ? rows.reduce((s, w) => s + (w[key] as number) * w.nFused, 0) / n : null;
 }
 
-function Fusion({ d }: { d: GraphData }) {
+function FusionStats({ d }: { d: GraphData }) {
   const n = d.weekly.reduce((s, w) => s + w.nFused, 0);
   const stats = [
     { name: "多维融合", v: pooled(d.weekly, "fusedBrier") },
     { name: "v2（同一批预测）", v: pooled(d.weekly, "v2SameBrier") },
     { name: "v2 去掉智能体评估（消融）", v: pooled(d.weekly, "v2BaseBrier") },
   ];
+  return (
+    <div className="stats">
+      {stats.map((s) => (
+        <div key={s.name} className="card stat">
+          <span className="stat-label">{s.name}</span>
+          <div className="stat-row"><span className="stat-value num">{s.v === null ? "—" : s.v.toFixed(3)}</span></div>
+          <span className="stat-foot">平均 Brier 分数，越小越准（{n} 次预测）</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FusionWeights({ d }: { d: GraphData }) {
   const maxW = Math.max(1, ...d.fusion.weights.map((x) => Math.abs(x.w)));
-  const corr = (x: number | null) => (x === null ? "样本不够" : x.toFixed(2));
   return (
     <>
-      <div className="stats">
-        {stats.map((s) => (
-          <div key={s.name} className="card stat">
-            <span className="stat-label">{s.name}</span>
-            <div className="stat-row"><span className="stat-value num">{s.v === null ? "—" : s.v.toFixed(3)}</span></div>
-            <span className="stat-foot">平均 Brier 分数，越小越准（{n} 次预测）</span>
-          </div>
-        ))}
-      </div>
-      <div className="grid-2">
-        <Card title="多维融合的权重" sub={d.fusion.learned
+      <Card title="多维融合的权重" sub={d.fusion.learned
           ? `按 ${d.fusion.n} 次预测学出来的（往默认值收缩），每天夜里更新${d.fusion.updatedAt ? `，上次在${fullTime(d.fusion.updatedAt)}` : ""}`
           : `预测还不到 ${d.fusion.minSamples} 次（现在 ${d.fusion.n} 次），先用默认权重`} bodyClass="">
           <table className="table">
@@ -111,22 +78,6 @@ function Fusion({ d }: { d: GraphData }) {
           </table>
           <p className="card-foot">融合：把有数据的维度取 logit 加权相加再变回概率。哪个维度更能预测“下一道新题能不能一次做对”，学出来的权重就越大；橙色是负的权重（在本班的数据里，这一维越高，下一题反而越难一次做对）。</p>
         </Card>
-        <div className="stack">
-          <Card title="智能体评估和规则的一致率" sub="同一个回合，大模型读学生原话评的“理解”和只看事实的规则给的等级">
-            {d.agreement.n === 0 ? <p className="note">还没有两者都给了等级的回合。</p> : (
-              <p className="num">
-                {d.agreement.n} 个回合 · 完全一致 {pct(d.agreement.exact)} · 相差不超过一档 {pct(d.agreement.within1)} · Cohen's κ {d.agreement.kappa === null ? "—" : d.agreement.kappa.toFixed(2)}
-              </p>
-            )}
-            <p className="note">规则看不出“能迁移”，也看不出说法本身错没错；一致率太低时说明要检查评估的提示词。</p>
-          </Card>
-          <Human h={d.human} />
-          <Card title="对话行为和做题表现" sub={`对话至少 5 条、通过至少 3 道题的 ${d.dialogue.students} 名学生；和“平均几次改对”的相关系数（描述性，负数表示次数少）`}>
-            <p className="num">建构性提问占比：{corr(d.dialogue.constructive)} · 索要答案占比：{corr(d.dialogue.answerSeeking)}</p>
-            <p className="note">StudyChat（McNichols 等 2026）发现概念性提问和成绩正相关、索要答案负相关；这里用本班的数据看是不是一样。</p>
-          </Card>
-        </div>
-      </div>
     </>
   );
 }
@@ -159,6 +110,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
         </p>
       </div>
 
+      <h2 className="sec-head">谁预测得准<span>学生第一次交一道新题之前，预测他能不能一次做对；Brier 分数越小越准</span></h2>
       <div className="stats">
         {(["v2Brier", "simpleBrier", "graphBrier"] as const).map((key, i) => {
           const v = avg(key);
@@ -172,7 +124,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
         })}
       </div>
 
-      <Fusion d={d} />
+      <FusionStats d={d} />
 
       <div className="grid-2">
         <Card title="Brier 分数，按周" sub="学生第一次交一道新题之前，三个模型各自预测他能不能一次做对。越低越好">
@@ -217,6 +169,12 @@ export default function Models({ cls }: { cls: ClassInfo }) {
         <p className="card-foot">Brier 分数是预测概率和实际结果（做对 = 1，做错 = 0）之差的平方的平均。全猜 0.5 时是 0.25。</p>
       </Card>
 
+      <h2 className="sec-head">多维融合<span>每个维度的权重按数据学，每天夜里更新</span></h2>
+      <div className="sec-narrow">
+        <FusionWeights d={d} />
+      </div>
+
+      <h2 className="sec-head">图模型（试验中）<span>根因推断、和 v1 差别大的地方、前置关系的统计</span></h2>
       <div className="grid-2">
         <Card title="全班共同的根因" sub="学生反复失败时，图模型认为真正没掌握的前置技能" bodyClass="">
           {d.commonRoots.length === 0 ? <Empty title="目前没有推断出共同的根因" /> : (
