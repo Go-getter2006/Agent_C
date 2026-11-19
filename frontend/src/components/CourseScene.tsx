@@ -106,7 +106,7 @@ const PAL: Record<Course, { ink: RGB; soft: RGB; accent: RGB; top: RGB; front: R
 };
 const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const rgba = (c: RGB, a: number) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a.toFixed(3)})`;
-const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+const easeOut = (t: number) => 1 - (1 - t) ** 3;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 // ------------------------------------------------------------ 3D
@@ -149,7 +149,9 @@ export default function CourseScene({ course, variant = "hero", className }: Pro
     const ctx: CanvasRenderingContext2D = ctx0;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     let w = 0, h = 0, dpr = 1;
-    let k = target.current;             // 0 = C 语言，1 = 数据结构
+    // 切换的进度：0 = C 语言，1 = 数据结构。一点就动：从当前位置先快后慢走到目标（半路再点也从当前位置接着走）
+    let shown = target.current;
+    let anim = { from: shown, to: shown, t0: 0 };
     let raf = 0, last = performance.now(), time = 0;
     const pointer = { x: 0, y: 0, nx: 0, ny: 0, inside: false };
     const tilt = { yaw: 0, pitch: 0 };
@@ -179,7 +181,7 @@ export default function CourseScene({ course, variant = "hero", className }: Pro
       ctx.clearRect(0, 0, w, h);
       // 代码字体有连字（-> 会画成箭头）；画布上没有 CSS 的 font-variant-ligatures，加一点字距让浏览器不连字
       if ("letterSpacing" in ctx) (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = "0.4px";
-      const e = ease(k);
+      const e = shown;
       const pal = {
         ink: mix(PAL.C.ink, PAL.D.ink, e), soft: mix(PAL.C.soft, PAL.D.soft, e), accent: mix(PAL.C.accent, PAL.D.accent, e),
         top: mix(PAL.C.top, PAL.D.top, e), front: mix(PAL.C.front, PAL.D.front, e), side: mix(PAL.C.side, PAL.D.side, e),
@@ -358,12 +360,14 @@ export default function CourseScene({ course, variant = "hero", className }: Pro
       time += dt;
       const goal = target.current;
       if (reduce.matches) {
-        k = goal;
+        shown = goal;
+        anim = { from: goal, to: goal, t0: now };
         tilt.yaw = tilt.pitch = 0;
       } else {
-        // 切换用 1.6 秒走完；光标倾斜慢慢跟上
-        const step = dt / 1.6;
-        k = goal > k ? Math.min(goal, k + step) : Math.max(goal, k - step);
+        // 切换 1.4 秒走完，第一帧就开始动；光标倾斜慢慢跟上
+        if (goal !== anim.to) anim = { from: shown, to: goal, t0: now };
+        const p = Math.min(1, (now - anim.t0) / 1400);
+        shown = anim.from + (anim.to - anim.from) * easeOut(p);
         tilt.yaw += (pointer.nx * 0.32 - tilt.yaw) * Math.min(1, dt * 3);
         tilt.pitch += (pointer.ny * 0.2 - tilt.pitch) * Math.min(1, dt * 3);
       }

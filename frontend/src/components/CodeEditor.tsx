@@ -7,11 +7,16 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
-// 只用两三种低饱和度的颜色，不抢被指出那一行的底色
+// 和只读的代码块（lib/cSyntax.ts）同一套颜色：tokens.css 的 --syn-*
 const highlight = HighlightStyle.define([
-  { tag: [tags.keyword, tags.typeName], fontWeight: "600" },
-  { tag: [tags.string, tags.number, tags.character], color: "#3d5a73" },
-  { tag: tags.comment, color: "#55616e" },
+  { tag: [tags.keyword, tags.controlKeyword, tags.definitionKeyword, tags.modifier, tags.operatorKeyword], color: "var(--syn-kw)" },
+  { tag: [tags.typeName, tags.standard(tags.typeName)], color: "var(--syn-type)" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--syn-fn)" },
+  { tag: [tags.string, tags.character], color: "var(--syn-str)" },
+  { tag: tags.escape, color: "var(--syn-esc)" },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: "var(--syn-num)" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--syn-com)", fontStyle: "italic" },
+  { tag: [tags.processingInstruction, tags.meta], color: "var(--syn-pre)" },
 ]);
 
 const theme = EditorView.theme({
@@ -20,9 +25,9 @@ const theme = EditorView.theme({
   ".cm-scroller": { fontFamily: "var(--font-code)", lineHeight: "var(--code-lh)" },
   ".cm-content": { padding: "0", caretColor: "var(--ink)" },
   ".cm-line": { padding: "0 12px 0 0" },
-  ".cm-gutters": { backgroundColor: "var(--surface)", color: "#636a77", border: "0" },
+  ".cm-gutters": { backgroundColor: "var(--surface)", color: "var(--lineno)", border: "0" },
   ".cm-lineNumbers .cm-gutterElement": { minWidth: "var(--lineno-w)", padding: "0 12px 0 0", textAlign: "right" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "#dadee1 !important" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "var(--surface-3) !important" },
   ".cm-cursor": { borderLeftColor: "var(--ink)", borderLeftWidth: "2px" },
 });
 

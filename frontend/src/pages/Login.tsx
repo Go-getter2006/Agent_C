@@ -5,7 +5,7 @@
 // - 学生和老师一个入口：填学号或工号。后端去 XDOJ 核对，XDOJ 说是教师就进教师端。
 // - 文字只留必要的：标题、一句话、三个要点、登录框；不写操作说明。
 // - 配色和登录以后的页面是同一套（<html data-course>）：C 语言暖色的纸，数据结构冷色的纸，图案是深蓝的。
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type PointerEvent } from "react";
 import { ArrowRight, Braces, Eye, EyeOff } from "lucide-react";
 import { api } from "../api";
 import type { CourseCode } from "../types";
@@ -75,6 +75,13 @@ export default function Login() {
     setError(null);
   };
 
+  // 登录按钮上的柔光跟着光标走：直接写 CSS 变量，不重新渲染
+  const glow = (e: PointerEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.style.setProperty("--mx", `${e.clientX - r.left}px`);
+    e.currentTarget.style.setProperty("--my", `${e.clientY - r.top}px`);
+  };
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy || !open) return;
@@ -137,7 +144,8 @@ export default function Login() {
             </span>
           </label>
           {error && <p className="error-text" role="alert">{error}</p>}
-          <button type="submit" className="btn btn-primary btn-block login-submit" disabled={busy || !open} aria-busy={busy}>
+          <button type="submit" className="btn btn-primary btn-block login-submit" disabled={busy || !open} aria-busy={busy}
+            onPointerMove={glow}>
             {busy ? "正在登录" : "登录"}<ArrowRight size={18} aria-hidden="true" />
           </button>
           {demo && open && (

@@ -4,11 +4,12 @@
 // - 判断有问题的再修改：可以运行公开样例、看提示，也可以原样提交；
 // - 反馈之前不提示对错。完成后在复习页就这道题答疑。
 // 用在复习提升（整页，题干、代码、作答在一条阅读轴线上）和对话里通过后出的小题（compact）。
-import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { CircleCheck, CircleX, FileCode2, Lightbulb, Play, SkipForward } from "lucide-react";
 import { api } from "../api";
 import type { QuizView } from "../types";
-import { CodeBlock, Loading } from "./ui";
+import { highlightC } from "../lib/cSyntax";
+import { CodeBlock, Loading, SynLine } from "./ui";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
 const LEVELS = ["没把握", "一半", "很有把握"];
@@ -31,6 +32,7 @@ function SelectableCode({ caption, lines, start, selected, onSelect, disabled }:
   caption: string; lines: string[]; start: number; selected: number[]; onSelect: (next: number[]) => void; disabled: boolean;
 }) {
   const anchor = useRef<number | null>(null);
+  const colored = useMemo(() => highlightC(lines), [lines]);
   const pick = (no: number, extend: boolean) => {
     if (disabled) return;
     if (extend && anchor.current !== null) {
@@ -62,7 +64,7 @@ function SelectableCode({ caption, lines, start, selected, onSelect, disabled }:
                   onKeyDown={(e: KeyboardEvent) => { if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); pick(no, true); } }}>
                   {no}
                 </button>
-                <span className="code-text">{text || " "}</span>
+                <span className="code-text">{text ? <SynLine toks={colored[i]} /> : " "}</span>
               </div>
             );
           })}
