@@ -126,43 +126,6 @@ def _where(lines: list[int]) -> str:
     return f"第 {lines[0]} 行" if len(lines) == 1 else f"第 {lines[0]}～{lines[-1]} 行"
 
 
-def describe(d: Dims) -> str:
-    """学生端：一句基于实际作答的说明。"""
-    if not d.judge.d:
-        return "还没有做过这方面的小题。"
-    text = f"{d.judge.d} 道小题里，你有 {d.judge.n} 次判断正确。"
-    if d.locate.d or d.edit.d:
-        both = d.locate.d == d.edit.d and d.locate.n == d.edit.n
-        if both:
-            text += f"在 {d.locate.d} 道进入定位和修改的错题里，你各有 {d.locate.n} 次首次完成。"
-        else:
-            if d.locate.d:
-                text += f"在 {d.locate.d} 道进入定位的错题里，{d.locate.n} 次第一次就选中出错的地方。"
-            if d.edit.d:
-                text += f"{d.edit.d} 次修改里，{d.edit.n} 次第一稿就改对。"
-    elif d.legacy:
-        text += "以前的小题没有单独记选行。"
-    return text
-
-
-def suggest(d: Dims) -> str:
-    """学生端：最近一次怎么样、下次怎么做（不打分）。"""
-    a, item = d.latest, d.latest_item
-    if a is None or item is None or a.state != "done" or a.skipped:
-        return ""
-    if not a.judge_correct:
-        if item.has_bug:
-            return "最近一次没发现代码里的问题。下次先对照题目要求，一行一行读。"
-        return "最近一次把正确的代码当成了有问题。下次先找到具体不符合要求的那一行，再下结论。"
-    if a.protocol != 2 or not item.has_bug:
-        return "最近一次判断对了。"
-    if a.locate_hit and a.first_fix_pass and a.first_fix_clean:
-        return "最近一次自己找到了问题，第一稿就改对了。"
-    if a.locate_hit:
-        return "最近一次能指出出错的那一行。下次可以换一段代码，再看看能否独立改对。"
-    return "最近一次发现了有问题，但没选中出错的地方。下次先说清楚哪一行不符合要求，再动手改。"
-
-
 def evidence(s: Session, a: m.QuizAttempt, item: m.QuizItem) -> dict:
     """教师端：最近一次作答的证据链。判断 → 首次所选行 → 修改与提示，原代码和学生所选的行。"""
     start = item.start_line or 1
@@ -209,14 +172,6 @@ def evidence(s: Session, a: m.QuizAttempt, item: m.QuizItem) -> dict:
         "code": {"start": lo, "lines": lines[lo - start:hi - start + 1], "picked": picked, "bug": bug_lines},
         "order": order, "hints": a.hints, "sampleRuns": a.sample_runs, "legacy": a.protocol != 2,
     }
-
-
-def student_rows(d: dict[str, Dims]) -> list[dict]:
-    """学生端：只给知识点名称、几比几、一句话。不给技能编码、概率。"""
-    rows = sorted(d.values(), key=lambda x: (-(x.latest.id if x.latest else 0)))
-    return [{"key": f"k{i}", "name": KNOWLEDGE_POINTS.get(x.kp, ""), "judge": x.judge.view(), "locate": x.locate.view(),
-             "edit": x.edit.view(), "text": describe(x), "latest": suggest(x)}
-            for i, x in enumerate(rows) if x.judge.d]
 
 
 def teacher_rows(s: Session, d: dict[str, Dims]) -> list[dict]:

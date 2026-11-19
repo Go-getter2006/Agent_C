@@ -317,9 +317,10 @@ def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
             prev_lines = lines
     course = ctx.course
     prof = profile.kp_profile(s, ctx.user_id, course)
-    weak = sorted(((kp, d) for kp, d in prof.items() if d.level == "待加强" or d.flags), key=lambda kv: (kv[1].perf or 0.5))
+    weak = sorted(((kp, d) for kp, d in prof.items() if d.level == "待加强" or any(f != "fading" for f in d.flags)),
+                  key=lambda kv: (kv[1].perf or 0.5))
     for kp, d in weak[:4]:
-        tips = "；".join(profile.FLAG_TEXT[f] for f in d.flags[:2])
+        tips = "；".join([profile.FLAG_TEXT[f] for f in d.flags if f != "fading"][:2])
         ctx.learning.append(f"{KNOWLEDGE_POINTS.get(kp, kp)}：{d.level}" + (f"（{tips}）" if tips else ""))
     # 在别的题上卡过的地方、智能体看出来的错误想法
     current = (ctx.problem.server_id, ctx.problem.problem_id) if ctx.problem else None

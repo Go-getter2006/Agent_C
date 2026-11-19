@@ -173,7 +173,7 @@ def test_profile_dims_and_nightly(demo):
         assert s.get(m.ModelWeights, "C") is not None
 
 
-def test_student_sees_dims_without_numbers(demo):
+def test_student_sees_mastery_without_profile_inferences(demo):
     rid = _round(demo)
     with db.session_scope() as s:
         assess.assess_round(s, s.get(m.ChatRound, rid))
@@ -181,10 +181,9 @@ def test_student_sees_dims_without_numbers(demo):
         c.post("/api/auth/login", json={"loginName": UID, "password": "test-pass"})
         prog = c.get("/api/progress").json()
     items = [i for g in prog["knowledge"] for i in g["items"]]
-    with_dims = [i for i in items if i.get("dims")]
-    assert with_dims and all(isinstance(x["segments"], int) and 1 <= x["segments"] <= 3 for i in with_dims for x in i["dims"])
-    assert all(set(x) == {"name", "segments", "hint"} for i in with_dims for x in i["dims"])
-    assert all(isinstance(i["insight"], str) for i in items)
+    assert any(i["covered"] and i["level"] != "还没练到" for i in items)
+    assert all("dims" not in i and "insight" not in i for i in items)
+    assert "可能有点忘" not in json.dumps(prog, ensure_ascii=False)
 
 
 def test_teacher_profile_without_review(demo):

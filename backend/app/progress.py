@@ -9,7 +9,7 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import catalog, db, diagnosis, kpdesc, mastery, profile, review
+from . import catalog, db, kpdesc, mastery, review
 from . import models as m
 from .labeling.labeler import current_problem_label
 from .taxonomy import (KNOWLEDGE_POINTS, LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_SEGMENTS, LEVEL_WEAK, TOPICS,
@@ -38,7 +38,6 @@ class Snapshot:
             self.skills[key] = ([label.primary_skill] + list(label.secondary_skills or [])) if label else []
             self.subs[key] = catalog.user_submissions(s, user_id, *key)
         self.kp = {k: v for k, v in mastery.kp_states(s, user_id).items() if course_of(k) == course}
-        self.profile = profile.kp_profile(s, user_id, course, self.now)
         # 每个知识点一句话（一次做对几道、改对几道、还没过几道、对话里讲不讲得清）：和教师端用同一批事实
         self.desc = kpdesc.records(s, [user_id], course, set(self.visible)).get(user_id, {})
         self.stuck = [p for p in s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id == user_id)
@@ -103,8 +102,7 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
         practice = snap.practice_for(kp) if keys else None
         groups.setdefault(TOPICS.get(kp[:3], ""), []).append({
             "name": KNOWLEDGE_POINTS.get(kp, ""), **level_view(level), "basis": basis, "covered": bool(keys),
-            "practice": snap.problem_view(practice) if practice else None,
-            **profile.student_dims(snap.profile.get(kp))})
+            "practice": snap.problem_view(practice) if practice else None})
     return [{"topic": topic, "items": items} for topic, items in groups.items()]
 
 
@@ -261,9 +259,7 @@ def build(s: Session, user_id: str, course: str = "C") -> dict:
             "levels": {lv: levels.count(lv) for lv in (LEVEL_MASTERED, LEVEL_BASIC, LEVEL_WEAK)},
         },
         "knowledge": knowledge_block(snap), "errors": errors, "activity": activity, "next": nxt,
-        "foundation": foundation_block(snap),
-        # 判断、定位、修改三维（界面改造方案第 5 节）：只有知识点名称、几比几、一句话
-        "dims": diagnosis.student_rows(diagnosis.by_student(s, [user_id], course)[user_id])}
+        "foundation": foundation_block(snap)}
 
 
 def problem_knowledge(s: Session, user_id: str, server_id: int, problem_id: int, limit: int = 4) -> list[dict]:

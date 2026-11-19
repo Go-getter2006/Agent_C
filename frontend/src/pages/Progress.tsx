@@ -1,7 +1,7 @@
 // 我的学情：几个数、接下来做什么、知识点掌握、常见错误、每周提交。右上角“全部提交记录”。
-// 判断、定位、修改（小题首次独立作答的几比几）放在对应知识点的卡片里，不另外列一张表；
+// 知识点卡片放练习事实和继续练习的入口。小题反馈在复习页查看。
 // 作业的完成情况在作业引导里看，这里不重复。
-// 只用档位、几比几和文字，不显示概率、排名、细技能编码。
+// 只用档位、做题记录和文字，不显示概率、排名、细技能编码。
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { BookOpen, CircleAlert, CircleCheck, Gauge, History, ListChecks, RotateCcw } from "lucide-react";
@@ -12,20 +12,12 @@ import { Card, Empty, Facts, LEVELS, LevelLegend, Loading, Meter, Problem, level
 import { useLoad } from "../lib/hooks";
 import { shortTime } from "../lib/time";
 import { useSession } from "../session";
-import type { DimRatio, KnowledgeItem, ProgressData } from "../types";
-
-type DimRow = NonNullable<ProgressData["dims"]>[number];
-
-/** 小题的几比几：没做过的那一步不写。 */
-function quizLine(d: DimRow): string {
-  const part = (name: string, r: DimRatio | null) => (r ? `${name} ${r.n}/${r.d}` : "");
-  return ["判断", "定位", "修改"].map((n, i) => part(n, [d.judge, d.locate, d.edit][i])).filter(Boolean).join(" · ");
-}
+import type { KnowledgeItem } from "../types";
 
 const STATUS_PILL: Record<string, string> = { 已改正: "pill pill-pass", 改正后又出现: "pill pill-fail", 还没解决: "pill pill-warn" };
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
 
-function KpTile({ kp, quiz, onPractice }: { kp: KnowledgeItem; quiz?: DimRow; onPractice: (key: string) => void }) {
+function KpTile({ kp, onPractice }: { kp: KnowledgeItem; onPractice: (key: string) => void }) {
   return (
     <div className={`kp-tile ${levelClass(kp.level)}${kp.covered ? "" : " kp-uncovered"}`}>
       <div className="kp-tile-top">
@@ -33,22 +25,6 @@ function KpTile({ kp, quiz, onPractice }: { kp: KnowledgeItem; quiz?: DimRow; on
         <Meter level={kp.level} segments={kp.segments} />
       </div>
       <span className="kp-basis">{kp.basis}</span>
-      {kp.dims && kp.dims.length > 0 && (
-        <span className="kp-dims">
-          {kp.dims.map((d) => (
-            <span key={d.name} className="kp-dim" title={d.hint}>
-              {d.name}
-              <span className="kp-dim-bars" role="img" aria-label={`${d.name}：三段里的第 ${["一", "二", "三"][d.segments - 1]}段（${d.hint}）`}>
-                {[1, 2, 3].map((i) => <i key={i} className={i <= d.segments ? "on" : undefined} />)}
-              </span>
-            </span>
-          ))}
-        </span>
-      )}
-      {kp.insight && <span className="kp-insight">{kp.insight}</span>}
-      {quiz && quizLine(quiz) && (
-        <span className="kp-quiz"><span className="num">小题：{quizLine(quiz)}</span>{quiz.latest ? `。${quiz.latest}` : ""}</span>
-      )}
       {kp.practice && (
         <button type="button" className="link kp-practice" onClick={() => onPractice(kp.practice!.key)}
           aria-label={`去练一题：${kp.practice.title}`}>
@@ -72,8 +48,7 @@ export default function Progress() {
   };
 
   const levelCounts = p ? LEVELS.slice(0, 3).map((l) => p.summary.levels[l] ?? 0) : [];
-  const quizOf: Record<string, DimRow> = Object.fromEntries((p?.dims ?? []).map((d) => [d.name, d]));
-  const uncovered = p ? p.knowledge.reduce((n, g) => n + g.items.filter((k) => !k.covered && !quizOf[k.name]).length, 0) : 0;
+  const uncovered = p ? p.knowledge.reduce((n, g) => n + g.items.filter((k) => !k.covered).length, 0) : 0;
 
   return (
     <StudentShell>
@@ -169,13 +144,13 @@ export default function Progress() {
                     </div>
                     {p.knowledge.length === 0 && <p className="note">还没有可以统计的题目。</p>}
                     {p.knowledge.map((group) => {
-                      const items = all ? group.items : group.items.filter((k) => k.covered || quizOf[k.name]);
+                      const items = all ? group.items : group.items.filter((k) => k.covered);
                       if (items.length === 0) return null;
                       return (
                         <div key={group.topic} className="kp-group">
                           <h3>{group.topic}</h3>
                           <div className="kp-grid">
-                            {items.map((kp) => <KpTile key={kp.name} kp={kp} quiz={quizOf[kp.name]} onPractice={practice} />)}
+                            {items.map((kp) => <KpTile key={kp.name} kp={kp} onPractice={practice} />)}
                           </div>
                         </div>
                       );

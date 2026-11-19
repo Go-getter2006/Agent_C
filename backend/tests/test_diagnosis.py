@@ -84,14 +84,10 @@ def test_figure_nine_and_the_six_cases(database):
         assert diagnosis.frac(o.edit) == "尚无记录"                            # 系统失败没有算一次提交
         assert o.legacy == 1 and o.locate_entered == 1
 
-        rows = {r["name"]: r for r in diagnosis.student_rows(d)}
-        r = rows["最值、求和、统计"]
-        assert r["judge"] == {"n": 3, "d": 4} and r["locate"] == {"n": 1, "d": 2} and r["edit"] == {"n": 1, "d": 2}
-        assert r["text"] == "4 道小题里，你有 3 次判断正确。在 2 道进入定位和修改的错题里，你各有 1 次首次完成。"
-        assert "C06" not in repr(r) and "%" not in repr(r)
-
         t = {x["code"]: x for x in diagnosis.teacher_rows(s, d)}
-        ev = t["C06.03"]["latest"]                                            # 最近一次：误报那一次
+        r = t["C06.03"]
+        assert r["judge"] == {"n": 3, "d": 4} and r["locate"] == {"n": 1, "d": 2} and r["edit"] == {"n": 1, "d": 2}
+        ev = r["latest"]                                            # 最近一次：误报那一次
         assert [st["value"] for st in ev["steps"]] == ["发现问题", "选中第 2 行", "原样提交"]
         assert t["C05.03"]["counts"]["legacy"] == 1
 
@@ -111,12 +107,11 @@ def test_evidence_chain_after_hint(database):
         assert ev["order"] == ["judge", "locate", "submit", "hint", "submit"]
 
 
-def test_pages_show_the_three_dimensions(demo):
+def test_teacher_pages_show_dimensions_and_student_sees_mastery(demo):
     with TestClient(create_app()) as c:
         c.post("/api/auth/login", json={"loginName": "2500000001", "password": "test-pass"})
-        dims = c.get("/api/progress").json()["dims"]
-        assert all(set(r) == {"key", "name", "judge", "locate", "edit", "text", "latest"} for r in dims)
-        assert all("C0" not in r["key"] for r in dims)
+        progress = c.get("/api/progress").json()
+        assert "dims" not in progress and progress["summary"]["levels"]
         c.post("/api/auth/logout")
         c.post("/api/auth/login", json={"loginName": "demo-teacher", "password": "test-pass"})
         detail = c.get("/api/teacher/students/2500000001").json()

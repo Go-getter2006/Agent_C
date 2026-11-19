@@ -18,7 +18,7 @@
 所以哪个维度更能预测表现，就占更大的分量；数据少时权重往经验值收缩，不会乱跳。
 学到的权重和融合模型的预测准确度在教师端“模型对比”页公开。
 
-学生端只看到每个维度三段的条和一句话，没有数字；教师端能看到全部数值。
+教师端的模型检验和学生明细使用这些维度。
 """
 from __future__ import annotations
 
@@ -48,14 +48,6 @@ FLAG_TEXT = {   # 教师端的说法
     "weak_prereq": "前置知识没打牢",
     "specific_gap": "前置知识都扎实，这里是具体的缺口",
     "trial_error": "改错靠反复试：同一个错误一再出现，或者急着重交",
-}
-STUDENT_TEXT = {   # 学生端的说法：不出现数字
-    "explain_gap": "会做，但说清楚“为什么”还差一点",
-    "help_reliant": "做出来的题里，不少是看了提示以后改对的",
-    "fading": "隔了一段时间，可能有点忘了，复习一下",
-    "overconfident": "有把握的小题也错过，做之前多想一步",
-    "weak_prereq": "前面的基础还要补一补",
-    "trial_error": "没过的时候，先看看错在哪再改，别急着重交",
 }
 
 
@@ -353,24 +345,6 @@ def teacher_view(s: Session, user_id: str, course: str) -> list[dict]:
     return rows
 
 
-def _segments(x: float | None) -> int:
-    if x is None:
-        return 0
-    return 3 if x >= 0.67 else 2 if x >= 0.34 else 1
-
-
-def student_dims(d: Dims | None) -> dict:
-    """学生端：每个维度三段的条（0 表示还没有数据），加一句话。没有数字。"""
-    if d is None:
-        return {"dims": [], "insight": ""}
-    dims = [{"name": "理解", "segments": _segments(d.understanding), "hint": "根据你在对话里的回答"},
-            {"name": "独立", "segments": _segments(d.independence), "hint": "做出来的题里，有多少是自己做出来的"},
-            {"name": "改错", "segments": _segments(d.debugging), "hint": "没过的题，你是怎么改对的"},
-            {"name": "保持", "segments": _segments(d.retention), "hint": "复习时还记得多少"}]
-    texts = [STUDENT_TEXT[f] for f in d.flags if f in STUDENT_TEXT]
-    return {"dims": [x for x in dims if x["segments"] > 0], "insight": texts[0] if texts else ""}
-
-
 def tutor_note(s: Session, user_id: str, skill: str) -> str:
     """给对话里的大模型看的一句话：这个学生在这个知识点上的画像（学生看不到）。"""
     if not skill:
@@ -383,8 +357,9 @@ def tutor_note(s: Session, user_id: str, skill: str) -> str:
         parts.append("理解：" + ("讲得清原因" if d.understanding >= 0.6 else "能照做但讲不清" if d.understanding >= 0.3 else "还不理解"))
     if d.independence is not None:
         parts.append("独立：" + ("多数自己做出来" if d.independence >= 0.7 else "常要提示"))
-    if d.flags:
-        parts.append("；".join(FLAG_TEXT[f] for f in d.flags[:2]))
+    tips = [FLAG_TEXT[f] for f in d.flags if f != "fading"]
+    if tips:
+        parts.append("；".join(tips[:2]))
     return "，".join(parts)
 
 
