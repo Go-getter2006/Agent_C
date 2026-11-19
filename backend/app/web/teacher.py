@@ -754,7 +754,7 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
     people = {st.user_id: st.name for st in class_students(s, cls)}
     ids = list(people)
     gaps, per_simple, roots_by_skill = [], {}, defaultdict(set)
-    root_rows = []
+    root_rows, failure_rows = [], []
     updated = None
     n_post = 0
     repeated_students = 0
@@ -776,32 +776,43 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
                 gaps.append({"userId": uid, "name": people[uid], "skill": _skill_view(code),
                              "v2": round(st.p, 2), "graph": round(post[code], 2), "level": st.level,
                              "yes": round(st.s, 2), "no": round(st.f, 2)})
+        clues = {}
         for r in graphmodel.root_causes(current, post):
             roots_by_skill[r["root"]].add(uid)
-            root_rows.append({"userId": uid, "name": people[uid], "skill": _skill_view(r["skill"]),
-                              "root": _skill_view(r["root"]), "p": r["p"]})
+            clues[r["skill"]] = {"userId": uid, "name": people[uid], "skill": _skill_view(r["skill"]),
+                                 "root": _skill_view(r["root"]), "p": r["p"]}
+        root_rows.extend(clues.values())
+        for code, st in current.items():
+            if st.unresolved_submissions >= 2:
+                clue = clues.get(code)
+                failure_rows.append({"userId": uid, "name": people[uid], "skill": _skill_view(code),
+                                     "failures": st.unresolved_submissions, "updated": bool(post_rows),
+                                     "root": clue["root"] if clue else None, "p": clue["p"] if clue else None})
     gaps.sort(key=lambda r: -abs(r["v2"] - r["graph"]))
+    failure_rows.sort(key=lambda r: (-r["failures"], r["userId"], r["skill"]["code"]))
     common = sorted(((code, len(students)) for code, students in roots_by_skill.items()
                      if len(students) >= 2), key=lambda pair: (-pair[1], pair[0]))
     n_evidence = s.scalar(select(func.count()).select_from(m.SkillEvidence).where(
         m.SkillEvidence.user_id.in_(ids), m.SkillEvidence.skill_code.like(course + "%"))) if ids else 0
-    n_pred = s.scalar(select(func.count()).select_from(m.PredictionLog).where(
-        m.PredictionLog.user_id.in_(ids), m.PredictionLog.skill_code.like(course + "%"))) if ids else 0
+    comparisons = graphmodel.prediction_overview(s, ids, course)
     edges = [{**e, "parentName": skill_name(e["parent"]), "childName": skill_name(e["child"])}
              for e in graphmodel.edge_stats(per_simple) if in_course(e["child"], course)]
     return {
         "class": {"key": key, "name": cls.class_name},
         "trial": True, "version": config.GRAPH_VERSION, "prereqStatus": PREREQ_STATUS,
-        "data": {"students": len(ids), "evidence": n_evidence, "posteriors": n_post, "predictions": n_pred,
+        "data": {"students": len(ids), "evidence": n_evidence, "posteriors": n_post, "predictions": comparisons["total"],
                  "updatedAt": updated.isoformat() if updated else None, "repeatedStudents": repeated_students},
         "params": {k: config.GRAPH[k] for k in ("root_prior", "beta", "gamma", "guess", "slip")},
         "gaps": gaps[:30],
         "gapTotal": len(gaps),
         "rootCauses": root_rows,
+        "failureRows": failure_rows[:30],
+        "failureTotal": len(failure_rows),
         "commonRoots": [{**_skill_view(code), "students": n} for code, n in common[:8]],
         "edges": edges,
-        "weekly": graphmodel.weekly_accuracy(s, ids, course=course, version=config.GRAPH_VERSION),
-        "fusionWeekly": graphmodel.weekly_accuracy(s, ids, course=course),
+        "weekly": comparisons["weekly"],
+        "predictionHistory": comparisons["predictionHistory"],
+        "fusionWeekly": comparisons["fusionWeekly"],
         "fusion": _fusion_view(s, course),
     }
 

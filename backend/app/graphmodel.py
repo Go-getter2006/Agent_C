@@ -241,18 +241,48 @@ def edge_stats(per_student: dict[str, dict[str, float]]) -> list[dict]:
     return rows
 
 
-def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6, course: str | None = None,
-                    version: str | None = None) -> list[dict]:
-    """按周统计两个模型的预测准确度（概率 ≥ 0.5 算预测“能做对”），以及 Brier 分数（越小越好）。"""
+def _prediction_rows(s: Session, user_ids: list[str], course: str | None, version: str | None = None) -> list[m.PredictionLog]:
     if not user_ids:
         return []
     query = select(m.PredictionLog).where(m.PredictionLog.user_id.in_(user_ids))
+    if course is not None:
+        query = query.where(m.PredictionLog.skill_code.startswith(course))
     if version is not None:
         query = query.where(m.PredictionLog.model_version == version)
-    rows = s.scalars(query).all()
-    if course is not None:
-        rows = [r for r in rows if r.skill_code and r.skill_code[0] == course]
-    now = db.now().astimezone(db.BEIJING)
+    return list(s.scalars(query))
+
+
+def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6, course: str | None = None,
+                    version: str | None = None) -> list[dict]:
+    """按周统计预测准确度和 Brier 分数。"""
+    return _weekly_accuracy(_prediction_rows(s, user_ids, course, version), db.now(), weeks)
+
+
+def prediction_overview(s: Session, user_ids: list[str], course: str, weeks: int = 6) -> dict:
+    """新旧图模型分开对照。历史版本从其最后一次预测向前取六周。"""
+    rows = _prediction_rows(s, user_ids, course)
+    now = db.now()
+    by_version: dict[str, list[m.PredictionLog]] = defaultdict(list)
+    for row in rows:
+        if row.ts <= now:
+            by_version[row.model_version or ""].append(row)
+    current = by_version.pop(config.GRAPH_VERSION, [])
+    last = {version: max(row.ts for row in group) for version, group in by_version.items()}
+    history = [
+        {"version": version, "weekly": _weekly_accuracy(by_version[version], last[version], weeks),
+         "legacyGraph": version in ("", "2026-11-17a")}
+        for version in sorted(last, key=lambda v: (last[v], v), reverse=True)
+    ]
+    return {
+        "total": len(rows),
+        "weekly": _weekly_accuracy(current, now, weeks),
+        "predictionHistory": history,
+        "fusionWeekly": _weekly_accuracy(rows, now, weeks),
+    }
+
+
+def _weekly_accuracy(rows: list[m.PredictionLog], at: dt.datetime, weeks: int) -> list[dict]:
+    now = at.astimezone(db.BEIJING)
     monday = (now - dt.timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     buckets: dict[int, list[m.PredictionLog]] = defaultdict(list)
     for r in rows:

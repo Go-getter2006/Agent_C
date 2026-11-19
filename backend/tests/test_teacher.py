@@ -1,6 +1,7 @@
 """教师端：权限按班级控制；图模型只在教师端出现；教师用 XDOJ 账号登录。"""
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import pytest
@@ -291,6 +292,41 @@ def test_prediction_log_is_idempotent(demo):
         rows = s.scalars(select(m.PredictionLog).where(m.PredictionLog.user_id == UID)).all()
         assert len(rows) == 12 and sum(r.outcome for r in rows) == 3   # 12 道题里 3 道一次通过
         assert all(0 <= r.p_simple <= 1 and 0 <= r.p_graph <= 1 for r in rows)
+
+
+def test_graph_page_preserves_historical_predictions_and_shows_repeated_failures(client, demo):
+    sid = demo["server_id"]
+    now = db.now()
+    skill = "C01.01.01"   # 无先修技能，失败记录也应该显示
+    with db.session_scope() as s:
+        for row in s.scalars(select(m.PredictionLog)):
+            row.model_version = "2026-11-17a"
+            row.ts = now - dt.timedelta(weeks=8)
+        for submission_id in (900_001, 900_002):
+            sub = m.Submission(server_id=sid, submission_id=submission_id, user_id=UID, problem_id=900,
+                               submit_time=now, judgement="WA")
+            s.add(sub)
+            assert mastery.record_failed_submission(s, sub, skill)
+
+    login(client, "demo-teacher")
+    url = f"/api/teacher/classes/c{sid}-31/graph"
+    before = client.get(url).json()
+    assert before["weekly"] == []
+    archive, = before["predictionHistory"]
+    assert archive["version"] == "2026-11-17a" and archive["legacyGraph"]
+    assert sum(w["n"] for w in archive["weekly"]) == before["data"]["predictions"] > 50
+    row = next(r for r in before["failureRows"] if r["userId"] == UID and r["skill"]["code"] == skill)
+    assert row["failures"] >= 2 and row["root"] is None
+
+    with db.session_scope() as s:
+        for code in (skill, "D02.01.01"):
+            s.add(m.PredictionLog(user_id=UID, skill_code=code, source_key=f"fixture:new:{code}", ts=now,
+                                  outcome=True, p_simple=0.6, p_v2=0.7, p_graph=0.8, model_version=config.GRAPH_VERSION))
+    after = client.get(url).json()
+    assert after["data"]["predictions"] == before["data"]["predictions"] + 1
+    week, = after["weekly"]
+    assert week["n"] == 1 and week["graphBrier"] == 0.04
+    assert after["predictionHistory"] == before["predictionHistory"]
 
 
 # ------------------------------------------------------------ 概况、知识图谱
