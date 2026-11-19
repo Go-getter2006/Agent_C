@@ -2,11 +2,11 @@
 // - 第一步“满足要求”“存在问题”同样分量，确认前可以改选；确认以后锁定。把握可选，放在确认按钮旁边；
 // - 第二步学生自己点行号选（一行或连续几行），选中的行才变黄；判断有问题叫“确认位置”，判断满足要求叫“确认依据”；
 // - 判断有问题的再修改：可以运行公开样例、看提示，也可以原样提交；
-// - 反馈之前界面上不出现对错、错在哪、标准改法；反馈后开放“回看相关作业”。
+// - 反馈之前不提示对错。完成后在复习页就这道题答疑。
 // 用在复习提升（整页，题干、代码、作答在一条阅读轴线上）和对话里通过后出的小题（compact）。
-import { lazy, Suspense, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { Link } from "react-router-dom";
-import { BarChart3, CircleCheck, CircleX, FileCode2, Lightbulb, NotebookPen, Play, SkipForward } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import ReviewDiscussion from "./ReviewDiscussion";
+import { CircleCheck, CircleX, FileCode2, Lightbulb, Play, SkipForward } from "lucide-react";
 import { api } from "../api";
 import type { QuizView } from "../types";
 import { CodeBlock, Loading } from "./ui";
@@ -99,21 +99,25 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
     }
   };
 
-  const steps = quiz.judged === "ok" || says === "ok"
-    ? [["judge", "判断"], ["locate", "依据"], ["done", "完成"]]
-    : [["judge", "判断"], ["locate", "位置"], ["edit", "修改"], ["done", "完成"]];
-  const order = steps.map((s) => s[0]);
-  const at = order.indexOf(state);
+  const container = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (state === "done" || !container.current) return;
+    let inView = false;
+    let sent = false;
+    const seen = () => {
+      if (inView && !document.hidden && !sent) {
+        sent = true;
+        void api.quizViewed(quiz.attemptId).catch(() => { sent = false; });
+      }
+    };
+    const observer = new IntersectionObserver(([entry]) => { inView = entry.isIntersecting; seen(); });
+    observer.observe(container.current);
+    document.addEventListener("visibilitychange", seen);
+    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", seen); };
+  }, [quiz.attemptId, state === "done"]);
 
   return (
-    <div className={compact ? "attempt attempt-compact" : "attempt"}>
-      <ol className="attempt-steps" aria-label="作答步骤">
-        {steps.map(([key, label], i) => (
-          <li key={key} className={i === at ? "current" : i < at ? "done" : undefined} aria-current={i === at ? "step" : undefined}>
-            {i < at ? `${label}已记录` : label}
-          </li>
-        ))}
-      </ol>
+    <div ref={container} className={compact ? "attempt attempt-compact" : "attempt"}>
 
       {state === "done" && result ? (
         <h2 className="attempt-title">{result.headline}</h2>
@@ -207,7 +211,7 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
               </button>
             )}
           </div>
-          <p className="note">运行公开样例、看提示都会记下来；觉得原来就没问题，可以原样提交。</p>
+          <p className="note">觉得原来的代码已经满足要求，也可以原样提交。</p>
         </div>
       )}
 
@@ -218,21 +222,18 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
             {quiz.judged === "ok" ? "你选了「满足要求」" : "你选了「存在问题」"}{result.lines?.length ? `，并指出${where(result.lines)}` : ""}。
             {result.explanation ? ` ${result.explanation}` : ""}
           </p>
-          <dl className="attempt-summary">
-            {(result.summary ?? []).map((x) => <div key={x.label}><dt>{x.label}</dt><dd>{x.text}</dd></div>)}
-          </dl>
+
           {result.fix && (
             <CodeBlock caption={result.bugLines?.length ? `问题在${where(result.bugLines)}，可以这样改` : "可以这样改"}
               lines={result.fix.lines} mark={result.fix.mark} start={result.fix.start ?? start} copyable={false} />
           )}
           <div className="attempt-confirm">
-            {result.origin && <Link className="btn" to={`/homework/${result.origin.key}`}><NotebookPen size={15} aria-hidden="true" />回看相关作业</Link>}
-            {!compact && <Link className="btn" to="/progress"><BarChart3 size={15} aria-hidden="true" />查看我的学情</Link>}
+            {!compact && <ReviewDiscussion id={quiz.attemptId} />}
             {onNext && <button type="button" className="btn btn-primary" onClick={onNext}>{nextLabel}</button>}
           </div>
         </div>
       )}
-      {state === "done" && result?.outcome === "skipped" && <p className="note">这道先跳过了。</p>}
+      {state === "done" && result?.outcome === "skipped" && onNext && <button className="btn btn-primary" type="button" onClick={onNext}>{nextLabel}</button>}
 
       {error && <p className="error-text" role="alert">{error}</p>}
       {state !== "done" && (

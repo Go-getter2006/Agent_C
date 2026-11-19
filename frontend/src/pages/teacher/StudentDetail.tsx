@@ -1,7 +1,7 @@
 // 学生明细：多维掌握画像、智能体评估、知识点和技能（v2 带区间）、复习、卡点、提交、求助、小题。只有登录的这门课；
 // 数据结构这边另有“C 语言基础”（只有掌握程度，不含 C 语言的答题记录）和还没有证据时的准备度。
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Bot, Copy, FileDown, Quote, Sparkles, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, LevelLegend, Loading, Problem, ResultPill, levelClass } from "../../components/ui";
@@ -11,6 +11,7 @@ import { Code, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, endRe
 import { DiagnosisCard, type DiagnosisRow } from "./Diagnosis";
 
 interface Detail {
+  assignmentMastery: { score: number | null; quality: number | null; coveredTopics: number; scoredTopics: number; totalTopics: number; coveredProblems: number; totalProblems: number };
   student: { userId: string; name: string; class: { key: string; name: string } };
   knowledge: { code: string; name: string; level: string; p: number; score: number; text: string; v1: number | null; v1Level: string | null }[];
   skills: (SkillRef & {
@@ -149,7 +150,9 @@ function Interval({ p, range }: { p: number | null; range: [number, number] | nu
 
 export default function StudentDetail() {
   const { id } = useParams();
-  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}`), [id], 60000);
+  const [params] = useSearchParams();
+  const cls = params.get("classKey");
+  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}${cls ? `?classKey=${encodeURIComponent(cls)}` : ""}`), [id, cls], 60000);
   const [allSkills, setAllSkills] = useState(false);
   const d = data.data;
   const skills = useMemo(() => (d ? d.skills.filter((k) => allSkills || k.yes + k.no > 0) : []), [d, allSkills]);
@@ -170,6 +173,10 @@ export default function StudentDetail() {
           {!d && !data.error && <div className="card card-body"><Loading what="正在取这个学生的明细" lines={6} /></div>}
           {d && (
             <div className="stack">
+              <Card title="班级作业综合分" sub="已练知识点平均掌握分 × 题目与知识点两项覆盖率的平均值">
+                <strong>{d.assignmentMastery.score === null ? "暂缺掌握证据" : d.assignmentMastery.score + " / 100"}</strong>
+                <p>已练 {d.assignmentMastery.coveredProblems}/{d.assignmentMastery.totalProblems} 题，涉及 {d.assignmentMastery.coveredTopics}/{d.assignmentMastery.totalTopics} 个知识点。其中 {d.assignmentMastery.scoredTopics} 个有掌握估计，均分 {d.assignmentMastery.quality ?? "—"}。</p>
+              </Card>
               <DiagnosisCard rows={d.diagnosis ?? []} />
               <Card title="多维掌握画像" sub="每个知识点从六个方面看，再按学到的权重融合。0~1，越大越好；“—”是还没有这方面的数据" bodyClass="">
                 {d.profile.length === 0 ? <Empty title="还没有可以画像的知识点" /> : (

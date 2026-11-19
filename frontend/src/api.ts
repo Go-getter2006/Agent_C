@@ -17,11 +17,11 @@ export function setUnauthorizedHandler(fn: (() => void) | null) {
   onUnauthorized = fn;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, quiet401 = false): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, quiet401 = false, signal?: AbortSignal): Promise<T> {
   let resp: Response;
   try {
     resp = await fetch(path, {
-      method,
+      method, signal,
       credentials: "same-origin",
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -61,13 +61,13 @@ export const api = {
     get<{ homework: Homework; problems: (ProblemRow & { submissions: SubmissionView[]; changes: Record<string, SubmissionChange> })[] }>(
       `/api/homeworks/${key}/submissions`,
     ),
-  problem: (key: string) => get<ProblemDetail>(`/api/problems/${key}`),
+  problem: (key: string, signal?: AbortSignal) => request<ProblemDetail>("GET", `/api/problems/${key}`, undefined, false, signal),
   problemDocument: (key: string) => get<{ ready: boolean; pdf: boolean; url: string | null; text: string | null }>(`/api/problems/${key}/document`),
   diff: (problemKey: string, a: string, b: string) =>
     get<DiffView>(`/api/problems/${problemKey}/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
   source: (key: string) => get<{ key: string; lines: string[] }>(`/api/submissions/${key}/source`),
 
-  thread: (key: string) => get<{ messages: Message[] }>(`/api/threads/${key}`),
+  thread: (key: string, signal?: AbortSignal) => request<{ messages: Message[] }>("GET", `/api/threads/${key}`, undefined, false, signal),
   offerReview: (key: string) => post<{ status: string }>(`/api/threads/${key}/review`),
   welcome: (key: string) => post<{ messages: Message[] }>(`/api/threads/${key}/welcome`),
   send: (key: string, body: { text?: string; action?: string; submissionKey?: string; problemKey?: string }) =>
@@ -78,6 +78,7 @@ export const api = {
     post<QuizView>(`/api/quiz/${id}/confidence`, { value, elapsedMs }),
   quizJudge: (id: number, hasBug: boolean, confidence?: string | null, elapsedMs?: number) =>
     post<QuizView>(`/api/quiz/${id}/judge`, { hasBug, confidence: confidence ?? null, elapsedMs }),
+  quizViewed: (id: number) => post(`/api/quiz/${id}/viewed`),
   quizLocate: (id: number, lines: number[]) => post<QuizView>(`/api/quiz/${id}/locate`, { lines }),
   quizSample: (id: number, code: string) => post<QuizView>(`/api/quiz/${id}/sample`, { code }),
   quizHint: (id: number) => post<QuizView>(`/api/quiz/${id}/hint`),

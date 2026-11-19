@@ -8,6 +8,7 @@ C 语言和数据结构分开登录：传了 course 就只看这门课的服务�
 from __future__ import annotations
 
 import datetime as dt
+from collections import defaultdict
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -80,10 +81,22 @@ def visible_problems(s: Session, user_id: str, course: str | None = None) -> dic
     return out
 
 
-def is_visible(s: Session, user_id: str, server_id: int, problem_id: int, course: str | None = None) -> bool:
+def problem_contest(s: Session, user_id: str, server_id: int, problem_id: int, course: str | None = None) -> int | None:
+    """只查当前题所属的可见作业，保留有效班级、课程和截止时间顺序。"""
     if course is not None and server_course(s, server_id) != course:
-        return False
-    return (server_id, problem_id) in visible_problems(s, user_id, server_course(s, server_id))
+        return None
+    cp, cc, c, en = m.ContestProblem, m.ContestClass, m.Contest, m.Enrollment
+    return s.scalar(select(cp.contest_id).select_from(cp)
+                    .join(c, (c.server_id == cp.server_id) & (c.contest_id == cp.contest_id))
+                    .join(cc, (cc.server_id == c.server_id) & (cc.contest_id == c.contest_id))
+                    .join(en, (en.server_id == cc.server_id) & (en.class_id == cc.class_id))
+                    .where(cp.server_id == server_id, cp.problem_id == problem_id,
+                           en.user_id == user_id, en.status == "active")
+                    .order_by(c.end_time.is_(None).desc(), c.end_time.desc(), c.contest_id.desc()).limit(1))
+
+
+def is_visible(s: Session, user_id: str, server_id: int, problem_id: int, course: str | None = None) -> bool:
+    return problem_contest(s, user_id, server_id, problem_id, course) is not None
 
 
 @dataclass
@@ -137,20 +150,24 @@ def grid(s: Session, sub: m.Submission, order: list[int] | None = None) -> list[
         return None
     runs = {r.testcase_id: bool(r.passed) for r in s.scalars(select(m.JudgeRun).where(
         m.JudgeRun.server_id == sub.server_id, m.JudgeRun.judge_id == judge.judge_id)).all()}
-    if not runs:
+    return _cells(sub.judgement, runs, order if order is not None else testcase_order(s, sub.server_id, sub.problem_id))
+
+
+def _cells(result: str, runs: dict[int, bool], order: list[int]) -> list[bool] | None:
+    if not runs or result in ("CE", "PENDING"):
         return None
-    order = order if order is not None else testcase_order(s, sub.server_id, sub.problem_id)
-    known = [tid for tid in order if tid in runs]
-    extra = sorted(tid for tid in runs if tid not in order)
-    if sub.judgement == "AC":
+    if result == "AC":
         return [True] * max(len(order), len(runs))
-    return [runs.get(tid, False) for tid in order] + [runs[tid] for tid in extra] if order else \
-        [runs[tid] for tid in known + extra]
+    extra = sorted(runs.keys() - set(order))
+    return [runs.get(tid, False) for tid in order] + [runs[tid] for tid in extra]
 
 
 def submission_view(s: Session, sub: m.Submission, attempt_no: int, order: list[int] | None = None) -> dict:
     """学生端的一条提交。这里出现的字段就是学生能看到的全部。"""
-    cells = grid(s, sub, order)
+    return _submission_row(sub, attempt_no, grid(s, sub, order))
+
+
+def _submission_row(sub: m.Submission, attempt_no: int, cells: list[bool] | None) -> dict:
     return {
         "key": submission_key(sub.server_id, sub.submission_id),
         "attemptNo": attempt_no,
@@ -164,6 +181,18 @@ def submission_view(s: Session, sub: m.Submission, attempt_no: int, order: list[
 
 
 def submissions_view(s: Session, user_id: str, server_id: int, problem_id: int) -> list[dict]:
+    subs = user_submissions(s, user_id, server_id, problem_id)
+    if not subs:
+        return []
     order = testcase_order(s, server_id, problem_id)
-    return [submission_view(s, sub, i, order)
-            for i, sub in enumerate(user_submissions(s, user_id, server_id, problem_id), start=1)]
+    sub, judge, run = m.Submission, m.Judge, m.JudgeRun
+    rows = s.execute(select(judge.submission_id, run.testcase_id, run.passed).select_from(sub)
+                     .join(judge, (judge.server_id == sub.server_id) & (judge.submission_id == sub.submission_id))
+                     .join(run, (run.server_id == judge.server_id) & (run.judge_id == judge.judge_id))
+                     .where(sub.user_id == user_id, sub.server_id == server_id,
+                            sub.problem_id == problem_id, judge.is_latest.is_(True)))
+    runs: dict[int, dict[int, bool]] = defaultdict(dict)
+    for sid, tid, passed in rows:
+        runs[sid][tid] = bool(passed)
+    return [_submission_row(x, i, _cells(x.judgement, runs[x.submission_id], order))
+            for i, x in enumerate(subs, start=1)]

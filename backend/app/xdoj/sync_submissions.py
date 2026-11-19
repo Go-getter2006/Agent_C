@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 
 from .. import config, db, pdftext
 from .. import models as m
+from ..chat import proactive
 from ..taxonomy import normalize_judgement
 from . import endpoints as ep
 from .api import request_meta_sync_if_stale
@@ -64,11 +65,15 @@ def _store_submission(s, ctx: SyncContext, row: ep.SubmissionRow, backfill: bool
     code = normalize_judgement(row.judgement_text)
     if code == "UNKNOWN" and row.judgement_text:
         log.warning("不认识的评测结果，已原样保存（提交 %s）", row.submission_id)
-    s.add(m.Submission(
+    sub = m.Submission(
+        notice_eligible=(not backfill and row.submit_time is not None and
+                         ctx.now() - row.submit_time <= dt.timedelta(minutes=config.PROACTIVE["recent_minutes"])),
         server_id=ctx.server_id, submission_id=row.submission_id, user_id=row.user_id, problem_id=row.problem_id,
         contest_id=row.contest_id, class_id=row.class_id, submit_time=row.submit_time, language=row.language,
-        judgement_text=row.judgement_text, judgement=code, points=row.points, fetched_at=ctx.now()))
+        judgement_text=row.judgement_text, judgement=code, points=row.points, fetched_at=ctx.now())
+    s.add(sub)
     s.flush()
+    proactive.on_failed_submission(s, sub, ctx.now())
     if code == "PENDING" or not row.judgement_text:
         enqueue(s, ctx.server_id, "pending_judge", row.submission_id, 1,
                 delay_seconds=config.SYNC["pending_judge_delays"][0], when=ctx.now())
@@ -143,6 +148,10 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
     if not judge_text_ok and list_code not in ("UNKNOWN", ""):
         code = list_code  # 评测记录里的结果认不出（比如只有数字），用提交列表里的文字结果
     with db.session_scope() as s:
+        if code not in ("UNKNOWN", "PENDING"):
+            sub = s.get(m.Submission, (ctx.server_id, submission_id))
+            sub.judgement = code
+            proactive.on_failed_submission(s, sub, ctx.now())
         s.execute(update(m.Judge).where(
             m.Judge.server_id == ctx.server_id, m.Judge.submission_id == submission_id).values(is_latest=False))
         for j in judges:

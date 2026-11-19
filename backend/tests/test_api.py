@@ -74,6 +74,25 @@ def test_homeworks_only_for_my_class(client, demo):
         assert client.post(f"/api/threads/p{sid}-{pid}/messages", json={"text": "怎么做"}).status_code == 404
 
 
+def test_submission_grid_history_uses_three_reads(demo):
+    from sqlalchemy import event
+    from app import catalog
+
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        expected = [catalog.submission_view(s, row, i) for i, row in enumerate(
+            catalog.user_submissions(s, UID, sid, 406), 1)]
+        reads = []
+        def record(conn, cursor, stmt, params, context, batch):
+            reads.append(stmt)
+        event.listen(s.bind, "before_cursor_execute", record)
+        try:
+            assert catalog.submissions_view(s, UID, sid, 406) == expected
+        finally:
+            event.remove(s.bind, "before_cursor_execute", record)
+        assert len(expected) >= 3 and len(reads) == 3
+
+
 def test_problem_detail_and_compile_error_has_no_grid(client, demo):
     login(client)
     sid = demo["server_id"]

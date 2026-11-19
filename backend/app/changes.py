@@ -76,6 +76,8 @@ def _names(codes: list[str]) -> list[str]:
 def problem_changes(s: Session, user_id: str, server_id: int, problem_id: int) -> dict[str, dict]:
     """这道题每一次提交（第二次起）和上一次比的结果，按提交的 key。学生端看的，只有他自己的代码和错误的名称。"""
     subs = catalog.user_submissions(s, user_id, server_id, problem_id)
+    if len(subs) < 2:
+        return {}
     out: dict[str, dict] = {}
     prev, prev_lines, prev_errs = None, None, []
     for i, sub in enumerate(subs, start=1):

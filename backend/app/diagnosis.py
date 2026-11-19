@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models as m
+from .quiz import revealing_stem
 from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill
 
 
@@ -70,10 +71,12 @@ def count(pairs) -> dict[str, Dims]:
     for a, item in pairs:
         kp = kp_of_skill(a.skill_code)
         d = out.setdefault(kp, Dims(kp=kp))
+        viewed = any(e.get("kind") == "viewed" for e in a.events or [])
+        if not (viewed or a.skipped or a.judged_has_bug is not None or a.confidence):
+            continue
         d.shown += 1
         if a.skipped:
             d.skipped += 1
-            continue
         if a.state != "done":
             d.open += 1
         if a.judged_has_bug is not None:
@@ -88,7 +91,8 @@ def count(pairs) -> dict[str, Dims]:
             if real_bug_path:
                 d.locate_entered += 1
                 if a.first_lines:
-                    d.locate.add(bool(a.locate_hit))
+                    if not revealing_stem(item) or any(e.get("kind") == "viewed" and e.get("state") == "judge" for e in a.events or []):
+                        d.locate.add(bool(a.locate_hit))
                     d.edit_entered += 1
                 if a.tries >= 1 and a.first_fix_pass is not None and a.first_fix_clean:
                     d.edit.add(bool(a.first_fix_pass))   # 分母只算没看提示、没运行公开样例就交的第一稿
@@ -142,7 +146,7 @@ def describe(d: Dims) -> str:
 def suggest(d: Dims) -> str:
     """学生端：最近一次怎么样、下次怎么做（不打分）。"""
     a, item = d.latest, d.latest_item
-    if a is None or item is None or a.state != "done":
+    if a is None or item is None or a.state != "done" or a.skipped:
         return ""
     if not a.judge_correct:
         if item.has_bug:
@@ -196,7 +200,7 @@ def evidence(s: Session, a: m.QuizAttempt, item: m.QuizItem) -> dict:
     focus = picked or bug_lines
     lo = max(start, (focus[0] if focus else start) - 1)
     hi = min(start + len(lines) - 1, (focus[-1] if focus else start) + 1)
-    order = [e.get("kind") for e in (a.events or []) if e.get("kind") not in ("shown",)]
+    order = [e.get("kind") for e in (a.events or []) if e.get("kind") not in ("shown", "prepared", "viewed")]
     return {
         "title": item.stem, "time": (a.finished_at or a.created_at).isoformat(),
         "steps": steps,

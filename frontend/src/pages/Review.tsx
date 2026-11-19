@@ -6,10 +6,12 @@
 import { useState } from "react";
 import { CircleCheck } from "lucide-react";
 import { api } from "../api";
+import Quiz from "../components/Quiz";
+import ReviewDiscussion from "../components/ReviewDiscussion";
 import Attempt from "../components/Attempt";
 import { StudentShell } from "../components/Shell";
 import { Card, Empty, Loading, Meter, Problem } from "../components/ui";
-import { useLoad } from "../lib/hooks";
+import { useLoad, useLayout } from "../lib/hooks";
 import { futureDay, shortTime } from "../lib/time";
 import { useStatus } from "../session";
 import type { QuizView, ReviewItemView } from "../types";
@@ -30,17 +32,21 @@ function Plan({ items }: { items: ReviewItemView[] }) {
 }
 
 export default function Review() {
+  const layout = useLayout();
   const data = useLoad(() => api.review(), [], 30000);
   const { reload: reloadStatus } = useStatus();
   const [shown, setShown] = useState<QuizView | null>(null);   // 正在做的这道（做的过程中不被定时刷新冲掉）
   const d = data.data;
-  const current = d?.current ?? null;
+  const [dismissed, setDismissed] = useState<number | undefined>();
+  const current = d?.current?.quiz.attemptId === dismissed ? null : d?.current ?? null;
   // 做完的那道一直留着反馈，等他点“下一题”；定时刷新备好了下一道也不自己换掉
   const quiz = shown && (shown.state === "done" || shown.attemptId === current?.quiz.attemptId) ? shown : current?.quiz ?? shown;
   const finished = quiz?.state === "done";
   const waiting = !current && !!d && d.due.length > 0 && d.doneToday < d.dailyLimit;
 
+  const update = (q: QuizView) => { setShown(q); if (q.state === "done") reloadStatus(); };
   const next = () => {
+    setDismissed(quiz?.attemptId);
     setShown(null);
     data.reload();
     reloadStatus();
@@ -56,8 +62,14 @@ export default function Review() {
           {quiz && (
             <section aria-label="当前小题">
               {current?.lead && !finished && <p className="review-lead">{current.lead}</p>}
-              <Attempt quiz={quiz} onChange={(q) => { setShown(q); if (q.state === "done") reloadStatus(); }}
-                onNext={finished ? next : undefined} nextLabel={(d?.due.length ?? 0) > 1 ? "下一题" : "看复习安排"} />
+              {quiz.protocol === 2 ? <Attempt key={quiz.attemptId} quiz={quiz} onChange={update}
+                onNext={finished ? next : undefined} nextLabel={(d?.due.length ?? 0) > 1 ? "下一题" : "看复习安排"} /> : <>
+                <Quiz key={quiz.attemptId} quiz={quiz} layout={layout} onChange={update} />
+                {finished && <div className="attempt-confirm">
+                  {quiz.result?.outcome !== "skipped" && <ReviewDiscussion id={quiz.attemptId} />}
+                  <button className="btn" type="button" onClick={next}>继续</button>
+                </div>}
+              </>}
             </section>
           )}
 
@@ -80,9 +92,8 @@ export default function Review() {
               {d.last ? (
                 <Card title="最近一次反馈" sub={`${d.last.title} · ${shortTime(d.last.time)}`}>
                   <p className="attempt-title attempt-title-sm">{d.last.headline}</p>
-                  <dl className="attempt-summary">
-                    {d.last.summary.map((x) => <div key={x.label}><dt>{x.label}</dt><dd>{x.text}</dd></div>)}
-                  </dl>
+                  <p>{d.last.explanation}</p>
+                  <ReviewDiscussion key={d.last.attemptId} id={d.last.attemptId} />
                 </Card>
               ) : !waiting && (
                 <div className="card">

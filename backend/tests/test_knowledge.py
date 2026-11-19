@@ -29,6 +29,16 @@ def _last_step():
         return step.bind_by, step.problem_id
 
 
+def test_reading_thread_never_starts_quiz_generation(client, monkeypatch):
+    login(client)
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("读取会话时触发了作业收尾或出题")
+
+    monkeypatch.setattr("app.chat.workflow.refresh_rounds", unexpected)
+    assert client.get("/api/threads/general").status_code == 200
+
+
 def test_topic_title():
     assert topic_title("为什么 5 / 2 存进 double 还是 2？后面还有") == "为什么 5 / 2 存进 double 还是 2"
     assert topic_title("数组下标到底是从 0 还是从 1 开始的呢呢呢呢") == "数组下标到底是从 0 还是从 1 开始…"
@@ -48,6 +58,7 @@ def test_topics_are_separate_threads_and_do_not_bind_homework(client):
     assert client.get("/api/threads/general").json()["messages"] == before      # 以前的综合对话不受影响
     assert _last_step() == ("", None)                                         # 不自动绑到最近没过的题
     reply = r.json()["messages"][1]["blocks"][0]["text"]
+    assert "整数除法" in reply and "2.5" in reply
     assert "哪一道" not in reply and "结合当前题" not in reply                   # 概念问题直接答，不反问是哪道题
 
     # 提到作业题名也不自动绑；选了“结合当前题”才带上那道题

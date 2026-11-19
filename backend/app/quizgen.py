@@ -579,7 +579,7 @@ def from_own_code(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | No
             origin={"kind": "own_code", "op": mu.op, "submission": submission_id, "mark_line": rel,
                     "changed_from": mu.old.strip(), "changed_to": mu.new.strip(), "plan": plan.notes})
         if plan.quiz_type == "JUDGE":
-            stem = f"第 {start + rel} 行改成标出的这样，结果还对吗？"
+            stem = info.brief if info.brief and len(info.brief) <= 40 else f"这段代码能完成「{info.title[:25]}」的要求吗？"
             item = _save(s, plan, stem=stem, shown_code="\n".join(mut_seg), has_bug=plan.has_bug,
                          bug_line=rel if plan.has_bug else None, bug_lines=[rel] if plan.has_bug else [],
                          standard_fix="\n".join(orig_seg) if plan.has_bug else "", **common)

@@ -191,18 +191,43 @@ def class_problems(s: Session, cls: m.XClass) -> list[tuple[int, int]]:
     return list(dict.fromkeys((r[0], r[1]) for r in rows))
 
 
+def assigned_topics(s: Session, problems, course: str) -> dict:
+    by_problem = {}
+    for key in problems:
+        label = current_problem_label(s, *key)
+        skills = [label.primary_skill, *(label.secondary_skills or [])] if label else []
+        by_problem[key] = {kp_of_skill(c) for c in skills if c and in_course(c, course)}
+    return by_problem
+
+
 def class_kps(s: Session, cls: m.XClass) -> set[str]:
-    """这个班布置过的题涉及的知识点。"""
-    out: set[str] = set()
-    for server_id, problem_id in class_problems(s, cls):
-        label = current_problem_label(s, server_id, problem_id)
-        if label is not None:
-            out |= {kp_of_skill(c) for c in [label.primary_skill, *(label.secondary_skills or [])]}
-    return out
+    topics = assigned_topics(s, class_problems(s, cls), _course_of_class(s, cls))
+    return set().union(*topics.values())
 
 
-def _student_in_my_classes(s: Session, user: m.User, user_id: str) -> tuple[m.Student, m.XClass]:
+def assignment_mastery(topics, submissions, states) -> dict:
+    """班级作业综合分，练习广度与已练部分的掌握质量分别展示。"""
+    practiced = {(x.server_id, x.problem_id) for x in submissions
+                 if x.judgement in JUDGEMENTS and x.judgement not in ("UNKNOWN", "PENDING")}
+    practiced &= topics.keys()
+    assigned = set().union(*topics.values())
+    reached = set().union(*(topics[key] for key in practiced))
+    values = [states[c].score for c in reached if c in states and not states[c].predicted
+              and states[c].score is not None and states[c].level != "还没练到"]
+    quality = sum(values) / len(values) if values else None
+    combined = None
+    if topics and assigned and quality is not None:
+        coverage = (len(practiced) / len(topics) + len(reached) / len(assigned)) / 2
+        combined = score(quality * coverage)
+    return {"score": combined, "quality": score(quality), "scoredTopics": len(values),
+            "coveredTopics": len(reached), "totalTopics": len(assigned),
+            "coveredProblems": len(practiced), "totalProblems": len(topics)}
+
+
+def _student_in_my_classes(s: Session, user: m.User, user_id: str, class_key_filter: str | None = None) -> tuple[m.Student, m.XClass]:
     for cls in my_classes(s, user):
+        if class_key_filter and class_key(cls.server_id, cls.class_id) != class_key_filter:
+            continue
         e = s.scalar(select(m.Enrollment.id).where(
             m.Enrollment.user_id == user_id, m.Enrollment.server_id == cls.server_id,
             m.Enrollment.class_id == cls.class_id))
@@ -253,7 +278,8 @@ class _ClassData:
                        for uid in self.ids}
         self.kps = {uid: {c: v for c, v in mastery.kp_states(s, uid).items() if in_course(c, course)}
                     for uid in self.ids}
-        self.focus = class_kps(s, cls)   # 这个班作业涉及的知识点
+        self.topics = assigned_topics(s, self.problems, course)
+        self.focus = set().union(*self.topics.values())
 
     def stuck_points(self, since: dt.datetime | None = None) -> list[m.StuckPoint]:
         """这个班的学生在这门课上的卡点。"""
@@ -478,11 +504,10 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
         total = sum(len(per[k]) for k in tried)
         times = [x.submit_time for k in tried for x in per[k] if x.submit_time]
         levels = Counter(kp.level for kp in data.kps[st.user_id].values())
-        practiced = [kp.score for kp in data.kps[st.user_id].values() if kp.level != "还没练到" and kp.score is not None]
+        coverage = assignment_mastery(data.topics, (x for v in per.values() for x in v), data.kps[st.user_id])
         orders = [order_pct[(st.user_id, k)] for k in tried if (st.user_id, k) in order_pct]
         rows.append({
-            # 掌握分：练过的知识点的掌握分（做题、会话、小题都算，只看他自己的证据）的平均，0~100
-            "score": score(sum(practiced) / len(practiced)) if practiced else None,
+            **coverage,
             "orderPct": round(sum(orders) / len(orders)) if orders else None,
             "copies": copied.get(st.user_id, 0),
             "activeDays": len({x.submit_time.astimezone(db.BEIJING).date() for k in tried for x in per[k] if x.submit_time}),
@@ -526,8 +551,9 @@ def stuck_list(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
 
 # ------------------------------------------------------------ 学生明细
 @router.get("/students/{user_id}")
-def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    student, cls = _student_in_my_classes(s, user, user_id)
+def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = Depends(get_session),
+                   classKey: str | None = None) -> dict:
+    student, cls = _student_in_my_classes(s, user, user_id, classKey)
     course = _course_of_class(s, cls)
     problem_set = set(class_problems(s, cls))
     simple = {c: v for c, v in mastery.skill_states(s, user_id, model="v1").items() if in_course(c, course)}
@@ -622,7 +648,8 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
                         "time": a.created_at.isoformat()})
     # 根因：数据结构这边可以追到 C 语言的先修技能（只给估计值，不给记录）
     roots = graphmodel.root_causes(simple, {c: r.p for c, r in post_all.items()})
-    return {"student": {"userId": student.user_id, "name": student.name,
+    coverage = assignment_mastery(assigned_topics(s, problem_set, course), subs, mastery.kp_states(s, user_id))
+    return {"assignmentMastery": coverage, "student": {"userId": student.user_id, "name": student.name,
                         "class": {"key": class_key(cls.server_id, cls.class_id), "name": cls.class_name}},
             "course": course, "foundation": cross.c_foundation(s, user_id) if course == "D" else [],
             "joint": cross.joint_state(s, user_id) if course == "D" else [],

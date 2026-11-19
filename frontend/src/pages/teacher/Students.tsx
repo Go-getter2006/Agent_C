@@ -12,13 +12,15 @@ interface StudentRow {
   userId: string; name: string; tried: number; passed: number; submissions: number; avgToPass: number | null;
   weak: number; mastered: number; stuck: number; stubborn: number; rounds: number; lastActive: string | null;
   orderPct: number | null; copies: number; activeDays: number;
-  score: number | null;   // 掌握分：练过的知识点的掌握程度估计的平均（做题和会话都算），0~100
+  score: number | null; quality: number | null; coveredTopics: number; totalTopics: number; coveredProblems: number;
 }
 type SortKey = keyof StudentRow;
 
 const COLUMNS: { key: SortKey; label: string; num: boolean; title?: string }[] = [
   { key: "name", label: "学生", num: false },
-  { key: "score", label: "掌握分", num: true, title: "练过的知识点的掌握程度平均，0~100。做题（一次做对、交几次改对、还没过）和会话里智能体评的理解都算在里面" },
+  { key: "score", label: "作业综合分", num: true, title: "已练知识点平均掌握分 ×（题目覆盖率 + 知识点覆盖率）÷ 2。重复提交同一题只覆盖一道题" },
+  { key: "coveredProblems", label: "练过的题", num: true },
+  { key: "coveredTopics", label: "涉及知识点", num: true },
   { key: "passed", label: "已通过", num: true },
   { key: "submissions", label: "提交", num: true },
   { key: "avgToPass", label: "平均几次改对", num: true },
@@ -82,7 +84,7 @@ export default function Students({ cls }: { cls: ClassInfo }) {
             {rows.map((r) => (
               <tr key={r.userId}>
                 <td>
-                  <Link to={`/teacher/students/${r.userId}`} className="who">
+                  <Link to={`/teacher/students/${r.userId}?classKey=${encodeURIComponent(cls.key)}`} className="who">
                     <Avatar name={r.name || "?"} />
                     <span>
                       <span className="cell-title">{r.name || "（没有姓名）"}</span>
@@ -91,6 +93,8 @@ export default function Students({ cls }: { cls: ClassInfo }) {
                   </Link>
                 </td>
                 <td className="num">{r.score === null ? <span className="muted">—</span> : <ScoreBadge score={r.score} />}</td>
+                <td className="num">{r.coveredProblems}/{total}</td>
+                <td className="num">{r.coveredTopics}/{r.totalTopics}</td>
                 <td className="num">
                   <span className="mini-progress">
                     <span className="num">{r.passed}/{total}</span>

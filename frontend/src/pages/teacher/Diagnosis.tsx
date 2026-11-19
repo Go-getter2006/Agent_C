@@ -52,7 +52,7 @@ export function DiagnosisCard({ rows }: { rows: DiagnosisRow[] }) {
               <h3>{cur.name} · 判断拆分</h3>
               <p>错题识别 {frac(cur.judgeBug)}　正确代码识别 {frac(cur.judgeOk)}</p>
               <p className="note">
-                出过 {cur.counts.shown} 道 · 进入定位 {cur.counts.locateEntered} 次 · 进入修改 {cur.counts.editEntered} 次 ·
+                学生看过 {cur.counts.shown} 道 · 进入定位 {cur.counts.locateEntered} 次 · 进入修改 {cur.counts.editEntered} 次 ·
                 提示或运行后才改对 {cur.counts.afterHelp} 次 · 跳过 {cur.counts.skipped} · 没做完 {cur.counts.open}
                 {cur.counts.legacy ? ` · 旧版记录 ${cur.counts.legacy} 次（未测定位）` : ""}
               </p>

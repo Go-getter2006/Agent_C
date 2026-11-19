@@ -213,6 +213,7 @@ class Testcase(Base):
 
 
 class Submission(Base):
+    notice_eligible: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     __tablename__ = "xdoj_submissions"
     server_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     submission_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -500,6 +501,8 @@ class ChatTopic(Base):
 
 
 class ChatMessage(Base):
+    failure_submission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    notice_read_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     __tablename__ = "chat_messages"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
@@ -515,7 +518,8 @@ class ChatMessage(Base):
     content: Mapped[dict] = mapped_column(JSON, default=dict)  # {"blocks": [...], "actions": [...]}
     quiz_attempt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[Dt] = _ts()
-    __table_args__ = (Index("ix_msg_thread", "user_id", "server_id", "problem_id", "id"),)
+    __table_args__ = (Index("ix_msg_thread", "user_id", "server_id", "problem_id", "id"),
+                      Index("ux_msg_failure", "server_id", "failure_submission_id", unique=True),)
 
 
 class ChatStep(Base):
@@ -627,6 +631,7 @@ class QuizItem(Base):
 
 
 class QuizAttempt(Base):
+    discussion: Mapped[list | None] = mapped_column(JSON, nullable=True)  # 本题反馈后的答疑，独立于测量事件和作业会话
     __tablename__ = "quiz_attempts"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
@@ -669,6 +674,8 @@ class ReviewItem(Base):
     """复习（回访）：一个学生的一个技能。按记忆半衰期安排下一次什么时候复习，见 app/review.py。"""
 
     __tablename__ = "review_items"
+    trigger_submission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    trigger_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     skill_code: Mapped[str] = mapped_column(String(16))

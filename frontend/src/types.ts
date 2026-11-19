@@ -77,8 +77,6 @@ export interface QuizResult {
   bugLine?: number | null;
   fix?: { lines: string[]; mark: number[]; start?: number };
   lastRun?: string;
-  // 独立作答的反馈：判断、依据或定位、修改各一句
-  summary?: { label: string; text: string }[];
   lines?: number[];
   bugLines?: number[];
   origin?: { key: string; title: string } | null;
@@ -226,7 +224,7 @@ export interface ReviewPage {
   dailyLimit: number;
   active: number;
   current?: ReviewCurrent;
-  last?: { title: string; time: string; headline: string; summary: { label: string; text: string }[] } | null;
+  last?: { attemptId: number; explanation: string; title: string; time: string; headline: string; summary: { label: string; text: string }[] } | null;
 }
 
 export type CourseCode = "C" | "D";

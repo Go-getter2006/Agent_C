@@ -17,6 +17,7 @@ import difflib
 import hashlib
 import json
 import random
+import re
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -215,7 +216,7 @@ def new_attempt(s: Session, user_id: str, item: m.QuizItem, reason: str, at: dt.
     attempt = m.QuizAttempt(user_id=user_id, item_id=item.id, quiz_type=item.quiz_type, skill_code=item.skill_code,
                             reason=reason, state="judge", created_at=at, review_item_id=review_item_id,
                             protocol=2, item_version=item_version(item),
-                            events=[{"t": at.isoformat(), "kind": "shown"}])
+                            events=[{"t": at.isoformat(), "kind": "prepared"}])
     s.add(attempt)
     s.flush()
     return attempt
@@ -256,6 +257,8 @@ def _finish(s: Session, attempt: m.QuizAttempt, item: m.QuizItem, outcome: str) 
     attempt.finished_at = db.now()
     attempt.duration_ms = int((attempt.finished_at - attempt.created_at).total_seconds() * 1000)
     if outcome == "skipped":
+        from . import review
+        review.on_quiz_result(s, attempt)
         return
     key = f"quiz:{attempt.id}"
     reliable = confidence_reliable(s, attempt.user_id)
@@ -345,6 +348,8 @@ def skip(s: Session, attempt: m.QuizAttempt) -> None:
     if attempt.state == DONE:
         return
     attempt.skipped = True
+    if attempt.protocol == 2:
+        _event(attempt, "skip", state=attempt.state)
     _finish(s, attempt, s.get(m.QuizItem, attempt.item_id), "skipped")
 
 
@@ -414,6 +419,15 @@ def _event(attempt: m.QuizAttempt, kind: str, **data) -> None:
     attempt.events = [*(attempt.events or []), {"t": db.now().isoformat(), "kind": kind, **data}]
 
 
+def mark_viewed(attempt: m.QuizAttempt) -> None:
+    if attempt.state != DONE and not any(e.get("kind") == "viewed" for e in attempt.events or []):
+        _event(attempt, "viewed", state=attempt.state)
+
+
+def revealing_stem(item: m.QuizItem) -> bool:
+    return item.source == "own_code" and bool(re.fullmatch(r"第\s*\d+\s*行改成标出的这样，结果还对吗？", item.stem))
+
+
 def _note(attempt: m.QuizAttempt, kind: str, message: str, code: str = "", counted: bool = False) -> None:
     attempt.runs = [*(attempt.runs or []), {"kind": kind, "message": message, "counted": counted, "code": code}]
 
@@ -453,7 +467,7 @@ def locate(s: Session, attempt: m.QuizAttempt, lines: list[int]) -> str | None:
         return "选一行，或者连续的几行。"
     attempt.first_lines = [start + x - 1 for x in rel]
     if item.has_bug and attempt.judged_has_bug:
-        attempt.locate_hit = bool(_bug_set(item) & set(rel)) and len(rel) <= max(3, n // 2)
+        attempt.locate_hit = bool(_bug_set(item) & set(rel)) and (n == 1 or len(rel) < n) and len(rel) <= max(3, n // 2)
     _event(attempt, "locate", lines=attempt.first_lines, role="where" if attempt.judged_has_bug else "why")
     if attempt.judged_has_bug:
         attempt.state = "edit"
@@ -582,47 +596,21 @@ def feedback2(s: Session, attempt: m.QuizAttempt, item: m.QuizItem) -> dict:
     bug_lines = sorted(start + x - 1 for x in _bug_set(item))
     judged_bug = bool(attempt.judged_has_bug)
     mine = list(attempt.first_lines or [])
-    misjudge = next((e.get("misjudge") for e in reversed(attempt.events or []) if e.get("kind") == "submit"), None)
     if attempt.outcome == "skipped":
-        return {"outcome": "skipped", "headline": "这道先跳过了。", "summary": []}
-    if not item.has_bug and not judged_bug:
-        headline = "你识别出了一段正确的代码"
-        locate = ("依据", f"选中{_where(mine)}") if mine else ("依据", "没有选")
-        fix = ("修改", "本题无须修改")
-    elif not item.has_bug:
-        headline = "这段代码本来是对的"
-        locate = ("位置", f"选的{_where(mine)}其实没有问题")
-        fix = ("修改", {"kept": "最后保持原样", "extra": "改了以后结果没变，本来不用改",
-                        "broke": "改动后结果不对了"}.get(misjudge or "", "本题无须修改"))
+        return {"outcome": "skipped", "headline": "这道先跳过了。"}
+    if not item.has_bug:
+        headline = "这段代码本来是对的" if judged_bug else "你识别出了一段正确的代码"
     elif not judged_bug:
         headline = "这段代码其实有错"
-        locate = ("依据", f"选的是{_where(mine)}；问题在{_where(bug_lines)}")
-        fix = ("修改", "未进入（判断时没发现问题）")
     else:
         fixed = attempt.outcome in ("right", "right_bypass", "right_second")
         headline = "你找到并改对了错误" if fixed else "这次没改对"
-        locate = ("位置", f"选中{_where(mine)}，正是出错的地方" if attempt.locate_hit
-                  else f"选的是{_where(mine)}；问题在{_where(bug_lines)}")
-        if attempt.first_fix_pass and attempt.first_fix_clean:
-            fix_text = "第一稿就改对了"
-        elif attempt.first_fix_pass:
-            fix_text = "运行公开样例后，第一稿改对了"
-        elif fixed and attempt.hints:
-            fix_text = "看了提示后改对"
-        elif fixed:
-            fix_text = "第二次改对"
-        else:
-            fix_text = "两次都没改对"
-        fix = ("修改", fix_text)
     out: dict = {
         "outcome": "right" if attempt.correct else "wrong",
         "headline": headline,
-        "judgeText": "首次判断正确" if attempt.judge_correct else "首次判断有误",
-        "summary": [{"label": "判断", "text": "首次正确" if attempt.judge_correct else "首次有误"},
-                    {"label": locate[0], "text": locate[1]}, {"label": fix[0], "text": fix[1]}],
         "lines": mine,
         "explanation": item.explanation,
-        "origin": _origin(s, attempt, item),
+        "origin": None if attempt.reason == "review" else _origin(s, attempt, item),
     }
     runs = list(attempt.runs or [])
     passed_code = next((r["code"] for r in reversed(runs) if r.get("kind") == "pass" and r.get("code")), "")
@@ -643,7 +631,7 @@ def view2(s: Session, attempt: m.QuizAttempt, item: m.QuizItem) -> dict:
     out: dict = {
         "attemptId": attempt.id,
         "protocol": 2,
-        "stem": item.stem,
+        "stem": f"请判断这段代码能否满足「{item.scene}」的要求。" if revealing_stem(item) else item.stem,
         "caption": item.caption,
         "code": item.shown_code.split("\n"),
         "startLine": start,

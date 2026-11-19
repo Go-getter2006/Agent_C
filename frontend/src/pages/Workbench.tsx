@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowUp, ChevronDown, CloudOff, List, MessagesSquare, PanelRight, X } from "lucide-react";
-import { api } from "../api";
+import { api, ApiError } from "../api";
+import { KeyCache } from "../lib/keyCache";
 import DiffOverlay from "../components/Diff";
 import { SidePanel } from "../components/Lists";
 import HomeworkNavigator from "../components/HomeworkNavigator";
@@ -17,7 +18,7 @@ import { forgetSection, readDraft, writeDraft } from "../lib/memory";
 import { clock } from "../lib/time";
 import { sortProblems } from "../lib/problems";
 import { useHomeworks, useStatus } from "../session";
-import type { SubmissionView } from "../types";
+import type { ProblemDetail, SubmissionView } from "../types";
 
 const INDEX_DRAFT = "homework:index";
 
@@ -103,20 +104,48 @@ export default function Workbench() {
     listCache.current.set(current.key, value);
     return value;
   }, [current?.key, needsList], 15000, true);
-  const detail = useLoad(() => (isProblem ? api.problem(key!) : Promise.resolve(null)), [key], 15000, true);
+  const detailCache = useRef(new KeyCache<ProblemDetail>());
+  const [detailError, setDetailError] = useState<{ key: string; error: Error } | null>(null);
+  const [version, setVersion] = useState(0);
+  const reloadDetail = useCallback(() => setVersion(n => n + 1), []);
+  const [, updateDetail] = useState(0);
+  useEffect(() => {
+    if (!key) return;
+    let controller: AbortController | undefined;
+    const read = async () => {
+      if (controller) return;
+      const request = new AbortController();
+      controller = request;
+      try {
+        const value = await api.problem(key, request.signal);
+        if (request.signal.aborted || value.key !== key) return;
+        detailCache.current.put(key, value);
+        setDetailError(null);
+        updateDetail(n => n + 1);
+      } catch (err) {
+        if (request.signal.aborted) return;
+        if (err instanceof ApiError && (err.status === 403 || err.status === 404)) detailCache.current.delete(key);
+        setDetailError({ key, error: err as Error });
+      } finally { controller = undefined; }
+    };
+    if (!detailCache.current.fresh(key)) void read();
+    const timer = window.setInterval(() => { if (!document.hidden) void read(); }, 15000);
+    return () => { window.clearInterval(timer); controller?.abort(); };
+  }, [key, version]);
+  const d = key ? detailCache.current.get(key) : undefined;
+  const detailFailure = detailError?.key === key ? detailError?.error : undefined;
   const [drawer, setDrawer] = useState<"list" | "side" | null>(null);
   const [showDocument, setShowDocument] = useState(false);
   const cachedList = current ? listCache.current.get(current.key) : null;
   const shownList = list.data?.homework.key === current?.key ? list.data : cachedList ?? list.data;
   const listOk = !!shownList && !!current && shownList.homework.key === current.key;
-  const detailOk = !!detail.data && detail.data.key === key;                          // 详情是不是当前这道题的
 
-  useEffect(() => setDrawer(null), [key, layout]);
+  useEffect(() => { setDrawer(null); setShowDocument(false); setCodeOf(null); }, [key, layout]);
   useEffect(() => { if (isProblem) setEntered(true); }, [key]); // 深链接也保留返回全部作业的入口。
 
   // 打开一道题（比如从提交页点过来）、它不在当前选的作业里：切到它所在的作业。
   // 只在换题的那一刻做一次——以前每次刷新都做，学生自己换作业马上又被拉回来，看起来“卡在一个练习里”
-  const homeKey = detailOk ? detail.data!.homeworkKey : null;
+  const homeKey = d?.homeworkKey;
   const syncedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!homeKey || !key || syncedFor.current === key) return;
@@ -143,9 +172,10 @@ export default function Workbench() {
 
   const refresh = useCallback(() => {
     list.reload();
-    detail.reload();
+    if (key) detailCache.current.expire(key);
+    reloadDetail();
     reloadStatus();
-  }, [list.reload, detail.reload, reloadStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key, list.reload, reloadDetail, reloadStatus]);
 
   const picked = search.get("sub");   // 带进下一条消息的那次提交
   const diff = search.get("diff")?.split("~") ?? null;
@@ -163,11 +193,11 @@ export default function Workbench() {
 
   // 记着的题不在作业里了（换了班、题被撤了）：退回作业引导首页
   useEffect(() => {
-    if (isProblem && detail.error && !detail.data) {
+    if (detailFailure instanceof ApiError && [403, 404].includes(detailFailure.status)) {
       forgetSection("homework");
       navigate("/homework", { replace: true });
     }
-  }, [isProblem, detail.error, detail.data, navigate]);
+  }, [detailFailure, navigate]);
   const setParam = (name: string, value: string | null) => {
     const next = new URLSearchParams(search);
     if (value === null) next.delete(name);
@@ -177,10 +207,17 @@ export default function Workbench() {
 
   const problems = shownList?.problems ?? [];
   const row = problems.find((p) => p.key === key);
-  const d = detailOk ? detail.data : null;
-  const shown = detail.data;   // 右栏：新的没到时先留着上一道题的（变淡），不闪
-  const latest = d?.submissions[0] ?? null;
-  const passed = !!d?.submissions.some((x) => x.result === "AC");
+  const newerRow = !!row?.last && row.last.attemptNo > (d?.submissions[0]?.attemptNo ?? 0);
+  const latest = newerRow || !d ? row?.last : d.submissions[0];
+  const passed = d && !newerRow ? d.submissions.some(x => x.result === "AC") : !!row?.passed;
+  const shown = newerRow ? undefined : d;
+  const newerAttempt = newerRow ? row.last?.key : undefined;
+  useEffect(() => {
+    if (key && newerAttempt && detailCache.current.get(key)) {
+      detailCache.current.expire(key);
+      reloadDetail();
+    }
+  }, [key, newerAttempt, reloadDetail]);
   const title = d?.title ?? row?.title ?? "";
   const brief = d?.brief ?? row?.brief ?? "";
   const pickedSub = d?.submissions.find((x) => x.key === picked) ?? null;
@@ -194,7 +231,7 @@ export default function Workbench() {
       onEnter={pickHomework} onBack={() => { setSelectFirstFor(null); setEntered(false); }} onNavigate={onNavigate} />
   );
   const sidePane = shown && isProblem ? (
-    <div className={detailOk ? "fade-swap" : "fade-swap is-stale"}>
+    <div>
       <SidePanel detail={shown}
         onDocument={() => { setDrawer(null); setShowDocument(true); }}
         onCode={(sub) => { setDrawer(null); void api.event("open_code", sub); setCodeOf(sub); }}
@@ -220,12 +257,12 @@ export default function Workbench() {
     </>
   ) : isProblem && d ? <span className="pill">还没提交</span> : null;
 
-  if (detail.error && isProblem && !detail.data) {
+  if (detailFailure && isProblem && !d) {
     return (
       <StudentShell>
         <div className="wb">
           <aside className="wb-list">{listPane()}</aside>
-          <main className="wb-chat"><div className="chat-scroll"><div className="chat-empty"><strong>{detail.error}</strong></div></div></main>
+          <main className="wb-chat"><Problem message={detailFailure.message} onRetry={reloadDetail} /></main>
         </div>
       </StudentShell>
     );
@@ -283,12 +320,12 @@ export default function Workbench() {
           {isProblem ? (
             <Thread threadKey={key!} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
               welcomeKey={!passed && latest && !["AC", "PENDING", "UNKNOWN"].includes(latest.result) ? latest.key : null}
-              context={context} onActivity={refresh} />
+              emptyReady={!!d || !!row?.last} waitingContext={!!picked && !d} context={context} onActivity={refresh} />
           ) : (
             <HomeworkIntro noHomework={!current && !hwLoading && homeworks.length === 0} />
           )}
         </main>
-        {layout === "four" && sidePane && <aside className="wb-side" aria-label="这道题的情况">{sidePane}</aside>}
+        {layout === "four" && isProblem && <aside className="wb-side" aria-label="这道题的情况">{sidePane ?? <Loading what="正在取题目" />}</aside>}
       </div>
       {drawer === "list" && (layout === "phone" || layout === "two") && (
         <Drawer side="left" title="作业和题目" onClose={() => setDrawer(null)}>{listPane(() => setDrawer(null))}</Drawer>

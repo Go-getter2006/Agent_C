@@ -1,12 +1,4 @@
-"""智能体主动发消息：同步到一次没通过的提交时，不等学生开口，先在这道题的对话里说一句。
-
-两种情况才发（第一次没过不打扰，让他自己先想）：
-- 又犯了以前改正过的同类错误：把以前那道题、他当时改对后的那几行代码摘出来，让他对照；
-- 卡住了：同一道题连着交了好几次还没过，而且错的还是同一处。
-
-只对刚交的提交发（回填的旧提交不发）；他正在这道题上和智能体说话时不插嘴；每人每天有上限。
-消息里只有他自己的代码和题目，不出现测试点的输入输出。
-"""
+"""判定失败后给对应的作业会话留一条消息，已读状态跨设备保存。"""
 from __future__ import annotations
 
 import datetime as dt
@@ -22,63 +14,6 @@ from ..xdoj.assemble import source_text
 from .reply import HELP_ACTIONS
 
 log = logging.getLogger("chat.proactive")
-
-
-def on_open_problem(s: Session, user_id: str, thread: tuple[int, int], course: str,
-                    now: dt.datetime | None = None) -> m.ChatMessage | None:
-    """学生进入未通过题目时先提问；不伪造学生消息，不重复打断已有对话。"""
-    from . import context, reply
-    from .workflow import _round_for, thread_filter
-    from .policy import Decision
-    from .validate import Draft
-
-    now = now or db.now()
-    s.scalar(select(m.Student).where(m.Student.user_id == user_id).with_for_update())
-    if not catalog.is_visible(s, user_id, *thread, course=course):
-        return None
-    subs = catalog.user_submissions(s, user_id, *thread, until=now)
-    if not subs or any(sub.judgement == "AC" for sub in subs):
-        return None
-    sub = subs[-1]
-    if sub.judgement in ("PENDING", "UNKNOWN"):
-        return None
-    messages = s.scalars(select(m.ChatMessage).where(*thread_filter(user_id, thread, course))
-                         .order_by(m.ChatMessage.id)).all()
-    if any((msg.content or {}).get("proactive", {}).get("submission") == sub.submission_id for msg in messages):
-        return None
-    last = messages[-1] if messages else None
-    if last is not None and (sub.submit_time is None or last.created_at >= sub.submit_time
-                             or now - last.created_at < dt.timedelta(minutes=cfg()["quiet_minutes"])):
-        return None
-
-    label = _primary(s, sub)
-    info = catalog.problem_info(s, *thread)
-    source = source_text(s, thread[0], sub.submission_id)
-    ctx = context.Ctx(user_id=user_id, thread=thread, course=course, problem=info, submission=sub,
-                      source=source, source_kind="submission", attempt_no=len(subs))
-    if label is not None and label.confidence >= config.CHAT["low_confidence"] and source \
-            and label.line and 1 <= label.line <= len(ctx.lines):
-        ctx.root_error, ctx.root_skill, ctx.diag_line = label.error_code, label.skill_code, label.line
-        draft = reply.template(ctx, Decision("R11", "H0", "甲", "help"), "help")
-    else:
-        draft = Draft(before="这次提交还没通过。你觉得最可能出问题的是哪一步？")
-    rnd = _round_for(s, user_id, thread, now, course)
-    rnd.submission_id, rnd.last_message_at = sub.submission_id, now
-    if label is not None:
-        rnd.skill_code, rnd.error_code = label.skill_code, label.error_code
-    rnd.help_count += 1
-    rnd.asked_back += 1
-    rnd.last_help_level = "H0"
-    if rnd.max_help_level == "NA":
-        rnd.max_help_level = "H0"
-    rnd.located = draft.quote is not None
-    msg = m.ChatMessage(user_id=user_id, round_id=rnd.id, server_id=thread[0], problem_id=thread[1],
-                        course=course, role="agent", kind="text", created_at=now,
-                        content={"blocks": reply.to_blocks(draft, ctx), "actions": list(HELP_ACTIONS),
-                                 "proactive":{"kind":"opened", "submission":sub.submission_id}})
-    s.add(msg)
-    s.flush()
-    return msg
 
 
 def cfg() -> dict:
@@ -156,43 +91,23 @@ def _grid_text(s: Session, sub: m.Submission) -> str:
     return f"{len(cells)} 组过 {ok} 组"
 
 
-def _quiet(s: Session, sub: m.Submission, now: dt.datetime) -> bool:
-    """他正在这道题上和智能体说话，或者这次提交之后已经说过了：不插嘴。"""
-    from .workflow import thread_filter
-
-    last = s.scalars(select(m.ChatMessage).where(
-        *thread_filter(sub.user_id, (sub.server_id, sub.problem_id)), m.ChatMessage.role == "agent")
-        .order_by(m.ChatMessage.id.desc())).first()
-    if last is None:
-        return False
-    if sub.submit_time is not None and last.created_at >= sub.submit_time:
-        return True
-    return now - last.created_at < dt.timedelta(minutes=cfg()["quiet_minutes"])
-
-
-def _sent_today(s: Session, user_id: str, now: dt.datetime) -> int:
-    local = now.astimezone(db.BEIJING)
-    start = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(db.UTC)
-    rows = s.scalars(select(m.ChatMessage.content).where(
-        m.ChatMessage.user_id == user_id, m.ChatMessage.role == "agent", m.ChatMessage.created_at >= start)).all()
-    return sum(1 for c in rows if isinstance(c, dict) and c.get("proactive"))
-
-
 def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> m.ChatMessage | None:
     """一次没通过的提交标完错误之后调用。该说就在这道题的对话里发一条，返回这条消息。"""
     now = now or db.now()
-    at = sub.submit_time or now
-    if sub.judgement in ("AC", "PENDING", "UNKNOWN") or now - at > dt.timedelta(minutes=cfg()["recent_minutes"]):
+    if sub.judgement in ("AC", "PENDING", "UNKNOWN", "") or sub.notice_eligible is False:
+        return None
+    if sub.notice_eligible is None and (sub.submit_time is None or
+            now - sub.submit_time > dt.timedelta(minutes=cfg()["recent_minutes"])):
+        return None
+    s.scalar(select(m.Submission.submission_id).where(m.Submission.server_id == sub.server_id,
+             m.Submission.submission_id == sub.submission_id).with_for_update())
+    if s.scalar(select(m.ChatMessage.id).where(m.ChatMessage.server_id == sub.server_id,
+                m.ChatMessage.failure_submission_id == sub.submission_id)) is not None:
         return None
     if not catalog.is_visible(s, sub.user_id, sub.server_id, sub.problem_id):
         return None
     subs = catalog.user_submissions(s, sub.user_id, sub.server_id, sub.problem_id)
     upto = [x for x in subs if x.submission_id <= sub.submission_id]
-    if any(x.judgement == "AC" for x in upto):
-        return None  # 已经通过过，这是通过以后的改进
-    if _quiet(s, sub, now) or _sent_today(s, sub.user_id, now) >= cfg()["daily_limit"]:
-        return None
-
     label = _primary(s, sub)
     attempt = len(upto)
     info = catalog.problem_info(s, sub.server_id, sub.problem_id)
@@ -226,16 +141,10 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
             blocks.append({"t": "p", "text": "你觉得问题可能出在哪一部分？说说你的想法，或者点下面的按钮。"})
             kind = "stuck"
     if not kind:
-        return None
-
-    from .workflow import _round_for
-
-    thread = (sub.server_id, sub.problem_id)
-    rnd = _round_for(s, sub.user_id, thread, now, _course(s, sub.server_id))
-    rnd.submission_id, rnd.last_message_at = sub.submission_id, now
-    if label is not None and label.skill_code:
-        rnd.skill_code, rnd.error_code = label.skill_code, label.error_code
-    msg = m.ChatMessage(user_id=sub.user_id, round_id=rnd.id, server_id=sub.server_id, problem_id=sub.problem_id,
+        kind = "failure"
+        blocks.append({"t": "p", "text": f"你的第 {attempt} 次提交没有通过。你原本期待程序在哪一步得到什么结果？"})
+    msg = m.ChatMessage(user_id=sub.user_id, failure_submission_id=sub.submission_id,
+                        server_id=sub.server_id, problem_id=sub.problem_id,
                         course=_course(s, sub.server_id), role="agent", kind="text", created_at=now,
                         content={"blocks": blocks, "actions": list(HELP_ACTIONS),
                                  "proactive": {"kind": kind, "submission": sub.submission_id}})

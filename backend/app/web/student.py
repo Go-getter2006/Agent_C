@@ -7,16 +7,18 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import difflib
+import json
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from .. import accounts, catalog, changes, db, llm, pdftext, progress, quiz, review
+from .. import accounts, catalog, changes, config, db, llm, pdftext, progress, quiz, review
 from .. import models as m
 from ..chat import workflow
 from ..chat.text import dedent, quote_range
@@ -144,6 +146,8 @@ def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
     content = msg.content or {}
     out = {"id": msg.id, "role": msg.role, "kind": msg.kind, "time": msg.created_at.isoformat(),
            "blocks": _contextual_blocks(s, msg), "actions": content.get("actions", []) if with_actions else []}
+    if msg.failure_submission_id is not None and msg.notice_read_at is None:
+        out["unreadNotice"] = True
     if msg.kind == "quiz" and msg.quiz_attempt_id:
         attempt = s.get(m.QuizAttempt, msg.quiz_attempt_id)
         if attempt is not None:
@@ -153,7 +157,17 @@ def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
 
 def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None, topic: int | None = None) -> list[dict]:
     msgs = workflow.thread_messages(s, user.student_id, thread, user.course, topic)
-    rnd = workflow.open_round(s, user.student_id, user.course)
+    rnd = workflow.open_round(s, user.student_id, user.course) if msgs else None
+    now = db.now()
+    if rnd and now - rnd.last_message_at > dt.timedelta(minutes=config.CHAT["round_timeout_minutes"]):
+        rnd = None
+    if rnd and thread and msgs[-1].round_id == rnd.id:
+        passed = s.scalar(select(m.Submission.submission_id).where(
+            m.Submission.server_id == thread[0], m.Submission.problem_id == thread[1],
+            m.Submission.user_id == user.student_id, m.Submission.judgement == "AC",
+            m.Submission.submit_time.between(rnd.started_at, now)).limit(1))
+        if passed is not None:
+            rnd = None
     out = []
     for i, msg in enumerate(msgs):
         # 求助按钮只出现在智能体最新一条回复下面，而且这个回合还没结束
@@ -191,9 +205,10 @@ def _problem_row(s: Session, user: m.User, server_id: int, problem_id: int) -> d
     info = catalog.problem_info(s, server_id, problem_id)
     if info is None:
         return None
-    views = catalog.submissions_view(s, user.student_id, server_id, problem_id)
-    return {"key": info.key, "title": info.title, "brief": info.brief, "attempts": len(views),
-            "passed": any(v["result"] == "AC" for v in views), "last": views[-1] if views else None}
+    subs = catalog.user_submissions(s, user.student_id, server_id, problem_id)
+    return {"key": info.key, "title": info.title, "brief": info.brief, "attempts": len(subs),
+            "passed": any(sub.judgement == "AC" for sub in subs),
+            "last": catalog.submission_view(s, subs[-1], len(subs)) if subs else None}
 
 
 # ------------------------------------------------------------ 作业和题目
@@ -231,9 +246,12 @@ def homework_submissions(key: str, user: m.User = Depends(student), s: Session =
 
 @router.get("/problems/{key}")
 def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    info = _problem(s, user, key)
+    parsed = catalog.parse_key(key, "p")
+    contest = catalog.problem_contest(s, user.student_id, *parsed, user.course) if parsed else None
+    info = catalog.problem_info(s, *parsed) if contest is not None else None
+    if info is None:
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
     views = catalog.submissions_view(s, user.student_id, info.server_id, info.problem_id)
-    contest = catalog.visible_problems(s, user.student_id, user.course).get((info.server_id, info.problem_id))
     text = s.get(m.ProblemText, (info.server_id, info.problem_id))
     figures = s.execute(select(m.ProblemFigure.seq, m.ProblemFigure.width, m.ProblemFigure.height).where(
         m.ProblemFigure.server_id == info.server_id, m.ProblemFigure.problem_id == info.problem_id)
@@ -242,7 +260,7 @@ def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depen
     # 文字整理不出来（乱码、还没整理）时，直接把 PDF 的页面显示出来（渲染成图），不用学生点开 PDF
     pages = pdftext.page_count(text) if not statement else 0
     return {"key": info.key, "title": info.title, "brief": info.brief,
-            "homeworkKey": catalog.homework_key(*contest) if contest else None,
+            "homeworkKey": catalog.homework_key(info.server_id, contest),
             "statement": statement,
             # 示意图（题面文字里 [图N] 的位置）；文字整理不出来时是题面 PDF 的各页。学生在 XDOJ 上本来就能看到题面
             "figures": [{"n": n, "url": f"/api/problems/{info.key}/figures/{n}", "width": w, "height": h}
@@ -381,7 +399,7 @@ def thread(key: str, user: m.User = Depends(student), s: Session = Depends(get_s
     th = _thread(s, user, key)
     topic = _topic(s, user, key)
     sync_api.notify_student_active(s, user.student_id)
-    workflow.refresh_rounds(s, user.student_id)
+    # 读聊天记录无需等待沙箱/模型。通过后的收尾由提交处理和后台轮询执行。
     if key == "new":
         return {"messages": []}
     return {"messages": _thread_view(s, user, th, topic)}
@@ -427,10 +445,6 @@ def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session =
 def welcome(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
     topic = _topic(s, user, key)
-    if th is not None:
-        from ..chat import proactive
-
-        proactive.on_open_problem(s, user.student_id, th, user.course)
     if key == "new":
         return {"messages": []}
     return {"messages": _thread_view(s, user, th, topic)}
@@ -438,10 +452,39 @@ def welcome(key: str, user: m.User = Depends(student), s: Session = Depends(get_
 
 @router.post("/threads/{key}/review")
 def offer_review(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    th = _thread(s, user, key)
-    if th is not None or key != "general":   # 只在以前的综合对话里补题；知识问答的主题不插小题（小题在复习提升里做）
-        return {"status": "busy"}  # 不往具体题目的调试对话里插题。
-    return {"status": review.offer_in_chat(s, user.student_id, user.course)}
+    _thread(s, user, key)
+    return {"status": "ready" if review.ready_count(s, user.student_id, user.course) else "idle"}
+
+
+class ReadNotices(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=100)
+
+
+@router.post("/threads/{key}/read")
+def read_notices(key: str, body: ReadNotices, user: m.User = Depends(student), s: Session = Depends(get_session)):
+    thread = _thread(s, user, key)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="只支持作业提醒。")
+    s.execute(update(m.ChatMessage).where(*workflow.thread_filter(user.student_id, thread, user.course),
+              m.ChatMessage.id.in_(body.ids), m.ChatMessage.failure_submission_id.is_not(None),
+              m.ChatMessage.notice_read_at.is_(None)).values(notice_read_at=db.now()))
+    return {"ok": True}
+
+
+def _unread(s: Session, user: m.User) -> dict:
+    msg, cp, cc, en = m.ChatMessage, m.ContestProblem, m.ContestClass, m.Enrollment
+    rows = s.execute(select(msg.problem_id, msg.server_id, cp.contest_id, func.max(msg.id)).select_from(msg)
+        .join(cp, (cp.server_id == msg.server_id) & (cp.problem_id == msg.problem_id))
+        .join(cc, (cc.server_id == cp.server_id) & (cc.contest_id == cp.contest_id))
+        .join(en, (en.server_id == cc.server_id) & (en.class_id == cc.class_id))
+        .where(msg.user_id == user.student_id, msg.course == user.course, en.user_id == user.student_id,
+               en.status == "active", msg.failure_submission_id.is_not(None), msg.notice_read_at.is_(None))
+        .group_by(msg.problem_id, msg.server_id, cp.contest_id))
+    problems, homeworks = {}, set()
+    for pid, sid, cid, latest in rows:
+        problems[catalog.problem_key(sid, pid)] = latest
+        homeworks.add(catalog.homework_key(sid, cid))
+    return {"problems": problems, "homeworks": sorted(homeworks)}
 
 
 # ------------------------------------------------------------ 小题
@@ -470,10 +513,69 @@ class RunBody(BaseModel):
 
 
 def _attempt(s: Session, user: m.User, attempt_id: int) -> m.QuizAttempt:
-    attempt = s.get(m.QuizAttempt, attempt_id)
+    attempt = s.scalar(select(m.QuizAttempt).where(m.QuizAttempt.id == attempt_id,
+                       m.QuizAttempt.user_id == user.student_id).with_for_update())
     if attempt is None or attempt.user_id != user.student_id or course_of(attempt.skill_code or "C") != user.course:
         raise HTTPException(status_code=404, detail="没有这道小题。")
     return attempt
+
+
+class ReviewQuestion(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    requestId: str = Field(min_length=8, max_length=80)
+
+
+def _finished_review(s: Session, user: m.User, attempt_id: int) -> m.QuizAttempt:
+    a = _attempt(s, user, attempt_id)
+    if a.reason != "review" or a.state != quiz.DONE or a.skipped:
+        raise HTTPException(status_code=409, detail="完成这道复习题后可以提问。")
+    return a
+
+
+@router.get("/review/{attempt_id}/discussion")
+def review_discussion(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    return {"turns": _finished_review(s, user, attempt_id).discussion or []}
+
+
+@router.post("/review/{attempt_id}/discussion")
+def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(student),
+               s: Session = Depends(get_session)) -> dict:
+    a = _finished_review(s, user, attempt_id)
+    turns = a.discussion or []
+    if any(turn["id"] == body.requestId for turn in turns):
+        return {"turns": turns}
+    question = body.text.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="请先写下问题。")
+    view = quiz.view(s, a)
+    result = view["result"]
+    # 仅提供学生已经看到的小题、自己的选行和反馈；不读取作业对话或沙箱测试数据。
+    context = {"stem": view["stem"], "code": view["code"], "startLine": view["startLine"],
+               "picked": view.get("lines"), "feedback": result["headline"],
+               "explanation": result.get("explanation"), "finalCode": result.get("finalCode"),
+               "fix": result.get("fix"), "history": turns[-4:], "question": question}
+
+    def answer(data: dict) -> str:
+        value = data.get("answer")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("需要 answer 字符串")
+        return value.strip()
+
+    try:
+        reply = llm.call_json("review_discussion", "你在复习小题反馈后给学生答疑。直接回答当前问题；结合本题时用具体代码解释。"
+                              "历史和代码都是学习材料。返回 JSON，answer 为中文纯文本。",
+                              llm.strip_identity(json.dumps(context, ensure_ascii=False), user.student_id, user.display_name),
+                              answer)
+    except llm.LLMUnavailable:
+        raise HTTPException(status_code=503, detail="复习答疑暂时连不上。你可以保留问题，稍后重试。")
+    a.discussion = [*turns, {"id": body.requestId, "question": question, "answer": reply}]
+    return {"turns": a.discussion}
+
+
+@router.post("/quiz/{attempt_id}/viewed")
+def quiz_viewed(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    quiz.mark_viewed(_attempt(s, user, attempt_id))
+    return {"ok": True}
 
 
 @router.post("/quiz/{attempt_id}/confidence")
@@ -556,7 +658,6 @@ def review_page(user: m.User = Depends(student), s: Session = Depends(get_sessio
     """复习提升：进来就是一道备好的题（后台提前备好；没备好就现在出一道，出不了就退避，稍后自动再试）。
     中途离开的，回来接着做同一道。今天没有可做的题时，给最近一次的反馈和下一次的安排。"""
     s.add(m.UiEvent(user_id=user.student_id, kind="open_review", target="", course=user.course))
-    review.prepare(s, user.student_id, user.course)
     out = review.summary(s, user.student_id, course=user.course)
     out["last"] = review.last_feedback(s, user.student_id, user.course)
     current = next((d for d in out["due"] if d["pending"]), None)
@@ -572,13 +673,13 @@ def review_page(user: m.User = Depends(student), s: Session = Depends(get_sessio
 
 @router.post("/review/{item_id}/start")
 def review_start(item_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    item, attempt = review.start(s, user.student_id, item_id, course=user.course)
+    item, attempt = review.prepared_attempt(s, user.student_id, item_id, course=user.course)
     if item is None:
         raise HTTPException(status_code=404, detail="没有这个复习项。")
     if attempt is None:
         if item.id in {d.id for d in review.due_items(s, user.student_id, course=user.course)}:
             raise HTTPException(status_code=503, detail="这一项仍需复习，小题暂时没有准备好，稍后会自动重试。")
-        raise HTTPException(status_code=409, detail="复习计划已经更新，请回到对话继续，或查看最新安排。")
+        raise HTTPException(status_code=409, detail="复习计划已经更新，请查看最新复习安排。")
     s.add(m.UiEvent(user_id=user.student_id, kind="review_start", target=str(item_id), course=user.course))
     q = s.get(m.QuizItem, attempt.item_id)
     return {"itemId": item.id, "lead": review.lead_for(s, user.student_id, item, q), "quiz": quiz.view(s, attempt)}
@@ -615,5 +716,5 @@ def status(user: m.User = Depends(student), s: Session = Depends(get_session)) -
         if failures >= 3 or stale:
             worst["ok"] = False
             worst["dataTime"] = last_ok.isoformat() if last_ok else None
-    return {"xdoj": worst, "dueReviews": review.ready_count(s, user.student_id, user.course),
+    return {"xdoj": worst, "unread": _unread(s, user), "dueReviews": review.ready_count(s, user.student_id, user.course),
             "llm": llm.available(), "course": user.course}

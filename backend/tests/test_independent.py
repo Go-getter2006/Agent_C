@@ -63,9 +63,9 @@ def test_bug_found_located_and_fixed_first_try(bank):
         assert a.state == "done" and a.outcome == "right" and a.first_fix_pass and a.first_fix_clean
         r = quiz.view(s, a)["result"]
         assert r["headline"] == "你找到并改对了错误"
-        assert [x["text"] for x in r["summary"]] == ["首次正确", "选中第 1 行，正是出错的地方", "第一稿就改对了"]
+        assert r["lines"] == [1] and "summary" not in r and "judgeText" not in r
         assert r["bugLines"] == [1] and "fix" not in r and r["explanation"]
-        assert kinds(a) == ["shown", "judge", "locate", "submit", "feedback"]
+        assert kinds(a) == ["prepared", "judge", "locate", "submit", "feedback"]
 
 
 def test_sample_run_and_hint_are_recorded_and_change_the_label(bank):
@@ -85,8 +85,8 @@ def test_sample_run_and_hint_are_recorded_and_change_the_label(bank):
         quiz.submit_fix(s, a, FIX)
         assert a.outcome == "right_second"
         r = quiz.view(s, a)["result"]
-        assert r["summary"][1]["text"] == "选的是第 3 行；问题在第 1 行" and r["summary"][2]["text"] == "看了提示后改对"
-        assert kinds(a) == ["shown", "judge", "locate", "sample", "hint", "submit", "submit", "feedback"]
+        assert r["lines"] == [3] and r["bugLines"] == [1] and a.hints == 1
+        assert kinds(a) == ["prepared", "judge", "locate", "sample", "hint", "submit", "submit", "feedback"]
 
 
 def test_missed_bug_ends_with_feedback_and_the_fix(bank):
@@ -97,7 +97,7 @@ def test_missed_bug_ends_with_feedback_and_the_fix(bank):
         quiz.locate(s, a, [2])
         assert a.state == "done" and a.outcome == "wrong_judge" and a.locate_hit is None
         r = quiz.view(s, a)["result"]
-        assert r["headline"] == "这段代码其实有错" and r["summary"][2]["text"] == "未进入（判断时没发现问题）"
+        assert r["headline"] == "这段代码其实有错" and "summary" not in r
         assert r["fix"]["lines"][0] == "int max = a[0];" and r["bugLines"] == [1]
 
 
@@ -109,7 +109,7 @@ def test_correct_code_recognised_has_a_full_ending(bank):
         assert a.outcome == "right_judge" and a.correct
         r = quiz.view(s, a)["result"]
         assert r["headline"] == "你识别出了一段正确的代码"
-        assert [x["text"] for x in r["summary"]] == ["首次正确", "选中第 2 行", "本题无须修改"]
+        assert r["lines"] == [2] and "summary" not in r
         assert "fix" not in r and "bugLines" not in r
 
 
@@ -127,7 +127,7 @@ def test_correct_code_judged_wrong_can_be_kept_as_is(bank):
         assert a.outcome == "wrong_judge" and a.first_fix_pass is True
         assert a.events[-2]["misjudge"] == "kept"
         r = quiz.view(s, a)["result"]
-        assert r["headline"] == "这段代码本来是对的" and r["summary"][2]["text"] == "最后保持原样"
+        assert r["headline"] == "这段代码本来是对的" and r["lines"] == [1]
 
 
 def test_old_protocol_attempts_still_work(bank):

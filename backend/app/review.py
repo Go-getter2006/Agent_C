@@ -273,7 +273,14 @@ def summary(s: Session, user_id: str, at: dt.datetime | None = None, course: str
     rows = [r for r in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)).all()
             if _in_course(r.skill_code, course)]
     upcoming = sorted([r for r in rows if r.state == ACTIVE and r.id not in due_ids], key=lambda r: r.due_at)
-    done_today, _ = _today_count(s, user_id, at, course)
+    start = at.astimezone(db.BEIJING).replace(hour=0, minute=0, second=0, microsecond=0)
+    completed = select(func.count(m.QuizAttempt.id)).where(
+        m.QuizAttempt.user_id == user_id, m.QuizAttempt.reason == "review", m.QuizAttempt.state == "done",
+        m.QuizAttempt.skipped.is_(False), m.QuizAttempt.finished_at >= start,
+        m.QuizAttempt.finished_at < start + dt.timedelta(days=1))
+    if course:
+        completed = completed.where(m.QuizAttempt.skill_code.like(course + "%"))
+    done_today = s.scalar(completed) or 0
     return {
         "due": [item_view(s, user_id, r, at) for r in due],
         "upcoming": [item_view(s, user_id, r, at) for r in upcoming[:12]],
@@ -437,6 +444,12 @@ def prepare(s: Session, user_id: str, course: str, at: dt.datetime | None = None
     """
     at = at or db.now()
     seed_missing(s, user_id, course, at)
+    # 兼容以前跳过后未解除的复习项。沿用原作答时间安排下一次复习。
+    stale = s.scalars(select(m.QuizAttempt).join(m.ReviewItem, m.ReviewItem.attempt_id == m.QuizAttempt.id)
+                      .where(m.QuizAttempt.user_id == user_id, m.QuizAttempt.skill_code.like(course + "%"),
+                             m.QuizAttempt.skipped.is_(True), m.QuizAttempt.review_item_id == m.ReviewItem.id)).all()
+    for skipped in stale:
+        on_quiz_result(s, skipped)
     if _pending(s, user_id, course) is not None:
         return "ready"
     waiting = s.scalar(select(m.UiEvent.id).where(
@@ -486,6 +499,7 @@ def last_feedback(s: Session, user_id: str, course: str) -> dict | None:
     if a is None:
         return None
     result = quiz.view(s, a).get("result") or {}
-    return {"title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), ""),
+    return {"attemptId": a.id, "explanation": result.get("explanation", ""),
+            "title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), ""),
             "time": (a.finished_at or a.created_at).isoformat(),
             "headline": result.get("headline", ""), "summary": result.get("summary", [])}

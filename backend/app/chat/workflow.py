@@ -9,7 +9,7 @@ import time
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, db, llm, mastery, quiz, quizgen, review
+from .. import catalog, config, db, llm, mastery, review
 from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
@@ -67,42 +67,14 @@ def close_round(s: Session, rnd: m.ChatRound, reason: str, at: dt.datetime) -> N
             sp.passed_after = True
 
 
-def after_pass(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> m.ChatMessage | None:
-    """一道题通过之后：结束还开着的回合；该出小题就出一道。可以重复调用。"""
-    now = now or db.now()
+def after_pass(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> None:
+    at = sub.submit_time or now or db.now()
     rnd = s.scalars(select(m.ChatRound).where(
         m.ChatRound.user_id == sub.user_id, m.ChatRound.server_id == sub.server_id,
-        m.ChatRound.problem_id == sub.problem_id).order_by(m.ChatRound.id.desc())).first()
-    if rnd is not None and rnd.status == "open":
-        close_round(s, rnd, "通过", sub.submit_time or now)
-    # 已经为这次通过出过题了
-    since = sub.submit_time or now
-    asked = s.scalar(select(m.ChatMessage.id).where(
-        *thread_filter(sub.user_id, (sub.server_id, sub.problem_id)), m.ChatMessage.kind == "quiz",
-        m.ChatMessage.created_at >= since))
-    if asked is not None:
-        return None
-    subs = catalog.user_submissions(s, sub.user_id, sub.server_id, sub.problem_id)
-    first_ac = next((x for x in subs if x.judgement == "AC"), None)
-    if first_ac is None or first_ac.submission_id != sub.submission_id:
-        return None
-    attempts = [x.submission_id for x in subs].index(sub.submission_id) + 1
-    helped = rnd is not None and rnd.end_reason == "通过" and HELP_ORDER.get(rnd.max_help_level, -1) >= 2
-    if not helped and attempts < config.QUIZ["pass_after_submissions"]:
-        return None
-    from ..labeling.labeler import current_problem_label
-
-    label = current_problem_label(s, sub.server_id, sub.problem_id)
-    skill = (rnd.skill_code if rnd is not None and rnd.skill_code else "") or (label.primary_skill if label else "")
-    if not skill or not quiz.can_start(s, sub.user_id, skill, now):
-        return None
-    item = quizgen.generate(s, sub.user_id, skill, "after_pass", origin=(sub.server_id, sub.problem_id))
-    if item is None:
-        return None
+        m.ChatRound.problem_id == sub.problem_id, m.ChatRound.status == "open",
+        m.ChatRound.started_at <= at).order_by(m.ChatRound.id.desc())).first()
     if rnd is not None:
-        rnd.quiz_triggered = True
-    return quiz.start(s, sub.user_id, item, "after_pass", "过了。顺手问一道：", sub.server_id, sub.problem_id,
-                      rnd.id if rnd is not None else None, now)
+        close_round(s, rnd, "通过", at)
 
 
 def refresh_rounds(s: Session, user_id: str, now: dt.datetime | None = None) -> None:
@@ -393,14 +365,6 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             rnd.asked_back += 1
     if draft.quote is not None:
         rnd.located = True
-    quiz_msg = None
-    if flow == "stubborn" and not knowledge and quiz.can_start(s, user_id, ctx.root_skill, now):
-        item = quizgen.generate(s, user_id, ctx.root_skill, "revisit", origin=thread)
-        if item is not None:
-            quiz_msg = quiz.start(s, user_id, item, "revisit", "", thread[0] if thread else None,
-                                  thread[1] if thread else None, rnd.id, now + dt.timedelta(milliseconds=2))
-            rnd.quiz_triggered = True
-            out.append(quiz_msg)
     if analysis.understood and action is None:
         close_round(s, rnd, "学生表示懂了", now)
 
@@ -417,7 +381,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         willingness=willingness, base_level=ctx.level, stuck_count=len(ctx.prior_stuck) + (1 if (ctx.round_stuck or stuck_point) else 0),
         rule_id=decision.rule_id, help_level=decision.help_level, reveal_level=decision.reveal_level,
         reply={**content, "flow": flow}, reply_source=source, check_result=check_result, retries=retries,
-        round_status=rnd.status, end_reason=rnd.end_reason, quiz_triggered=quiz_msg is not None,
+        round_status=rnd.status, end_reason=rnd.end_reason, quiz_triggered=False,
         stuck_point_id=stuck_point.id if stuck_point is not None else None,
         prompt_version=config.PROMPT_VERSION, model_version=config.DEEPSEEK_MODEL if source == "llm" else "",
         workflow_version=config.WORKFLOW_VERSION, duration_ms=int((time.monotonic() - t0) * 1000), created_at=now))

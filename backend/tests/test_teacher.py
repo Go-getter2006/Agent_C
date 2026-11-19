@@ -66,6 +66,8 @@ def test_class_overview_and_students(client, demo):
     assert (me["name"], me["tried"], me["passed"], me["submissions"], me["stuck"]) == ("林晓", 12, 9, 22, 2)
     assert me["avgToPass"] == _avg_to_pass(demo["server_id"], UID)
     assert rows["total"] == 14 and len(rows["students"]) == 12
+    detail = client.get(f"/api/teacher/students/{UID}", params={"classKey": key}).json()["assignmentMastery"]
+    assert all(me[k] == value for k, value in detail.items()) and me["coveredProblems"] == 12
 
 
 def test_student_detail_has_internal_fields_for_teacher(client):

@@ -60,7 +60,7 @@ def seed(s):
     # 未进入：有错却判断满足要求，定位和修改都没进
     attempt(s, b3, judged_has_bug=False, judge_correct=False, first_lines=[1], outcome="wrong_judge", correct=False)
     # 未作答：出了题还没判断
-    attempt(s, b4, state="judge")
+    attempt(s, b4, state="judge", events=[{"kind": "viewed"}])
     # 系统失败：进了修改，提交时运行环境不可用，不算一次提交
     attempt(s, b5, state="edit", judged_has_bug=True, judge_correct=True, first_lines=[3], locate_hit=True, tries=0)
     # 历史缺定位：以前的作答协议，有判断、没有独立选行

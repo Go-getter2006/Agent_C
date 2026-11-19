@@ -39,7 +39,11 @@ def test_pending_review_does_not_hide_remaining_daily_slot(database, monkeypatch
         _, attempt = review.start(s, UID, first.id, now, "C")
         assert attempt is not None
         assert {r.id for r in review.due_items(s,UID,now,"C")} == {first.id,other.id}
-        assert review.summary(s,UID,now,"C")["doneToday"] == 1
+        assert review.summary(s,UID,now,"C")["doneToday"] == 0
+        quiz.judge2(s, attempt, True)
+        quiz.skip(s, attempt)
+        assert first.attempt_id is None and first.due_at > now
+        assert review.summary(s, UID, now, "C")["doneToday"] == 0
 
 
 def test_offer_is_automatic_idempotent_and_stays_in_general_chat(database, monkeypatch):
