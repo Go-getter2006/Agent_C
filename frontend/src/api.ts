@@ -1,7 +1,7 @@
 // 和后端通信。出错时抛 ApiError，message 是可以直接给人看的一句中文。
 import type {
   AuthInfo, DiffView, Homework, Me, Message, ProblemDetail, ProblemRow, ProgressData, QuizView, ReviewCurrent,
-  ReviewPage, StatusInfo, SubmissionChange, SubmissionView, Topic,
+  ReviewAttemptRow, ReviewPage, ReviewTurn, StatusInfo, SubmissionChange, SubmissionView, Topic,
 } from "./types";
 
 export class ApiError extends Error {
@@ -88,5 +88,9 @@ export const api = {
   progress: () => get<ProgressData>("/api/progress"),
   review: () => get<ReviewPage>("/api/review"),
   startReview: (id: number) => post<ReviewCurrent>(`/api/review/${id}/start`),
+  reviewAttempts: () => get<{ attempts: ReviewAttemptRow[] }>("/api/review/attempts"),
+  reviewAttempt: (id: number) => get<{ attemptId: number; title: string; time: string; quiz: QuizView }>(`/api/review/attempts/${id}`),
+  reviewTurns: (id: number) => get<{ turns: ReviewTurn[] }>(`/api/review/${id}/discussion`),
+  reviewAsk: (id: number, text: string, requestId: string) => post<{ turns: ReviewTurn[] }>(`/api/review/${id}/discussion`, { text, requestId }),
   event: (kind: string, target = "") => post<{ ok: boolean }>("/api/events", { kind, target }).catch(() => undefined),
 };

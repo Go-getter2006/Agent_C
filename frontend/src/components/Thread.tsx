@@ -23,7 +23,7 @@ function EmptyScene() {
   return <CourseScene course={me?.course === "D" ? "D" : "C"} variant="mini" className="chat-empty-scene" />;
 }
 
-function AgentMark() {
+export function AgentMark() {
   return <span className="brand-mark" aria-hidden="true"><Braces size={15} strokeWidth={2.4} /></span>;
 }
 interface Payload {

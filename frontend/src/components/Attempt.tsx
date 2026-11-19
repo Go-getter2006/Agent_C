@@ -5,7 +5,6 @@
 // - 反馈之前不提示对错。完成后在复习页就这道题答疑。
 // 用在复习提升（整页，题干、代码、作答在一条阅读轴线上）和对话里通过后出的小题（compact）。
 import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import ReviewDiscussion from "./ReviewDiscussion";
 import { CircleCheck, CircleX, FileCode2, Lightbulb, Play, SkipForward } from "lucide-react";
 import { api } from "../api";
 import type { QuizView } from "../types";
@@ -227,10 +226,11 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
             <CodeBlock caption={result.bugLines?.length ? `问题在${where(result.bugLines)}，可以这样改` : "可以这样改"}
               lines={result.fix.lines} mark={result.fix.mark} start={result.fix.start ?? start} copyable={false} />
           )}
-          <div className="attempt-confirm">
-            {!compact && <ReviewDiscussion id={quiz.attemptId} />}
-            {onNext && <button type="button" className="btn btn-primary" onClick={onNext}>{nextLabel}</button>}
-          </div>
+          {onNext && (
+            <div className="attempt-confirm">
+              <button type="button" className="btn btn-primary" onClick={onNext}>{nextLabel}</button>
+            </div>
+          )}
         </div>
       )}
       {state === "done" && result?.outcome === "skipped" && onNext && <button className="btn btn-primary" type="button" onClick={onNext}>{nextLabel}</button>}

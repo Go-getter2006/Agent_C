@@ -1799,4 +1799,7 @@
 .srow-count { font-size: var(--fs-12); color: var(--ink-3); white-space: nowrap; }
 .srow-change { grid-column: 1 / -1; font-size: var(--fs-12); color: var(--ink-3); line-height: 1.6; }
 .srow-compare { margin-top: var(--sp-10); }
+.srow-open { background: var(--surface-2); margin: 0 calc(-1 * var(--sp-8)); padding-left: var(--sp-8); padding-right: var(--sp-8); border-radius: var(--r-sm); }
+.srow-code { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-8); min-width: 0; }
+.srow-code > .code { align-self: stretch; }
 .back-link { display: inline-flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-6); font-size: var(--fs-13); }

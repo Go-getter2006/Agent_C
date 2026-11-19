@@ -211,6 +211,12 @@ export interface ReviewItemView {
   pending: boolean;
 }
 
+/** 复习提升左边列表里一道做完的复习题。 */
+export interface ReviewAttemptRow { attemptId: number; title: string; time: string; right: boolean; asked: number }
+
+/** 做完一道复习题以后，就这道题的一问一答。 */
+export interface ReviewTurn { id: string; question: string; answer: string }
+
 export interface ReviewCurrent {
   itemId: number;
   lead: string;

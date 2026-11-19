@@ -1,10 +1,10 @@
 // 作业引导。左栏：全部作业 → 本次题目；中间：这道题的对话；右栏：题面和本题的每一次提交。窄了以后两边收进抽屉。
 // - 进入一次作业自动选排序第一的题（最近没通过的）；返回只退左栏，这道题的对话、右栏、草稿都留着；
 // - 没选题时可以先写下问题，选了题自动带进那道题的输入框；
-// - 右栏每次提交可以“看代码”，“就这一版问”把那次提交带进下一条消息（从全部提交记录点回来也是这样）。
+// - 右栏每次提交可以“看代码”（就在那一行下面展开，不另开窗口），“就这一版问”把那次提交带进下一条消息（从全部提交记录点回来也是这样）。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowUp, ChevronDown, CloudOff, List, MessagesSquare, PanelRight, X } from "lucide-react";
+import { ArrowUp, ChevronDown, CloudOff, List, MessagesSquare, PanelRight } from "lucide-react";
 import { api, ApiError } from "../api";
 import { KeyCache } from "../lib/keyCache";
 import DiffOverlay from "../components/Diff";
@@ -12,38 +12,15 @@ import { SidePanel } from "../components/Lists";
 import HomeworkNavigator from "../components/HomeworkNavigator";
 import { StudentShell } from "../components/Shell";
 import Thread, { type ThreadContext } from "../components/Thread";
-import { Cells, CodeBlock, Drawer, Loading, Problem, ResultPill, gridLabel, resultLine } from "../components/ui";
-import { useEscape, useLayout, useLoad } from "../lib/hooks";
+import { Cells, Drawer, Loading, Problem, ResultPill, gridLabel } from "../components/ui";
+import { useLayout, useLoad } from "../lib/hooks";
 import { forgetSection, readDraft, writeDraft } from "../lib/memory";
 import { clock } from "../lib/time";
 import { sortProblems } from "../lib/problems";
 import { useHomeworks, useStatus } from "../session";
-import type { ProblemDetail, SubmissionView } from "../types";
+import type { ProblemDetail } from "../types";
 
 const INDEX_DRAFT = "homework:index";
-
-/** 看某一次提交的代码。可以就这一版提问。 */
-function CodeView({ sub, onAsk, onClose }: { sub: SubmissionView; onAsk: () => void; onClose: () => void }) {
-  useEscape(onClose);
-  const code = useLoad(() => api.source(sub.key), [sub.key]);
-  return (
-    <div className="diff" role="dialog" aria-modal="true" aria-label={`第 ${sub.attemptNo} 次提交的代码`}>
-      <div className="diff-head">
-        <div className="chat-head-main">
-          <h1>第 {sub.attemptNo} 次提交的代码</h1>
-          <span className="chat-head-brief">{resultLine(sub, true)}</span>
-        </div>
-        <button type="button" className="btn btn-sm" onClick={onAsk}>就这一版问</button>
-        <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭" autoFocus><X size={20} /></button>
-      </div>
-      <div className="diff-body">
-        {code.loading && !code.data && <Loading what="正在取代码" />}
-        {code.error && <Problem message={code.error} onRetry={code.reload} />}
-        {code.data && <CodeBlock caption={`第 ${sub.attemptNo} 次提交`} lines={code.data.lines} />}
-      </div>
-    </div>
-  );
-}
 
 /** 还没选题：可以先写下问题，选了题以后带进那道题的输入框。 */
 function HomeworkIntro({ noHomework }: { noHomework: boolean }) {
@@ -140,7 +117,7 @@ export default function Workbench() {
   const shownList = list.data?.homework.key === current?.key ? list.data : cachedList ?? list.data;
   const listOk = !!shownList && !!current && shownList.homework.key === current.key;
 
-  useEffect(() => { setDrawer(null); setShowDocument(false); setCodeOf(null); }, [key, layout]);
+  useEffect(() => { setDrawer(null); setShowDocument(false); }, [key, layout]);
   useEffect(() => { if (isProblem) setEntered(true); }, [key]); // 深链接也保留返回全部作业的入口。
 
   // 打开一道题（比如从提交页点过来）、它不在当前选的作业里：切到它所在的作业。
@@ -179,7 +156,6 @@ export default function Workbench() {
 
   const picked = search.get("sub");   // 带进下一条消息的那次提交
   const diff = search.get("diff")?.split("~") ?? null;
-  const [codeOf, setCodeOf] = useState<string | null>(null);
 
   // 没选题时写下的问题：进了题、而那道题自己没有草稿，就带过去（在对话读草稿之前做）
   useMemo(() => {
@@ -234,7 +210,7 @@ export default function Workbench() {
     <div>
       <SidePanel detail={shown}
         onDocument={() => { setDrawer(null); setShowDocument(true); }}
-        onCode={(sub) => { setDrawer(null); void api.event("open_code", sub); setCodeOf(sub); }}
+        onAsk={(sub) => { setDrawer(null); setParam("sub", sub); }}
         onDiff={(a, b) => { setDrawer(null); void api.event("open_diff", shown.key); setParam("diff", `${a}~${b}`); }} />
     </div>
   ) : null;
@@ -336,11 +312,6 @@ export default function Workbench() {
       {diff && diff.length === 2 && isProblem && (
         <DiffOverlay problemKey={key!} a={diff[0]} b={diff[1]} onClose={() => (window.history.length > 1 ? navigate(-1) : setParam("diff", null))} />
       )}
-      {codeOf && isProblem && d && (() => {
-        const sub = d.submissions.find((x) => x.key === codeOf);
-        return sub ? <CodeView sub={sub} onClose={() => setCodeOf(null)}
-          onAsk={() => { setCodeOf(null); setParam("sub", sub.key); }} /> : null;
-      })()}
       {showDocument && isProblem && <Drawer side="right" title="题目内容" onClose={() => setShowDocument(false)}>
         <ProblemDocument problemKey={key!} />
       </Drawer>}
