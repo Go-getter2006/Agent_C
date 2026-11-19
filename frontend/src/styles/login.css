@@ -2,9 +2,11 @@
    颜色全部取自 tokens.css 的两套纸面（<html data-course>），和登录以后的页面一致：
    C 语言暖色的纸、墨色；数据结构冷色的纸、深蓝。两门课都是浅色，切换时只是纸的冷暖变了，图案从暖橙变成深蓝。
    切到数据结构时，冷色的纸从环心展开（.login-bg 的 clip-path），和画布里环转过来同步。
-   环心位置要和 CourseScene 里的 cx、cy 一致：宽屏 37% 70%，窄屏 76% 50%（顶上 340px 那一条里的 170px）。 */
+   环心位置要和 CourseScene 里的 cx、cy 一致：宽屏 37% 70%，窄屏 76% 50%（顶上 340px 那一条里的 170px）。
+   切换的动画一点就动：用先快后慢的曲线（不用慢起步的缓入缓出）；展开的圆刚好盖住最远的角，
+   收回时不会先在屏幕外面空转一段。 */
 .login {
-  --ease-turn: cubic-bezier(.65, 0, .35, 1);
+  --ease-turn: cubic-bezier(.2, .75, .25, 1);
   --paper-dot: radial-gradient(circle, rgba(60, 48, 30, .07) 1px, transparent 1.4px) 0 0 / 22px 22px;
   position: relative;
   isolation: isolate;
@@ -19,7 +21,7 @@
     var(--paper-dot),
     radial-gradient(ellipse 44% 40% at 37% 70%, #f1dcc8 0%, #f1dcc800 100%),
     linear-gradient(160deg, #f6f3ec 0%, #f3efe7 55%, #eee5d8 100%);
-  transition: color .8s var(--ease-turn);
+  transition: color .6s var(--ease-turn);
 }
 .login-bg {
   position: absolute;
@@ -31,9 +33,10 @@
     radial-gradient(ellipse 46% 42% at 37% 70%, #d3e0f2 0%, #d3e0f200 100%),
     linear-gradient(165deg, #f2f5f9 0%, #edf1f6 55%, #e3e9f2 100%);
   clip-path: circle(0% at 37% 70%);
-  transition: clip-path 1.5s var(--ease-turn);
+  transition: clip-path 1.1s var(--ease-turn);
 }
-.login[data-course="D"] .login-bg { clip-path: circle(150% at 37% 70%); }
+/* 100%：环心在 37% 70% 时，宽屏（宽 ≥ 1024，横竖都算过）最远的角在 92%～96% */
+.login[data-course="D"] .login-bg { clip-path: circle(100% at 37% 70%); }
 .course-scene { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
 .login-top, .login-hero, .login-main, .login-bottom { position: relative; z-index: 1; }
 
@@ -86,7 +89,7 @@
   background: var(--sidebar);
   box-shadow: 0 4px 14px -6px var(--sidebar);
   transform: translateX(calc(var(--i) * 100%));
-  transition: transform .55s var(--ease-turn), background .55s var(--ease-turn), box-shadow .55s;
+  transition: transform .45s var(--ease-turn), background .45s var(--ease-turn), box-shadow .45s;
 }
 
 /* ---------- 左边：标题 ---------- */
@@ -137,11 +140,46 @@
 .login-box .field:disabled { opacity: .55; cursor: not-allowed; }
 .login-box .field-btn { color: var(--ink-3); }
 .login-box .field-btn:hover:not(:disabled) { color: var(--ink); background: var(--surface-3); }
-/* 按钮也用侧边栏的颜色 */
-.login-box .login-submit { min-height: 48px; background: var(--sidebar); border-color: var(--sidebar); color: var(--on-dark); border-radius: 10px; margin-top: 2px; justify-content: space-between; padding-inline: 18px; }
-.login-box .login-submit:hover:not(:disabled) { background: var(--sidebar-2); border-color: var(--sidebar-2); }
-.login-box .login-submit:active:not(:disabled) { transform: translateY(1px); }
-.login-box .login-submit:disabled { opacity: .5; cursor: not-allowed; }
+/* 登录按钮用这门课的强调色（C 语言锈红、数据结构深蓝），压暗一点，光标底下的高光处文字对比度也不低于 4.5。
+   光标移上去：一团柔光跟着光标走（--mx、--my 由 Login.tsx 写），按钮浮起一点，箭头往前挪 */
+.login-box .login-submit {
+  --btn: color-mix(in srgb, var(--brand) 84%, var(--ink));
+  --btn-shade: linear-gradient(135deg, color-mix(in srgb, var(--on-brand) 8%, transparent) 0%, transparent 55%,
+    color-mix(in srgb, var(--ink) 12%, transparent) 100%);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-height: 48px;
+  margin-top: 2px;
+  padding-inline: 18px;
+  justify-content: space-between;
+  border: 0;
+  border-radius: 10px;
+  background: var(--btn-shade), var(--btn);
+  color: var(--on-brand);
+  font-weight: 600;
+  letter-spacing: .02em;
+  box-shadow: 0 10px 22px -14px var(--btn), inset 0 1px 0 color-mix(in srgb, var(--on-brand) 18%, transparent);
+  cursor: pointer;
+  transition: background-color .6s var(--ease-turn), transform .2s var(--ease-turn), box-shadow .25s;
+}
+.login-box .login-submit::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(140px circle at var(--mx, 50%) var(--my, 50%), color-mix(in srgb, var(--on-brand) 16%, transparent), transparent 70%);
+  opacity: 0;
+  transition: opacity .25s;
+}
+.login-box .login-submit svg { transition: transform .25s var(--ease-turn); }
+/* .btn、.btn-primary 悬停时会整个换掉 background，这里每种状态都写回来 */
+.login-box .login-submit:hover:not(:disabled) { background: var(--btn-shade), var(--btn); transform: translateY(-1px); box-shadow: 0 16px 28px -14px var(--btn), inset 0 1px 0 color-mix(in srgb, var(--on-brand) 22%, transparent); }
+.login-box .login-submit:hover:not(:disabled)::before { opacity: 1; }
+.login-box .login-submit:hover:not(:disabled) svg { transform: translateX(4px); }
+.login-box .login-submit:active:not(:disabled) { transform: translateY(1px); box-shadow: 0 6px 14px -10px var(--btn); }
+.login-box .login-submit:disabled { background: var(--btn-shade), var(--btn); color: var(--on-brand); opacity: .5; cursor: not-allowed; box-shadow: none; filter: saturate(.4); }
+.login-box .login-submit[aria-busy="true"] { opacity: .8; filter: none; cursor: progress; }
 .login-box button:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .login-box .error-text { color: var(--fail); background: var(--fail-bg); border-radius: 8px; padding: 9px 11px; font-size: 13px; line-height: 1.6; }
 .login-closed { padding: 9px 12px; border-radius: 9px; border: 1px solid var(--accent-line); background: var(--accent-bg); color: var(--ink); font-size: 13px; }
@@ -173,7 +211,7 @@
       linear-gradient(170deg, #f2f5f9 0%, #edf1f6 60%, #e3e9f2 100%);
     clip-path: circle(0% at 76% 170px);
   }
-  .login[data-course="D"] .login-bg { clip-path: circle(150% at 76% 170px); }
+  .login[data-course="D"] .login-bg { clip-path: circle(120% at 76% 170px); }   /* 手机竖屏最远的角在 112%～115% */
   .login-top { grid-template-columns: auto 1fr; gap: 12px; padding: 16px 16px 0; }
   .login-top .course-switch { justify-self: end; }
   .login-hero { grid-column: 1; grid-row: 2; max-width: none; min-height: 236px; padding: 44px 16px 8px; }

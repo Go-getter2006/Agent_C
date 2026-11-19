@@ -1,6 +1,7 @@
 // 基础组件：测试点格子、结果标签、掌握档位、代码块、抽屉、指标卡、加载和出错。
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, CircleCheck, CircleX, Copy, FileCode2, Hourglass, RotateCcw, TrendingDown, TrendingUp, X, type LucideIcon } from "lucide-react";
+import { highlightC } from "../lib/cSyntax";
 import { useEscape } from "../lib/hooks";
 import type { SubmissionView } from "../types";
 
@@ -92,8 +93,14 @@ interface CodeBlockProps {
   copyable?: boolean;
 }
 
+/** 一行代码按 C 语法上色（lib/cSyntax.ts，颜色是 tokens.css 的 --syn-*）。 */
+export function SynLine({ toks }: { toks: ReturnType<typeof highlightC>[number] }) {
+  return <>{toks.map((t, i) => (t.k ? <span key={i} className={`syn-${t.k}`}>{t.s}</span> : t.s))}</>;
+}
+
 export function CodeBlock({ caption, start = 1, lines, mark = [], removed = [], numbers, onCopy, copyable = true }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
+  const colored = useMemo(() => highlightC(lines), [lines]);
   const timer = useRef<number>();
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
@@ -132,8 +139,10 @@ export function CodeBlock({ caption, start = 1, lines, mark = [], removed = [], 
                       {text.slice(0, text.indexOf("_"))}
                       <span className="code-blank" aria-label="这一行空着">&nbsp;</span>
                     </>
+                  ) : text ? (
+                    <SynLine toks={colored[i]} />
                   ) : (
-                    text || " "
+                    " "
                   )}
                 </span>
               </div>

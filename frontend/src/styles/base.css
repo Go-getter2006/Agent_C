@@ -683,6 +683,16 @@ select.field {
   tab-size: 4;
 }
 
+/* 代码着色：颜色只从 tokens.css 的 --syn-* 取 */
+.syn-kw { color: var(--syn-kw); }
+.syn-type { color: var(--syn-type); }
+.syn-fn { color: var(--syn-fn); }
+.syn-str { color: var(--syn-str); }
+.syn-esc { color: var(--syn-esc); }
+.syn-num { color: var(--syn-num); }
+.syn-com { color: var(--syn-com); font-style: italic; }
+.syn-pre { color: var(--syn-pre); }
+
 .code-blank {
   display: inline-block;
   min-width: 12em;

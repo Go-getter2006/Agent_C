@@ -72,6 +72,16 @@
   --lv-weak-bg: #fdeeee;
   --lv-none-bg: #f6f7f8;
 
+  /* 代码着色（lib/cSyntax.ts、小题的编辑器）：两门课一样。每种在纸面、标黄的行、删掉的行上对比度都不低于 4.5 */
+  --syn-kw: #8b3a9c;        /* if for return struct …：紫 */
+  --syn-type: #0b6e79;      /* int char double …：青 */
+  --syn-fn: #2d55a8;        /* 函数名：蓝 */
+  --syn-str: #3d6b1c;       /* 字符串、字符：绿 */
+  --syn-esc: #9a5a00;       /* 字符串里的 %d、\n：琥珀 */
+  --syn-num: #b04a18;       /* 数字、NULL、EOF：锈红 */
+  --syn-com: #6f6659;       /* 注释：灰，斜体 */
+  --syn-pre: #8b3a9c;       /* #include #define：和关键字一样 */
+
   /* 图表：类别色按固定顺序（已用校验脚本核对过相邻两色在色弱下也分得开） */
   --series-1: #2a78d6;
   --series-2: #eb6834;
