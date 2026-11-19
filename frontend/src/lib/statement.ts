@@ -33,3 +33,60 @@ export function statementBlocks(text: string): StatementBlock[] {
   }
   return out.map(b=>({...b,text:b.text.replace(/^\n+|\n+$/g,"")})).filter(b=>b.kind==="h" || b.text.trim());
 }
+
+export type MathPiece = { kind: "text"; text: string } | { kind: "math"; tex: string; display: boolean };
+
+const EXPLICIT = /\$\$([^$]+?)\$\$|\$([^$\n]+?)\$/g;
+// 以前整理的题面里常见的纯文本写法，程序认得出的才排成公式；认不出的照原样，不猜
+const NUM = String.raw`-?\d+(?:\.\d+)?(?:\s*\^\s*\d+)?`;
+const VAR = String.raw`[A-Za-z](?:_[A-Za-z0-9])?(?:\s*\[\s*[A-Za-z0-9]+\s*\])?`;
+const LE = String.raw`(?:<=|≤|<|＜|≦)`;
+const RANGE = new RegExp(String.raw`(${NUM})\s*(${LE})\s*(${VAR}(?:\s*,\s*${VAR})*)\s*(${LE})\s*(${NUM})`, "g");
+const POWER = /(?<![\w.^])(\d+)\s*\^\s*(\d+)(\s*[+-]\s*\d+)?(?![\w^])/g;
+
+function texNum(s: string): string {
+  return s.replace(/\s+/g, "").replace(/\^(\d+)/, "^{$1}");
+}
+function texVar(s: string): string {
+  return s.replace(/\s+/g, "").replace(/,/g, ",\\ ");
+}
+function texRel(s: string): string {
+  return s === "<" || s === "＜" ? "<" : "\\le";
+}
+
+/** 纯文本里程序认得出的公式（1<=n<=1000、10^9+7）换成 LaTeX；别的不动。 */
+function autoMath(text: string): MathPiece[] {
+  const out: MathPiece[] = [];
+  const marks: { start: number; end: number; tex: string }[] = [];
+  for (const m of text.matchAll(RANGE)) {
+    marks.push({ start: m.index!, end: m.index! + m[0].length,
+      tex: `${texNum(m[1])} ${texRel(m[2])} ${texVar(m[3])} ${texRel(m[4])} ${texNum(m[5])}` });
+  }
+  for (const m of text.matchAll(POWER)) {
+    const start = m.index!, end = start + m[0].length;
+    if (marks.some((x) => start < x.end && end > x.start)) continue;
+    marks.push({ start, end, tex: `${m[1]}^{${m[2]}}${m[3] ? m[3].replace(/\s+/g, "") : ""}` });
+  }
+  marks.sort((a, b) => a.start - b.start);
+  let at = 0;
+  for (const x of marks) {
+    if (x.start > at) out.push({ kind: "text", text: text.slice(at, x.start) });
+    out.push({ kind: "math", tex: x.tex, display: false });
+    at = x.end;
+  }
+  if (at < text.length) out.push({ kind: "text", text: text.slice(at) });
+  return out;
+}
+
+/** 一段题面文字拆成普通文字和公式：大模型整理时写的 $...$、$$...$$，加上程序认得出的纯文本写法。样例不要用它。 */
+export function mathPieces(text: string): MathPiece[] {
+  const out: MathPiece[] = [];
+  let at = 0;
+  for (const m of text.matchAll(EXPLICIT)) {
+    if (m.index! > at) out.push(...autoMath(text.slice(at, m.index!)));
+    out.push({ kind: "math", tex: (m[1] ?? m[2]).trim(), display: m[1] !== undefined });
+    at = m.index! + m[0].length;
+  }
+  if (at < text.length) out.push(...autoMath(text.slice(at)));
+  return out.filter((p) => p.kind === "math" || p.text);
+}

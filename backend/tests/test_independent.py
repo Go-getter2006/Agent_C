@@ -156,14 +156,14 @@ def test_one_item_that_cannot_be_made_does_not_block_the_rest(demo, monkeypatch)
     """排在最前面的一项这会儿出不了题：换下一项，不让一项卡住全部。"""
     from app import quizgen
 
-    real = quizgen.generate
     with db.session_scope() as s:
         due = review.due_items(s, UID, course="C")
         assert len(due) >= 2
         first, second = due[0].skill_code, due[1].id
-        # 第一项出不了题；第二项能出（这里借第一项的技能真的出一道，演示数据里第二项没有大模型出不了）
-        monkeypatch.setattr(quizgen, "generate",
-                            lambda s_, u, skill, *a, **k: None if skill == first else real(s_, u, first, *a, **k))
+        # 第一项出不了题；别的项能出（演示数据没有大模型，有的技能题库里没有题：直接给一道题库里验证过的题）
+        bank = s.scalars(select(m.QuizItem).where(m.QuizItem.verified.is_(True))).first()
+        assert bank is not None
+        monkeypatch.setattr(quizgen, "generate", lambda s_, u, skill, *a, **k: None if skill == first else bank)
         assert review.prepare(s, UID, "C") == "ready"
         pending = s.scalars(select(m.QuizAttempt).where(m.QuizAttempt.reason == "review",
                                                         m.QuizAttempt.state != "done")).all()

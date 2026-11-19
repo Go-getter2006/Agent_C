@@ -136,6 +136,15 @@ def test_check_tidy():
     assert pdftext.check_tidy("杈撳叆涓€涓鏁存暟 3 5 8", "输入一个正整数 3 5 9", raw_garbled=True)
 
 
+def test_check_tidy_accepts_latex_formulas():
+    """整理时把公式写成 LaTeX（$...$）：数字、样例照样核对；$ 要配对，公式里不能有汉字。"""
+    latex = GOOD.replace("(1 ≤ a, b ≤ 10^5)", "($1 \\le a, b \\le 10^{5}$)")
+    assert pdftext.check_tidy(RAW, latex, raw_garbled=False) is None
+    assert "配对" in pdftext.check_tidy(RAW, latex.replace("10^{5}$", "10^{5}"), False)
+    assert "汉字" in pdftext.check_tidy(RAW, latex.replace("a, b", "\\text{整数} a, b"), False)
+    assert "数字" in pdftext.check_tidy(RAW, latex.replace("10^{5}", "10^{6}"), False)
+
+
 def test_tidy_falls_back_when_the_model_invents(fake_llm):
     seen = fake_llm({"text": GOOD, "restored": False})
     assert pdftext.tidy(RAW, "layer") == (GOOD, "llm")
