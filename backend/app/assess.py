@@ -115,21 +115,26 @@ _SYSTEM = """你是 C 语言课程的助教，任务是评估一名学生在一�
 confidence 是你对这个判断有多大把握（0 到 1）；不要输出学号、姓名。"""
 
 
-def _llm_level(mat: Material, skill: str, root_error: str) -> tuple[int | None, list[str], str, float]:
-    joined = _norm("".join(mat.student_texts))
+def dialogue(mat: Material, skill: str, root_error: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """评估用的材料：已知情况、对话（最后 16 条，去掉学号姓名）。老师盲评看的也是这一份（app/rating.py）。"""
     lines = []
     for msg in mat.messages:
         if msg.kind != "text":
             continue
-        who = "学生" if msg.role == "student" else "助手"
         text = llm.strip_identity(_text(msg))[:400]
         if text.strip():
-            lines.append(f"{who}：{text}")
+            lines.append(("学生" if msg.role == "student" else "助手", text))
     facts = [f"这次评估的技能：{skill_name(skill)}（属于“{KNOWLEDGE_POINTS.get(kp_of_skill(skill), '')}”）",
              f"程序诊断的错误：{error_name(root_error)}" if root_error else "",
              f"这道题后来{'通过了' if mat.passed else '还没有通过'}",
              f"助手给到的最多帮助：{ {-1: '没有', 0: '反问', 1: '指出位置', 2: '讲原理', 3: '给了示例代码'}.get(mat.help, '没有') }"]
-    user = "【已知情况】\n" + "\n".join(f for f in facts if f) + "\n\n【对话】\n" + "\n".join(lines[-16:])
+    return [f for f in facts if f], lines[-16:]
+
+
+def _llm_level(mat: Material, skill: str, root_error: str) -> tuple[int | None, list[str], str, float]:
+    joined = _norm("".join(mat.student_texts))
+    facts, lines = dialogue(mat, skill, root_error)
+    user = "【已知情况】\n" + "\n".join(facts) + "\n\n【对话】\n" + "\n".join(f"{who}：{text}" for who, text in lines)
 
     def validate(d: dict) -> tuple[int | None, list[str], str, float]:
         level = d.get("level")
@@ -402,19 +407,28 @@ def view(s: Session, row: m.AgentAssessment) -> dict:
             "basis": row.basis, "basisName": "看对话" if row.basis == "chat" else "看代码怎么改的"}
 
 
-def agreement(rows: list[m.AgentAssessment]) -> dict:
-    """大模型和规则都给了等级的那些：完全一致的比例，和 Cohen's kappa（扣掉碰巧一致的部分）。"""
-    pairs = [(r.raw_level, r.rule_level) for r in rows
-             if r.source == "llm" and r.raw_level is not None and r.rule_level is not None]
+def pair_stats(pairs: list[tuple[int, int]]) -> dict:
+    """两组 0~3 等级的一致率：完全一致、相差不超过一档、Cohen's κ（扣掉碰巧一致的部分），
+    和二次加权 κ（等级有先后，差两档比差一档更不一致）。"""
     n = len(pairs)
     if n == 0:
-        return {"n": 0, "exact": None, "kappa": None, "within1": None}
+        return {"n": 0, "exact": None, "kappa": None, "within1": None, "weighted": None}
+    cats = range(4)
     exact = sum(1 for a, b in pairs if a == b) / n
     within1 = sum(1 for a, b in pairs if abs(a - b) <= 1) / n
-    cats = range(4)
     pa = {c: sum(1 for a, _ in pairs if a == c) / n for c in cats}
     pb = {c: sum(1 for _, b in pairs if b == c) / n for c in cats}
     pe = sum(pa[c] * pb[c] for c in cats)
     kappa = (exact - pe) / (1 - pe) if pe < 1 else None
+    w = {(i, j): 1 - (i - j) ** 2 / 9 for i in cats for j in cats}
+    po_w = sum(w[(a, b)] for a, b in pairs) / n
+    pe_w = sum(w[(i, j)] * pa[i] * pb[j] for i in cats for j in cats)
+    weighted = (po_w - pe_w) / (1 - pe_w) if pe_w < 1 else None
     return {"n": n, "exact": round(exact, 2), "kappa": round(kappa, 2) if kappa is not None else None,
-            "within1": round(within1, 2)}
+            "within1": round(within1, 2), "weighted": round(weighted, 2) if weighted is not None else None}
+
+
+def agreement(rows: list[m.AgentAssessment]) -> dict:
+    """大模型和规则都给了等级的那些：完全一致的比例，和 Cohen's kappa（扣掉碰巧一致的部分）。"""
+    return pair_stats([(r.raw_level, r.rule_level) for r in rows
+                       if r.source == "llm" and r.raw_level is not None and r.rule_level is not None])

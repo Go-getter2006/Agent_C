@@ -28,7 +28,7 @@ interface Overview {
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
 
 export default function ClassOverview({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<Overview>(`/api/teacher/classes/${cls.key}/overview`), [cls.key], 60000);
+  const data = useLoad(() => get<Overview>(`/api/teacher/classes/${cls.key}/overview`), [cls.key], 60000, false, `t:overview:${cls.key}`);
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在汇总全班的情况" lines={5} /></div>;

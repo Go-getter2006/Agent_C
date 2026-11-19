@@ -17,6 +17,8 @@
 4. 有时限：下载链接 7 天后失效，可以随时作废；文件不落盘，下载时按申请时定下的范围现生成。
 5. 限量：一次最多 500 个学号、时间段最长 366 天、每人每天最多 20 次申请。
 6. 分课程：只导出申请时登录的那门课的记录（C 语言和数据结构分开登录）。
+7. 去标识（研究用，可选）：学号换成化名（用服务器密钥算的 HMAC，同一台服务器上同一个学生每次导出都一样，
+   几份文件可以按化名对上），不给姓名、提交编号；原文里的学号、姓名去掉。指标的定义和版本见 docs/研究数据与指标.md。
 """
 from __future__ import annotations
 
@@ -31,9 +33,9 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import db
+from . import crypto, db
 from . import models as m
-from .taxonomy import JUDGEMENTS, course_of, error_name, skill_name
+from .taxonomy import JUDGEMENTS, KNOWLEDGE_POINTS, course_of, error_name, kp_of_skill, skill_name
 
 KINDS: dict[str, str] = {
     "login": "登录",
@@ -43,6 +45,9 @@ KINDS: dict[str, str] = {
     "quiz": "小题",
     "review": "复习",
     "view": "看代码、看差异、复制代码",
+    "round": "求助回合",
+    "stuck": "卡点",
+    "assess": "理解评估",
 }
 MAX_IDS = 500
 MAX_DAYS = 366
@@ -58,12 +63,22 @@ UI_KIND = {
 }
 HELP_TEXT = {"NA": "", "H0": "反问", "H1": "指出位置", "H2": "讲原理", "H3": "给了示例代码"}
 BUTTONS = {"我想自己想想": "点了“我想自己想想”", "再给点提示": "点了“再给点提示”", "直接讲给我": "点了“直接讲给我”"}
+RESOLUTION_TEXT = {"pending": "还在处理", "recalled": "自己回忆出来", "blank_filled": "挖空补上",
+                   "example_given": "给了示例代码", "exercise": "小练习"}
 SOURCE_TEXT = {"own_code": "用他自己的代码出的题", "llm": "大模型出的题", "template": "题库的题换成他的变量名",
                "bank": "题库原题"}
 
 
 class RequestError(ValueError):
     """申请不合格，message 直接给教师看。"""
+
+
+def pseudonym(user_id: str) -> str:
+    """去标识导出用的化名：同一台服务器上同一个学生每次都一样，没有服务器密钥推不回学号。"""
+    import hmac
+
+    digest = hmac.new(crypto._derive("research-pseudonym"), user_id.encode("utf-8"), "sha256").hexdigest()
+    return "S" + digest[:10]
 
 
 def parse_ids(text: str) -> list[str]:
@@ -98,8 +113,8 @@ def _problem_title(s: Session, cache: dict, server_id: int | None, problem_id: i
 
 
 def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt.datetime, kinds: list[str],
-            include_text: bool, course: str | None = None) -> list[Row]:
-    """按申请的范围把日志收齐，按时间排好。course：只要这门课的。"""
+            include_text: bool, course: str | None = None, deidentify: bool = False) -> list[Row]:
+    """按申请的范围把日志收齐，按时间排好。course：只要这门课的。deidentify：学号换成化名、去掉姓名和提交编号。"""
     if not user_ids:
         return []
     names = dict(s.execute(select(m.Student.user_id, m.Student.name).where(m.Student.user_id.in_(user_ids))).all())
@@ -215,9 +230,81 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                 detail=f"{skill_name(a.skill_code)}（{a.skill_code}），{a.quiz_type}，把握“{a.confidence or '没选'}”，"
                        f"{result}" + (f"，运行 {a.tries} 次" if a.tries else "") +
                        (f"，用时 {round((a.duration_ms or 0) / 1000)} 秒" if a.duration_ms else ""),
-                data={"skill": a.skill_code, "type": a.quiz_type, "confidence": a.confidence, "outcome": a.outcome,
+                data={"skill": a.skill_code, "kp": kp_of_skill(a.skill_code or ""), "type": a.quiz_type,
+                      "reason": a.reason, "confidence": a.confidence, "outcome": a.outcome, "state": a.state,
                       "tries": a.tries, "changedLines": a.changed_lines, "source": item.source if item else None,
-                      "hasBug": item.has_bug if item else None})
+                      "item": item.code if item else None, "hasBug": item.has_bug if item else None,
+                      "protocol": a.protocol, "itemVersion": a.item_version, "judgedHasBug": a.judged_has_bug,
+                      "judgeCorrect": a.judge_correct, "firstLines": a.first_lines, "locateHit": a.locate_hit,
+                      "firstFixPass": a.first_fix_pass, "firstFixClean": a.first_fix_clean, "hints": a.hints,
+                      "sampleRuns": a.sample_runs, "skipped": a.skipped, "durationMs": a.duration_ms,
+                      "events": [{k: v for k, v in e.items() if k in ("t", "kind", "misjudge", "pass")}
+                                 for e in (a.events or [])]})
+
+    if "round" in kinds:
+        q = select(m.ChatRound).where(m.ChatRound.user_id.in_(user_ids), m.ChatRound.started_at >= date_from,
+                                      m.ChatRound.started_at <= date_to)
+        if course is not None:
+            q = q.where(m.ChatRound.course == course)
+        for r in s.scalars(q.order_by(m.ChatRound.id)).all():
+            n_student = sum(1 for _ in s.scalars(select(m.ChatMessage.id).where(
+                m.ChatMessage.round_id == r.id, m.ChatMessage.role == "student", m.ChatMessage.kind == "text")).all())
+            minutes = round(((r.ended_at or r.last_message_at) - r.started_at).total_seconds() / 60, 1)
+            add(user_id=r.user_id, time=r.started_at, kind="round", action="求助回合", course=r.course,
+                problem_id=r.problem_id, problem=_problem_title(s, titles, r.server_id, r.problem_id),
+                submission_id=r.submission_id,
+                detail=f"{skill_name(r.skill_code) if r.skill_code else '没定技能'}，学生发了 {n_student} 条，"
+                       f"最多帮助 {HELP_TEXT.get(r.max_help_level) or '没有'}，" + (r.end_reason or "还开着"),
+                data={"round": r.id, "skill": r.skill_code, "kp": kp_of_skill(r.skill_code) if r.skill_code else "",
+                      "error": r.error_code, "maxHelp": r.max_help_level, "helpCount": r.help_count,
+                      "askedBack": r.asked_back, "failedReplies": r.failed_replies, "located": r.located,
+                      "studentMessages": n_student, "endReason": r.end_reason, "status": r.status,
+                      "minutes": minutes, "bound": r.problem_id is not None})
+
+    if "stuck" in kinds and course is not None:
+        from . import stuckstats
+
+        for st in stuckstats.compute(s, user_ids, course).values():
+            for e in st.episodes:
+                sp = e.sp
+                if not date_from <= sp.created_at <= date_to:
+                    continue
+                add(user_id=sp.user_id, time=sp.created_at, kind="stuck", action="卡点", course=course,
+                    problem_id=sp.problem_id, problem=_problem_title(s, titles, sp.server_id, sp.problem_id),
+                    detail=f"{KNOWLEDGE_POINTS.get(e.kp, '')} · {skill_name(sp.skill_code)}，第 {sp.nth} 次，"
+                           f"{RESOLUTION_TEXT.get(sp.resolution, sp.resolution)}，"
+                           + ("没绑定题" if e.passed is None else ("之后通过" if e.passed else "还没通过")),
+                    data={"version": stuckstats.VERSION, "round": sp.round_id, "skill": sp.skill_code, "kp": e.kp,
+                          "error": sp.error_code, "nth": sp.nth, "stubborn": sp.stubborn, "resolution": sp.resolution,
+                          "passed": e.passed, "triesAfter": e.tries_after,
+                          "passedAt": e.passed_at.isoformat() if e.passed_at else None})
+
+    if "assess" in kinds:
+        q = select(m.AgentAssessment).where(m.AgentAssessment.user_id.in_(user_ids),
+                                            m.AgentAssessment.created_at >= date_from,
+                                            m.AgentAssessment.created_at <= date_to)
+        if course is not None:
+            q = q.where(m.AgentAssessment.course == course)
+        found = list(s.scalars(q.order_by(m.AgentAssessment.id)).all())
+        human: dict[int, list[m.HumanRating]] = {}
+        for h in s.scalars(select(m.HumanRating).where(
+                m.HumanRating.assessment_id.in_([a.id for a in found] or [-1])).order_by(m.HumanRating.id)).all():
+            human.setdefault(h.assessment_id, []).append(h)
+        for a in found:
+            hs = human.get(a.id, [])
+            add(user_id=a.user_id, time=a.created_at, kind="assess", action="理解评估", course=a.course,
+                problem_id=a.problem_id, problem=_problem_title(s, titles, a.server_id, a.problem_id),
+                submission_id=a.submission_id,
+                detail=f"{skill_name(a.skill_code)}，{'看对话' if a.basis == 'chat' else '看代码怎么改的'}，"
+                       f"等级 {a.level if a.level is not None else '不评'}（{a.source}，原始 {a.raw_level}，规则 {a.rule_level}）"
+                       + (f"，下调：{a.adjusted}" if a.adjusted else "")
+                       + (f"，老师评 {'、'.join('看不出来' if h.level is None else str(h.level) for h in hs)}" if hs else ""),
+                text="\n".join(a.evidence or []) if include_text else "",
+                data={"assessment": a.id, "round": a.round_id, "skill": a.skill_code, "kp": kp_of_skill(a.skill_code),
+                      "basis": a.basis, "level": a.level, "rawLevel": a.raw_level, "ruleLevel": a.rule_level,
+                      "source": a.source, "confidence": round(a.confidence or 0, 2), "adjusted": a.adjusted,
+                      "evidenceCount": len(a.evidence or []), "promptVersion": a.prompt_version,
+                      "human": [{"rater": h.rater_id, "level": h.level, "seconds": h.seconds} for h in hs]})
 
     ui_kinds = {k for k, (kind, _t) in UI_KIND.items() if kind in kinds}
     if ui_kinds:
@@ -233,6 +320,14 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                 data={"event": e.kind, "target": e.target})
 
     rows.sort(key=lambda r: (r.time, r.user_id))
+    if deidentify:
+        from .llm import strip_identity
+
+        for r in rows:
+            if r.text:
+                r.text = strip_identity(r.text, r.user_id, r.name)
+            r.user_id, r.name, r.submission_id = pseudonym(r.user_id), "", None
+            r.data = {k: v for k, v in r.data.items() if k != "submission"}
     return rows
 
 
@@ -257,7 +352,7 @@ def allowed_students(s: Session, user: m.User) -> set[str] | None:
 
 def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_from: dt.datetime,
            date_to: dt.datetime, kinds: list[str], include_text: bool, fmt: str, purpose: str,
-           course: str = "C") -> m.LogRequest:
+           course: str = "C", deidentify: bool = False) -> m.LogRequest:
     now = db.now()
     kinds = [k for k in dict.fromkeys(kinds) if k in KINDS]
     if not kinds:
@@ -297,7 +392,7 @@ def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_f
     req = m.LogRequest(
         requester_id=user.id, requester_name=user.display_name or user.login_name, requested_ids=requested, course=course,
         granted_ids=granted, denied_ids=denied, class_keys=list(class_ids), date_from=date_from,
-        date_to=min(date_to, now), kinds=kinds, include_text=bool(include_text), fmt=fmt,
+        date_to=min(date_to, now), kinds=kinds, include_text=bool(include_text), deidentified=bool(deidentify), fmt=fmt,
         purpose=purpose.strip()[:200], token=secrets.token_urlsafe(24), status="ready", created_at=now,
         expires_at=now + dt.timedelta(days=TTL_DAYS))
     req.rows = len(collect(s, granted, req.date_from, req.date_to, kinds, include_text, course))
@@ -317,11 +412,24 @@ COLUMNS = [("user_id", "学号"), ("name", "姓名"), ("time", "时间"), ("kind
            ("samples", "样例"), ("detail", "详情"), ("text", "原文")]
 
 
+def versions() -> dict:
+    """导出里各指标的版本（定义改了版本号就变，docs/研究数据与指标.md）。"""
+    from . import config, diagnosis, rating, stuckstats
+
+    return {"stuck": stuckstats.VERSION, "rating": rating.VERSION, "prompt": config.PROMPT_VERSION,
+            "diagnosis": diagnosis.VERSION, "quizProtocol": 2}
+
+
 def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:
     """按申请时定下的范围现生成文件。返回 (内容, MIME 类型, 文件名)。"""
-    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text, req.course)
+    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text, req.course,
+                   deidentify=req.deidentified)
     stamp = req.created_at.astimezone(db.BEIJING).strftime("%Y%m%d-%H%M")
     cols = [c for c in COLUMNS if c[0] != "text" or req.include_text]
+    if req.deidentified:
+        cols = [("user_id", "化名") if k == "user_id" else (k, label) for k, label in cols
+                if k not in ("name", "submission_id")]
+    prefix = "研究数据" if req.deidentified else "学生日志"
 
     def value(r: Row, key: str):
         v = getattr(r, key)
@@ -335,17 +443,18 @@ def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:
         payload = {
             "request": {"id": req.id, "requester": req.requester_name, "createdAt": req.created_at.isoformat(),
                         "from": req.date_from.isoformat(), "to": req.date_to.isoformat(), "kinds": req.kinds,
-                        "students": req.granted_ids, "purpose": req.purpose},
+                        "students": [pseudonym(u) for u in req.granted_ids] if req.deidentified else req.granted_ids,
+                        "purpose": req.purpose, "deidentified": req.deidentified, "versions": versions()},
             "rows": [{**{k: value(r, k) for k, _ in cols}, "data": r.data} for r in rows],
         }
         return (json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8"), "application/json",
-                f"学生日志-{stamp}.json")
+                f"{prefix}-{stamp}.json")
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([label for _k, label in cols])
     for r in rows:
         w.writerow([value(r, k) for k, _ in cols])
-    return ("﻿" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8", f"学生日志-{stamp}.csv"
+    return ("﻿" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8", f"{prefix}-{stamp}.csv"
 
 
 def view(req: m.LogRequest, at: dt.datetime | None = None) -> dict:
@@ -353,6 +462,7 @@ def view(req: m.LogRequest, at: dt.datetime | None = None) -> dict:
         "id": req.id, "createdAt": req.created_at.isoformat(), "requester": req.requester_name,
         "from": req.date_from.isoformat(), "to": req.date_to.isoformat(), "kinds": req.kinds,
         "kindNames": [KINDS.get(k, k) for k in req.kinds], "includeText": req.include_text, "format": req.fmt,
+        "deidentified": req.deidentified,
         "purpose": req.purpose, "granted": len(req.granted_ids), "denied": req.denied_ids, "rows": req.rows,
         "status": state_of(req, at), "expiresAt": req.expires_at.isoformat(), "downloads": req.downloads,
         "token": req.token if state_of(req, at) == "ready" else None,

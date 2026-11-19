@@ -724,6 +724,7 @@ class LogRequest(Base):
     date_to: Mapped[Dt] = mapped_column(UTCDateTime)
     kinds: Mapped[list] = mapped_column(JSON, default=list)
     include_text: Mapped[bool] = mapped_column(Boolean, default=False)
+    deidentified: Mapped[bool] = mapped_column(Boolean, default=False)   # 研究用：学号换成化名，不给姓名和提交编号
     fmt: Mapped[str] = mapped_column(String(8), default="csv")
     purpose: Mapped[str] = mapped_column(String(200), default="")
     rows: Mapped[int] = mapped_column(Integer, default=0)
@@ -894,3 +895,18 @@ class CrossLink(Base):
     verdict: Mapped[str] = mapped_column(String(12), default="unknown")
     checked_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     __table_args__ = (UniqueConstraint("c_skill", "d_skill", name="uq_cross_link"),)
+
+
+class HumanRating(Base):
+    """老师盲评“理解”：看和大模型同样的材料（不显示学生是谁、不显示大模型和规则的等级），按同一个 0~3 量规评。
+    用来算老师和大模型（原始、约束后）、规则的一致率（app/rating.py）。level 为空：老师看不出来。"""
+
+    __tablename__ = "human_ratings"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    assessment_id: Mapped[int] = mapped_column(Integer, index=True)
+    rater_id: Mapped[int] = mapped_column(Integer, index=True)
+    course: Mapped[str] = mapped_column(String(8), default="C")
+    level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)   # 从看到材料到评完用了几秒
+    created_at: Mapped[Dt] = _ts()
+    __table_args__ = (UniqueConstraint("assessment_id", "rater_id", name="uq_human_rating"),)

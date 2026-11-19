@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session
 from . import models as m
 from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill
 
+VERSION = "dims-1"   # 定义改了就改版本号（研究导出里带上，docs/研究数据与指标.md）
+
 
 @dataclass
 class Ratio:

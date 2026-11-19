@@ -24,6 +24,41 @@ interface GraphData {
   fusion: { learned: boolean; n: number; minSamples: number; updatedAt: string | null; weights: { dim: string; name: string; w: number; default: number }[] };
   agreement: { n: number; exact: number | null; kappa: number | null; within1: number | null };
   dialogue: { students: number; constructive: number | null; answerSeeking: number | null };
+  human: {
+    rated: number; unsure: number; raters: number;
+    llmRaw: Agree; llmFinal: Agree; rule: Agree; betweenRaters: Agree;
+    adjusted: { n: number; closer: number; same: number; farther: number };
+  };
+}
+
+type Agree = { n: number; exact: number | null; kappa: number | null; within1: number | null; weighted: number | null };
+
+function Human({ h }: { h: GraphData["human"] }) {
+  const k = (x: number | null) => (x === null ? "—" : x.toFixed(2));
+  const rows: [string, Agree][] = [["大模型（原始）", h.llmRaw], ["大模型（约束后）", h.llmFinal], ["规则", h.rule]];
+  if (h.betweenRaters.n) rows.push(["两位老师之间", h.betweenRaters]);
+  return (
+    <Card title="老师盲评" sub="老师按同一个量规评同样的材料，和各方对照" bodyClass="">
+      {h.rated === 0 ? <p className="card-body note">还没有评过。<Link className="link" to="/teacher/rating">去盲评</Link></p> : (
+        <>
+          <div className="table-scroll">
+            <table className="table">
+              <thead><tr><th scope="col">和老师对照</th><th scope="col" className="num">回合</th><th scope="col" className="num">完全一致</th><th scope="col" className="num">差一档内</th><th scope="col" className="num">κ</th><th scope="col" className="num">加权 κ</th></tr></thead>
+              <tbody>
+                {rows.map(([name, a]) => (
+                  <tr key={name}><td>{name}</td><td className="num">{a.n}</td><td className="num">{pct(a.exact)}</td><td className="num">{pct(a.within1)}</td><td className="num">{k(a.kappa)}</td><td className="num">{k(a.weighted)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="card-foot">
+            {h.adjusted.n ? `下调过的 ${h.adjusted.n} 个：离老师更近 ${h.adjusted.closer}、一样 ${h.adjusted.same}、更远 ${h.adjusted.farther}。` : ""}
+            评了 {h.rated} 个，看不出来 {h.unsure} 个，{h.raters} 位老师。加权 κ 按二次加权，差两档比差一档扣得多。
+          </p>
+        </>
+      )}
+    </Card>
+  );
 }
 
 /** 几周合起来的 Brier：按每周的预测条数加权。 */
@@ -85,6 +120,7 @@ function Fusion({ d }: { d: GraphData }) {
             )}
             <p className="note">规则看不出“能迁移”，也看不出说法本身错没错；一致率太低时说明要检查评估的提示词。</p>
           </Card>
+          <Human h={d.human} />
           <Card title="对话行为和做题表现" sub={`对话至少 5 条、通过至少 3 道题的 ${d.dialogue.students} 名学生；和“平均几次改对”的相关系数（描述性，负数表示次数少）`}>
             <p className="num">建构性提问占比：{corr(d.dialogue.constructive)} · 索要答案占比：{corr(d.dialogue.answerSeeking)}</p>
             <p className="note">StudyChat（McNichols 等 2026）发现概念性提问和成绩正相关、索要答案负相关；这里用本班的数据看是不是一样。</p>
@@ -102,7 +138,7 @@ const SERIES = [
 ];
 
 export default function Models({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key], 300000);
+  const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key], 300000, false, `t:models:${cls.key}`);
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在取模型的结果" lines={5} /></div>;
