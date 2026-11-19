@@ -1,5 +1,7 @@
-// 学情页：几个数、接下来做什么、知识点掌握、常见错误、每周提交、作业进度。
-// 只用档位和文字，不显示概率、排名、细技能编码。
+// 我的学情（界面改造方案第 5 节）：最上面左边是知识点的判断、定位、修改（小题首次独立作答的几比几），
+// 右边是练习题目情况，两边顶端和底端对齐；点一个知识点，下面是一句基于实际作答的说明。
+// 下面照旧：几个数、接下来做什么、知识点掌握、常见错误、每周提交。右上角“全部提交记录”。
+// 只用档位、几比几和文字，不显示概率、排名、细技能编码。
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { BookOpen, CircleAlert, CircleCheck, ClipboardList, Gauge, History, ListChecks, RotateCcw } from "lucide-react";
@@ -10,7 +12,70 @@ import { Card, Empty, Facts, LEVELS, LevelLegend, Loading, Meter, Problem, level
 import { useLoad } from "../lib/hooks";
 import { deadline, shortTime } from "../lib/time";
 import { useSession } from "../session";
-import type { KnowledgeItem } from "../types";
+import type { DimRatio, KnowledgeItem, ProgressData } from "../types";
+
+const frac = (r: DimRatio | null) => (r ? `${r.n}/${r.d}` : "尚无记录");
+
+/** 知识点表现（判断、定位、修改）和练习题目情况，并排、等高。 */
+function DimsBlock({ p }: { p: ProgressData }) {
+  const dims = p.dims ?? [];
+  const [picked, setPicked] = useState<string | null>(dims[0]?.key ?? null);
+  const cur = dims.find((d) => d.key === picked) ?? null;
+  return (
+    <>
+      <section className="dims-split" aria-label="知识点表现和练习题目情况">
+        <div className="dims-col">
+          <div className="dims-head"><h2>知识点表现</h2><span className="note">首次独立作答</span></div>
+          {dims.length === 0 ? (
+            <p className="note dims-empty">还没有做过复习小题。做错过、改过几次才通过的地方，会在复习提升里出题。</p>
+          ) : (
+            <div className="dims-scroll">
+              <table className="dims-table">
+                <thead><tr><th scope="col">知识点</th><th scope="col">判断</th><th scope="col">定位</th><th scope="col">修改</th></tr></thead>
+                <tbody>
+                  {dims.map((d) => (
+                    <tr key={d.key} className={d.key === picked ? "picked" : undefined}>
+                      <th scope="row">
+                        <button type="button" aria-pressed={d.key === picked} onClick={() => setPicked(d.key)}>{d.name}</button>
+                      </th>
+                      <td className="num">{frac(d.judge)}</td>
+                      <td className="num">{frac(d.locate)}</td>
+                      <td className="num">{frac(d.edit)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <div className="dims-col">
+          <div className="dims-head"><h2>练习题目情况</h2><span className="note">按作业</span></div>
+          <ul className="hw-list dims-scroll">
+            {p.activity.homeworks.map((hw) => (
+              <li key={hw.key}>
+                <div className="hw-top">
+                  <strong><ClipboardList size={15} aria-hidden="true" />{hw.title}</strong>
+                  <span className="num">{hw.passed}/{hw.total} 题已通过</span>
+                </div>
+                <span className="bar bar-pass" role="img" aria-label={`${hw.total} 题通过 ${hw.passed} 题`}>
+                  <span style={{ width: `${hw.total ? (100 * hw.passed) / hw.total : 0}%` }} />
+                </span>
+                <span className="note">{deadline(hw.endTime, hw.ended)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+      {cur && (
+        <section className="dims-detail" aria-live="polite">
+          <h2>{cur.name}</h2>
+          <p>{cur.text}</p>
+          {cur.latest && <p className="note">{cur.latest}</p>}
+        </section>
+      )}
+    </>
+  );
+}
 
 const STATUS_PILL: Record<string, string> = { 已改正: "pill pill-pass", 改正后又出现: "pill pill-fail", 还没解决: "pill pill-warn" };
 const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
@@ -80,6 +145,7 @@ export default function Progress() {
 
           {p && (
             <div className="stack">
+              <DimsBlock p={p} />
               <Facts label="做题情况" items={[
                 {
                   label: "作业里的题", value: <>已通过 {p.summary.passed} 题，共 {p.summary.total} 题</>,
@@ -197,21 +263,7 @@ export default function Progress() {
                     )}
                   </Card>
 
-                  <Card className="progress-scroll-card" title="作业进度">
-                    <ul className="hw-list">
-                      {p.activity.homeworks.map((hw) => (
-                        <li key={hw.key}>
-                          <div className="hw-top">
-                            <strong><ClipboardList size={15} aria-hidden="true" />{hw.title}</strong>
-                            <span className="num">{hw.passed}/{hw.total}</span>
-                          </div>
-                          <span className="bar bar-pass" role="img" aria-label={`${hw.total} 题通过 ${hw.passed} 题`}>
-                            <span style={{ width: `${hw.total ? (100 * hw.passed) / hw.total : 0}%` }} />
-                          </span>
-                          <span className="note">{deadline(hw.endTime, hw.ended)}</span>
-                        </li>
-                      ))}
-                    </ul>
+                  <Card title="做题">
                     <div className="hw-facts">
                       <span><Gauge size={14} aria-hidden="true" />做过 {p.activity.tried} 题，{p.activity.passed} 题已通过</span>
                       <span><ListChecks size={14} aria-hidden="true" />平均每题提交 {p.activity.avgSubmissions ?? "—"} 次</span>

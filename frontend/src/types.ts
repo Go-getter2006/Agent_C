@@ -152,6 +152,22 @@ export type NextItem =
   | { kind: "problem"; problem: ProblemRef; reason: string }
   | { kind: "review"; reviewId: number; title: string; reason: string };
 
+/** 判断、定位、修改（界面改造方案第 5 节）：分子 / 分母，没有记录是 null */
+export interface DimRatio {
+  n: number;
+  d: number;
+}
+
+export interface StudentDim {
+  key: string;
+  name: string;
+  judge: DimRatio | null;
+  locate: DimRatio | null;
+  edit: DimRatio | null;
+  text: string;
+  latest: string;
+}
+
 export interface ProgressData {
   summary: {
     passed: number;
@@ -165,6 +181,7 @@ export interface ProgressData {
     levels: Record<string, number>;
   };
   knowledge: { topic: string; items: KnowledgeItem[] }[];
+  dims?: StudentDim[];
   // 只在数据结构这边有：作业要用到、还薄弱的 C 语言基础（只有档位）
   foundation: { name: string; level: string; segments: number; supports: string[]; text: string }[];
   errors: { name: string; count: number; last: ProblemRef; lastTime: string; status: string }[];

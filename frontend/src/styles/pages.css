@@ -2673,3 +2673,52 @@
   .attempt-title { font-size: 24px; }
   .attempt-confidence { margin-left: 0; }
 }
+
+/* ================================================================ 判断、定位、修改（界面改造方案第 5 节） */
+.dims-split, .diag-split {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--sp-24);
+  align-items: stretch;
+}
+.dims-split { padding: var(--sp-20); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.diag { padding: var(--sp-20); }
+.dims-col, .diag-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.dims-split .dims-col + .dims-col, .diag-split .diag-col + .diag-col { border-left: 1px solid var(--line); padding-left: var(--sp-24); }
+.dims-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-12); padding-bottom: var(--sp-10); border-bottom: 1px solid var(--line); margin-bottom: var(--sp-4); }
+.dims-head h2 { font-family: var(--font-display); font-weight: 400; font-synthesis: none; font-size: 19px; }
+/* 两边顶端、底端对齐：内容长的一边在里面滚动 */
+.dims-scroll { max-height: 320px; overflow-y: auto; }
+.dims-empty { padding: var(--sp-16) 0; }
+.dims-table { width: 100%; border-collapse: collapse; font-size: var(--fs-14); }
+.dims-table th, .dims-table td { padding: var(--sp-10) var(--sp-8); text-align: left; border-bottom: 1px solid var(--line); }
+.dims-table thead th { font-weight: 500; color: var(--ink-3); font-size: var(--fs-13); }
+.dims-table tbody th { font-weight: 600; }
+.dims-table tbody th button { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.dims-table tbody th button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.dims-table tr.picked { background: var(--select-bg); }
+.dims-table tbody tr:hover:not(.picked) { background: var(--row-hover); }
+.dims-split .hw-list { margin: 0; padding: 0; list-style: none; }
+.dims-split .hw-list li { padding: var(--sp-10) 0; border-bottom: 1px solid var(--line); }
+.dims-detail { padding: var(--sp-16) var(--sp-20); border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); display: flex; flex-direction: column; gap: var(--sp-8); }
+.dims-detail h2 { font-family: var(--font-display); font-weight: 400; font-synthesis: none; font-size: 20px; }
+.diag-split-note { margin-top: var(--sp-16); display: flex; flex-direction: column; gap: var(--sp-4); }
+.diag-split-note h3 { font-size: var(--fs-15); font-weight: 600; }
+.diag-evidence { display: flex; flex-direction: column; gap: var(--sp-10); }
+.diag-evidence h3 { font-size: var(--fs-16); font-weight: 600; }
+.diag-steps { margin: 0; padding: 0 0 0 var(--sp-16); list-style: none; border-left: 2px solid var(--line-strong); display: flex; flex-direction: column; gap: var(--sp-10); }
+.diag-steps li { display: grid; grid-template-columns: auto 1fr; column-gap: var(--sp-12); }
+.diag-steps strong { font-weight: 600; }
+.diag-steps small { grid-column: 1 / -1; color: var(--ink-3); font-size: var(--fs-12); }
+.kg-dims { display: flex; gap: var(--sp-20); margin: 0 0 var(--sp-4); }
+.kg-dims div { display: flex; gap: var(--sp-6); }
+.kg-dims dt { color: var(--ink-3); }
+.kg-dims dd { margin: 0; font-weight: 600; }
+@media (max-width: 1023px) {
+  .dims-split, .diag-split { grid-template-columns: minmax(0, 1fr); }
+  .dims-split .dims-col + .dims-col, .diag-split .diag-col + .diag-col { border-left: 0; padding-left: 0; padding-top: var(--sp-16); }
+}
+.dims-table thead th, .dims-table td { white-space: nowrap; }
+@media (max-width: 767px) {
+  .dims-split { padding: var(--sp-16); }
+  .dims-table { font-size: var(--fs-13); }
+  .dims-table th, .dims-table td { padding: var(--sp-8) var(--sp-4); }
+}

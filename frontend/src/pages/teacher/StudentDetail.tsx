@@ -8,6 +8,7 @@ import { Card, Cells, CodeBlock, Empty, LevelLegend, Loading, Problem, ResultPil
 import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
 import { Code, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, endReason, type SkillRef } from "./common";
+import { DiagnosisCard, type DiagnosisRow } from "./Diagnosis";
 
 interface Detail {
   student: { userId: string; name: string; class: { key: string; name: string } };
@@ -37,6 +38,7 @@ interface Detail {
   dialogue: { total: number; constructive: number | null; answerSeeking: number | null; acts: { code: string; name: string; n: number }[] };
   agentReview: AgentReview | null;
   graphUpdatedAt: string | null;
+  diagnosis?: DiagnosisRow[];
 }
 
 interface ProfileRow {
@@ -168,6 +170,7 @@ export default function StudentDetail() {
           {!d && !data.error && <div className="card card-body"><Loading what="正在取这个学生的明细" lines={6} /></div>}
           {d && (
             <div className="stack">
+              <DiagnosisCard rows={d.diagnosis ?? []} />
               <Card title="多维掌握画像" sub="每个知识点从六个方面看，再按学到的权重融合。0~1，越大越好；“—”是还没有这方面的数据" bodyClass="">
                 {d.profile.length === 0 ? <Empty title="还没有可以画像的知识点" /> : (
                   <div className="table-scroll">

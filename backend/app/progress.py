@@ -9,7 +9,7 @@ import datetime as dt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import catalog, db, kpdesc, mastery, profile, review
+from . import catalog, db, diagnosis, kpdesc, mastery, profile, review
 from . import models as m
 from .labeling.labeler import current_problem_label
 from .taxonomy import (KNOWLEDGE_POINTS, LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_SEGMENTS, LEVEL_WEAK, TOPICS,
@@ -261,7 +261,9 @@ def build(s: Session, user_id: str, course: str = "C") -> dict:
             "levels": {lv: levels.count(lv) for lv in (LEVEL_MASTERED, LEVEL_BASIC, LEVEL_WEAK)},
         },
         "knowledge": knowledge_block(snap), "errors": errors, "activity": activity, "next": nxt,
-        "foundation": foundation_block(snap)}
+        "foundation": foundation_block(snap),
+        # 判断、定位、修改三维（界面改造方案第 5 节）：只有知识点名称、几比几、一句话
+        "dims": diagnosis.student_rows(diagnosis.by_student(s, [user_id], course)[user_id])}
 
 
 def problem_knowledge(s: Session, user_id: str, server_id: int, problem_id: int, limit: int = 4) -> list[dict]:
