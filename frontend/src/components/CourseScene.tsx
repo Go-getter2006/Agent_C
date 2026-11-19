@@ -190,7 +190,9 @@ export default function CourseScene({ course, variant = "hero", className }: Pro
       // （和 login.css 里 .login-bg 展开的圆心一致）
       const wide = w >= 1024;
       const unit = mini ? Math.min(w, h * 1.3) / 700
-        : wide ? Math.min(w * 0.6, h * 0.8) / 980 : Math.min(w * 0.72, h * 0.9) / 980;
+        : wide ? Math.min(w * 0.6, h * 0.8) / 820 : Math.min(w * 0.72, h * 0.9) / 850;
+      // 宽屏上环放大了，四周的记号不跟着往外扩，免得钻到登录框底下
+      const spread = wide ? 0.85 : 1;
       const cx = mini ? w * 0.5 : wide ? w * 0.37 : w * 0.76;
       const cy = mini ? h * 0.5 + (target.current === 1 ? 18 : 0) * unit : wide ? h * 0.7 : h * 0.5;
       const tokenAlpha = wide ? 1 : 0.6;   // 窄屏上记号压在文字后面，再淡一些
@@ -211,7 +213,8 @@ export default function CourseScene({ course, variant = "hero", className }: Pro
       const posOf = (it: Item): V3 => {
         const d = rotate(it.d, -Math.PI, 0);   // 数据结构的摆法预先转半圈
         const bob = still || it.kind === "cell" ? 0 : Math.sin(time * 0.6 + it.phase) * 6;
-        return [lerp(it.c[0], d[0], e), lerp(it.c[1], d[1], e) + bob, lerp(it.c[2], d[2], e) * depthBoost];
+        const f = it.kind === "token" ? spread : 1;
+        return [lerp(it.c[0], d[0], e) * f, (lerp(it.c[1], d[1], e) + bob) * f, lerp(it.c[2], d[2], e) * depthBoost];
       };
 
       const pts = SCENE.items.map((it) => ({ it, p3: posOf(it), ...project(posOf(it)) }));
