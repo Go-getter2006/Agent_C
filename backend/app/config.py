@@ -247,8 +247,6 @@ PROFILE = {
     "independence_weight": {"pass_first_try": 1.0, "pass_self_fixed": 0.85, "pass_after_h0_h1": 0.6,
                             "pass_after_h2": 0.3, "pass_after_h3": 0.0},
     "calibration_value": {"很有把握": 0.9, "一半": 0.6, "没把握": 0.3},
-    "review_hours": 1,           # 同一个学生同一门课，评语至少隔这么久才重写（画像变了也一样）
-    "reviews_per_run": 3,        # 后台空闲时一次自动写几份评语
 }
 
 # 跨课程（app/cross.py）。数据结构的技能的先验 = 先修（含 C 语言那头）估计的加权平均，

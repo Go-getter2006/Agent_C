@@ -684,8 +684,6 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
         quizzes.append({**_skill_view(a.skill_code), "type": a.quiz_type, "reason": a.reason, "state": a.state,
                         "confidence": a.confidence, "outcome": a.outcome, "correct": a.correct,
                         "time": a.created_at.isoformat()})
-    review_row = s.scalars(select(m.AgentReview).where(
-        m.AgentReview.user_id == user_id, m.AgentReview.course == course).order_by(m.AgentReview.id.desc())).first()
     # 根因：数据结构这边可以追到 C 语言的先修技能（只给估计值，不给记录）
     roots = graphmodel.root_causes(simple, {c: r.p for c, r in post_all.items()})
     # 概况的几个数（和学生列表同一个算法）
@@ -710,7 +708,6 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
                 m.AgentAssessment.user_id == user_id, m.AgentAssessment.course == course,
                 m.AgentAssessment.level.is_not(None)).order_by(m.AgentAssessment.id.desc()).limit(20)).all()],
             "dialogue": profile.dialogue_profile(s, user_id, course),
-            "agentReview": profile.review_view(review_row, stale=not profile.review_is_current(s, review_row, user_id, course)),
             "knowledge": kps, "skills": skills, "submissions": sub_rows, "moreSubmissions": max(0, len(subs) - 80),
             "stuck": stuck, "rounds": rounds, "quizzes": quizzes,
             "rootCauses": [{"skill": _skill_view(r["skill"]), "root": _skill_view(r["root"]), "p": r["p"]} for r in roots],

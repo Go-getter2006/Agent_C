@@ -602,25 +602,6 @@ def test_old_session_tokens_need_login_again(client):
     assert crypto.verify_session(crypto.sign_session(5, "C")[:-1] + "x") is None
 
 
-def test_stale_review_is_marked_and_rewritten_nightly(client, demo):
-    """评语按当时的画像写；画像变了（有新数据或算法改了）页面上标出来，每天夜里核对一遍、变了就重写。"""
-    from app import profile
-
-    login(client, "demo-teacher")
-    with db.session_scope() as s:
-        profile.agent_review(s, UID, "C", force=True)   # 按现在的画像写一份
-    review = client.get(f"/api/teacher/students/{UID}").json()["agentReview"]
-    assert review["stale"] is False and "个，已掌握" not in review["summary"]   # 不重复页面上已经有的个数
-    with db.session_scope() as s:   # 模拟算法改了、画像跟着变了，但这个学生没有新数据
-        row = s.scalars(select(m.AgentReview).where(m.AgentReview.user_id == UID)
-                        .order_by(m.AgentReview.id.desc())).first()
-        row.profile_hash = "画像变了以前的"
-        assert (UID, "C") not in profile.pending_reviews(s)   # 只看新数据的话，不会重写
-    assert client.get(f"/api/teacher/students/{UID}").json()["agentReview"]["stale"] is True
-    assert profile.refresh_reviews(include_stale=True) >= 1         # 夜里核对：变了就重写
-    assert client.get(f"/api/teacher/students/{UID}").json()["agentReview"]["stale"] is False
-
-
 def test_version_tells_pages_when_to_refetch(client, demo):
     """教师端页面定时只问 /version：数据没变就不重取；有了新数据 data 变；班级、名单没变时 classes 不变。"""
     from app.chat import workflow
