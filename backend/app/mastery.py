@@ -61,6 +61,7 @@ class SkillState:
     discounted: int = 0              # v2：被打了折的证据条数（雷同）
     f_raw: float = 0.0               # v2：不衰减的“不会”证据
     predicted: bool = False          # v2：没有证据，完全由先修推出来的
+    unresolved_submissions: int = 0  # 尚无改正证据的已标注失败提交数
     recurred: bool = False           # v2：在别的题上改对过，现在又在新的题上错、还没改对（改对过又犯）
 
     @property
@@ -330,6 +331,8 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                 st.f += w
                 st.f_raw += r.weight   # 还没改对的失败
                 problem = ":".join((r.source_key or "").split(":")[1:3]) if r.event_type == "submit_failed" else ""
+                if problem:
+                    st.unresolved_submissions += 1
                 if problem and fixed_problems - {problem}:
                     st.recurred = True   # 别的题上改对过，这道新题上又错、还没改对
             if fixed_by is not None:

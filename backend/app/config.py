@@ -123,7 +123,7 @@ PROMPT_VERSION = "2026-11-18d"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
 WORKFLOW_VERSION = "2026-11-18a"
 MASTERY_VERSION = "2026-11-19b"
-GRAPH_VERSION = "2026-11-17a"
+GRAPH_VERSION = "graph-2026-11-19b"
 
 # ---------------------------------------------------------------- 学情（附件一第 8 节）
 # 权重都是初始经验值，待一学期后用“预测下一次能不能独立做对”校准。
@@ -296,7 +296,7 @@ def secret_key() -> str:
 GRAPH = {
     "root_prior": 0.5,     # 没有先修的技能，事先“会”的概率
     "beta": -1.0,          # 先修都不会时，仍然掌握这个技能的倾向
-    "gamma": 2.0,          # 每个先修技能的影响（所有边先取同一个值）
+    "gamma": 2.0,          # 所有先修技能的平均掌握对先验的影响
     "guess": 0.2,          # 没掌握也碰巧做对
     "slip": 0.1,           # 掌握了也没做对
     "sweeps": 600,

@@ -106,7 +106,7 @@ class Sources:
             m.QuizAttempt.user_id == user_id, m.QuizAttempt.state == "done", m.QuizAttempt.skipped.is_(False),
             m.QuizAttempt.confidence != "")).all() if q.correct is not None and q.created_at <= self.at]
         self.graph = {r.skill_code: r.p for r in s.scalars(select(m.GraphPosterior).where(
-            m.GraphPosterior.user_id == user_id)).all()} if with_graph else {}
+            m.GraphPosterior.user_id == user_id, m.GraphPosterior.model_version == config.GRAPH_VERSION)).all()} if with_graph else {}
         from .cross import weighted_parents
         from .process import episodes
 

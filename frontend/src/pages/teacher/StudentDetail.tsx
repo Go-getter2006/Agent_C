@@ -439,7 +439,7 @@ function ModelTab({ d }: { d: Detail }) {
         </div>
       </Card>
       {d.rootCauses.length > 0 && (
-        <Card title="根因推断" sub="图模型（试验中）认为：这些技能反复失败，真正没掌握的可能是它的前置知识">
+        <Card title="先修技能复查线索" sub="反复失败时，查看有直接证据且图模型估计偏低的先修技能">
           <ul className="rv-list">
             {d.rootCauses.map((r, i) => (
               <li key={i}><div className="rv-top"><span>{r.skill.name} ← <strong>{r.root.name}</strong></span><span className="num">{r.p.toFixed(2)}</span></div></li>

@@ -1,9 +1,9 @@
-"""知识点图模型（附件一第 9 节）：贝叶斯网络，和简单算法用同一批证据同步运行。
+"""知识点图模型（附件一第 9 节）：贝叶斯网络，用 v2 的提交和作答证据独立计算。
 
 结果只在教师端显示，并标明“试验中”。学生端和智能体都不用它。
 
 - 每个技能一个节点，取值“会”或“不会”；先修关系是边：
-  P(会 | 先修) = σ(β + Σ γ·先修是否会)
+  P(会 | 先修) = σ(β + γ × 掌握的先修比例)
 - 每条证据挂在它的技能下面（DINA 的单技能形式）：
   P(这次算“会” | 掌握) = 1 - s，P(这次算“会” | 没掌握) = g；按证据的权重（含遗忘）加权。
 - 反推用吉布斯采样；参数先用经验值，以后用 EM 估计。
@@ -36,7 +36,8 @@ def _prior(skill: str, state: dict[str, int]) -> float:
     parents = _PARENTS.get(skill, [])
     if not parents:
         return cfg["root_prior"]
-    return _sigmoid(cfg["beta"] + cfg["gamma"] * sum(state.get(p, 0) for p in parents))
+    proportion = sum(state.get(p, 0) for p in parents) / len(parents)
+    return _sigmoid(cfg["beta"] + cfg["gamma"] * proportion)
 
 
 def relevant_nodes(evidence_skills: set[str]) -> list[str]:
@@ -68,7 +69,7 @@ def infer(evidence: dict[str, tuple[float, float]], rng: random.Random | None = 
         like[k] = (s_w * math.log(1 - slip) + f_w * math.log(slip), s_w * math.log(g) + f_w * math.log(1 - g))
     state = {k: 1 if rng.random() < 0.5 else 0 for k in nodes}
     in_graph = set(nodes)
-    counts = dict.fromkeys(nodes, 0)
+    counts = dict.fromkeys(nodes, 0.0)
     kept = 0
     for sweep in range(cfg["sweeps"]):
         for k in nodes:
@@ -85,16 +86,17 @@ def infer(evidence: dict[str, tuple[float, float]], rng: random.Random | None = 
                 logp[value] = lp
             p1 = 1.0 / (1.0 + math.exp(min(50.0, max(-50.0, logp[0] - logp[1]))))
             state[k] = 1 if rng.random() < p1 else 0
+            if sweep >= cfg["burn_in"]:
+                # 平均条件概率，减少有限样本把后验推成 0 或 1 的情况。
+                counts[k] += p1
         if sweep >= cfg["burn_in"]:
             kept += 1
-            for k in nodes:
-                counts[k] += state[k]
     return {k: counts[k] / kept for k in nodes}
 
 
 def evidence_of(s: Session, user_id: str, at: dt.datetime | None = None) -> dict[str, tuple[float, float]]:
-    """和简单算法同一批证据、同样的权重和遗忘。"""
-    states = mastery.skill_states(s, user_id, at=at, model="v1")
+    """采用 v2 的作答证据权重，包括失败和通过可信度，排除对话的智能体估分。"""
+    states = mastery.skill_states(s, user_id, at=at, model="v2", include_agent=False)
     return {code: (st.s, st.f) for code, st in states.items() if st.s + st.f > 0}
 
 
@@ -108,6 +110,28 @@ def update_student(s: Session, user_id: str) -> dict[str, float]:
     return post
 
 
+def current_posteriors(s: Session, user_id: str) -> dict[str, m.GraphPosterior]:
+    rows = s.scalars(select(m.GraphPosterior).where(m.GraphPosterior.user_id == user_id,
+                                                   m.GraphPosterior.model_version == config.GRAPH_VERSION))
+    return {r.skill_code: r for r in rows}
+
+
+def refresh_old_posteriors(limit: int = 2) -> int:
+    """版本更新后分批刷新存量后验。原始证据和预测日志留在数据库里。"""
+    evidence, posterior = m.SkillEvidence, m.GraphPosterior
+    current = select(posterior.user_id).where(posterior.user_id == evidence.user_id,
+                                             posterior.model_version == config.GRAPH_VERSION).exists()
+    with db.session_scope() as s:
+        users = list(s.scalars(select(evidence.user_id).where(
+            evidence.weight > 0, evidence.event_type.not_in(mastery.AGENT_EVENTS),
+            (evidence.reliability.is_(None) | (evidence.reliability > 0)), ~current
+        ).distinct().order_by(evidence.user_id).limit(limit)))
+    for uid in users:
+        with db.session_scope() as s:
+            update_student(s, uid)
+    return len(users)
+
+
 def log_predictions(s: Session, user_id: str) -> int:
     """记下两个模型在每次“新题第一次提交”之前的预测，和这次是不是一次做对了。已经记过的不重复算。"""
     done = set(s.scalars(select(m.PredictionLog.source_key).where(m.PredictionLog.user_id == user_id)).all())
@@ -117,9 +141,11 @@ def log_predictions(s: Session, user_id: str) -> int:
     n = 0
     for sub in subs:
         key = (sub.server_id, sub.problem_id)
-        if key in seen or sub.submit_time is None or sub.judgement == "PENDING":
+        if key in seen:
             continue
         seen.add(key)
+        if sub.submit_time is None or sub.judgement in ("PENDING", "UNKNOWN", ""):
+            continue
         source_key = f"first:{sub.server_id}:{sub.submission_id}"
         if source_key in done:
             continue
@@ -129,7 +155,11 @@ def log_predictions(s: Session, user_id: str) -> int:
         before = sub.submit_time - dt.timedelta(seconds=1)
         simple = mastery.skill_states(s, user_id, at=before, model="v1").get(label.primary_skill)
         v2 = mastery.skill_states(s, user_id, at=before, model="v2", with_predicted=True).get(label.primary_skill)
-        graph = infer(evidence_of(s, user_id, at=before) | ({} if simple else {label.primary_skill: (0.0, 0.0)}))
+        evidence = evidence_of(s, user_id, at=before)
+        evidence.setdefault(label.primary_skill, (0.0, 0.0))
+        graph = infer(evidence)
+        guess, slip = config.GRAPH["guess"], config.GRAPH["slip"]
+        graph_pass = guess + (1.0 - slip - guess) * graph[label.primary_skill]
         from . import profile
 
         feats, fused, v2_base = profile.prediction_snapshot(s, user_id, label.primary_skill, before)
@@ -137,7 +167,7 @@ def log_predictions(s: Session, user_id: str) -> int:
             user_id=user_id, skill_code=label.primary_skill, source_key=source_key, ts=sub.submit_time,
             outcome=sub.judgement == "AC", p_simple=round(simple.p if simple else 0.5, 4),
             p_v2=round(v2.p if v2 else 0.5, 4),
-            p_graph=round(graph.get(label.primary_skill, config.GRAPH["root_prior"]), 4),
+            p_graph=round(graph_pass, 4),
             p_fused=round(fused, 4) if fused is not None else None, p_v2_base=round(v2_base, 4), features=feats,
             model_version=config.GRAPH_VERSION))
         n += 1
@@ -169,11 +199,11 @@ def nightly(user_ids: list[str] | None = None) -> dict:
 
 
 # ------------------------------------------------------------ 教师端用的汇总
-def root_causes(simple: dict[str, mastery.SkillState], post: dict[str, float]) -> list[dict]:
-    """学生反复失败的技能上，图模型认为真正没掌握的先修技能。"""
+def root_causes(states: dict[str, mastery.SkillState], observed_post: dict[str, float]) -> list[dict]:
+    """反复失败时，查找有直接证据且图模型估计偏低的先修技能。"""
     out = []
-    for code, st in simple.items():
-        if st.f < 1.5:  # 反复失败：至少卡住过两次，或一次卡住加别的失败
+    for code, st in states.items():
+        if st.unresolved_submissions < 2 or code not in observed_post:
             continue
         stack, seen, weak = list(_PARENTS.get(code, [])), set(), []
         while stack:
@@ -181,8 +211,8 @@ def root_causes(simple: dict[str, mastery.SkillState], post: dict[str, float]) -
             if parent in seen:
                 continue
             seen.add(parent)
-            if post.get(parent, 1.0) < 0.4:
-                weak.append((post[parent], parent))
+            if observed_post.get(parent, 1.0) < 0.4:
+                weak.append((observed_post[parent], parent))
             stack.extend(_PARENTS.get(parent, []))
         if weak:
             weak.sort()
@@ -211,16 +241,22 @@ def edge_stats(per_student: dict[str, dict[str, float]]) -> list[dict]:
     return rows
 
 
-def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6, course: str | None = None) -> list[dict]:
+def weekly_accuracy(s: Session, user_ids: list[str], weeks: int = 6, course: str | None = None,
+                    version: str | None = None) -> list[dict]:
     """按周统计两个模型的预测准确度（概率 ≥ 0.5 算预测“能做对”），以及 Brier 分数（越小越好）。"""
-    rows = s.scalars(select(m.PredictionLog).where(m.PredictionLog.user_id.in_(user_ids))).all() if user_ids else []
+    if not user_ids:
+        return []
+    query = select(m.PredictionLog).where(m.PredictionLog.user_id.in_(user_ids))
+    if version is not None:
+        query = query.where(m.PredictionLog.model_version == version)
+    rows = s.scalars(query).all()
     if course is not None:
         rows = [r for r in rows if r.skill_code and r.skill_code[0] == course]
     now = db.now().astimezone(db.BEIJING)
     monday = (now - dt.timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     buckets: dict[int, list[m.PredictionLog]] = defaultdict(list)
     for r in rows:
-        idx = int((monday - r.ts.astimezone(db.BEIJING)).total_seconds() // (7 * 86400)) + 1 if r.ts < monday else 0
+        idx = -((r.ts.astimezone(db.BEIJING).date() - monday.date()).days // 7)
         if 0 <= idx < weeks:
             buckets[idx].append(r)
     out = []

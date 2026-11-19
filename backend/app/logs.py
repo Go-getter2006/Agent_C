@@ -402,6 +402,7 @@ def versions() -> dict:
 
     return {"stuck": stuckstats.VERSION, "rating": rating.VERSION, "prompt": config.PROMPT_VERSION,
             "diagnosis": diagnosis.VERSION, "quizProtocol": 2,
+            "graph": config.GRAPH_VERSION,
             "reviewSchedule": "evidence-priority-1", "mastery": config.MASTERY_VERSION}
 
 

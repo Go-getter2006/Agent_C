@@ -1,5 +1,5 @@
 // 研究 · 模型检验：掌握程度算法 v1、v2、图模型（试验中）和多维融合在同一批预测上谁更准；v2 去掉智能体评估的消融；
-// 融合学到的维度权重；根因推断、差别大的地方、前置关系的描述统计。
+// 融合权重、可复查的先修技能、两种估计的分歧、前置关系的描述统计。
 // 智能体评估的一致率在“理解评估”，对话行为和表现在“求助效果”。
 import { Link } from "react-router-dom";
 import { FlaskConical } from "lucide-react";
@@ -12,9 +12,10 @@ import { Code, pct, useClasses, type ClassInfo, type SkillRef } from "./common";
 
 interface GraphData {
   version: string; prereqStatus: string;
-  data: { students: number; evidence: number; posteriors: number; predictions: number; updatedAt: string | null };
+  data: { students: number; evidence: number; posteriors: number; predictions: number; updatedAt: string | null; repeatedStudents: number };
   params: Record<string, number>;
-  gaps: { userId: string; name: string; skill: SkillRef; simple: number; graph: number; level: string }[];
+  gaps: { userId: string; name: string; skill: SkillRef; v2: number; graph: number; level: string; yes: number; no: number }[];
+  gapTotal: number;
   rootCauses: { userId: string; name: string; skill: SkillRef; root: SkillRef; p: number }[];
   commonRoots: (SkillRef & { students: number })[];
   edges: { parent: string; child: string; parentName: string; childName: string; n: number; withParent: number | null; withoutParent: number | null; nWith: number; nWithout: number; doubtful: boolean }[];
@@ -22,6 +23,7 @@ interface GraphData {
     weekStart: string; n: number; simpleAccuracy: number; v2Accuracy: number; graphAccuracy: number; simpleBrier: number; v2Brier: number; graphBrier: number;
     nFused: number; fusedBrier: number | null; v2BaseBrier: number | null; v2SameBrier: number | null;
   }[];
+  fusionWeekly?: GraphData["weekly"];
   fusion: { learned: boolean; n: number; minSamples: number; updatedAt: string | null; weights: { dim: string; name: string; w: number; default: number }[] };
 }
 
@@ -33,11 +35,12 @@ function pooled(weeks: GraphData["weekly"], key: "fusedBrier" | "v2BaseBrier" | 
 }
 
 function FusionStats({ d }: { d: GraphData }) {
-  const n = d.weekly.reduce((s, w) => s + w.nFused, 0);
+  const weeks = d.fusionWeekly ?? d.weekly;
+  const n = weeks.reduce((s, w) => s + w.nFused, 0);
   const stats = [
-    { name: "多维融合", v: pooled(d.weekly, "fusedBrier") },
-    { name: "v2（同一批预测）", v: pooled(d.weekly, "v2SameBrier") },
-    { name: "v2 去掉智能体评估（消融）", v: pooled(d.weekly, "v2BaseBrier") },
+    { name: "多维融合", v: pooled(weeks, "fusedBrier") },
+    { name: "v2（同一批预测）", v: pooled(weeks, "v2SameBrier") },
+    { name: "v2 去掉智能体评估（消融）", v: pooled(weeks, "v2BaseBrier") },
   ];
   return (
     <div className="stats">
@@ -97,6 +100,9 @@ export default function Models({ cls }: { cls: ClassInfo }) {
   const weeks = [...d.weekly].reverse();
   const labels = weeks.map((w) => w.weekStart.slice(5).replace("-", "/"));
   const n = weeks.reduce((s, w) => s + w.n, 0);
+  const rootEmpty = !d.data.updatedAt ? "当前版本的图模型还在更新" :
+    d.data.repeatedStudents ? "有学生反复失败，当前证据不足以指向具体先修技能" : "暂未记录到符合条件的反复失败";
+  const maxBrier = Math.max(0.3, ...weeks.flatMap(w => [w.simpleBrier, w.v2Brier, w.graphBrier]));
   const avg = (key: "simpleBrier" | "v2Brier" | "graphBrier") => (n ? weeks.reduce((s, w) => s + w[key] * w.n, 0) / n : null);
 
   return (
@@ -104,10 +110,10 @@ export default function Models({ cls }: { cls: ClassInfo }) {
       <div className="trial">
         <FlaskConical size={18} aria-hidden="true" />
         <p>
-          学生端和智能体用的是 <b>v2</b>。v1 和图模型用同一批证据同步运行，结果只在教师端显示。
-          现在用了 {d.data.students} 名学生的 {d.data.evidence} 条证据、{d.data.predictions} 次预测；
-          {d.data.updatedAt ? `图模型上次全图更新在${fullTime(d.data.updatedAt)}。` : "图模型还没有做过全图更新。"}
-          前置关系：{d.prereqStatus}。图模型的参数是经验值（前置知识的影响 {d.params.gamma}，碰巧做对 {d.params.guess}，失误 {d.params.slip}），还没有用数据估计。
+          学生端和智能体用的是 <b>v2</b>。图模型使用有权重的作答证据和先修关系。
+          现在用了 {d.data.students} 名学生的 {d.data.evidence} 条证据、{d.data.predictions} 次累计预测。
+          {d.data.updatedAt ? `图模型 ${d.version} 最近一次更新于 ${fullTime(d.data.updatedAt)}。` : `图模型 ${d.version} 正在等待后台更新。`}
+          前置关系：{d.prereqStatus}。图模型的参数是经验值（先修技能平均掌握的影响 {d.params.gamma}，碰巧做对 {d.params.guess}，失误 {d.params.slip}），还没有用数据估计。
         </p>
       </div>
 
@@ -130,7 +136,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
       <div className="grid-2">
         <Card title="Brier 分数，按周" sub="学生第一次交一道新题之前，三个模型各自预测他能不能一次做对。越低越好">
           {weeks.length === 0 ? <Empty title="还没有可以统计的预测" /> : (
-            <LineChart label="三个模型每周的 Brier 分数" labels={labels} min={0} max={0.3} format={(v) => v.toFixed(2)}
+            <LineChart label="三个模型每周的 Brier 分数" labels={labels} min={0} max={maxBrier} format={(v) => v.toFixed(2)}
               series={[
                 { ...SERIES[0], values: weeks.map((w) => w.v2Brier) },
                 { ...SERIES[1], values: weeks.map((w) => w.simpleBrier) },
@@ -167,7 +173,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
             </tbody>
           </table>
         </div>
-        <p className="card-foot">Brier 分数是预测概率和实际结果（做对 = 1，做错 = 0）之差的平方的平均。全猜 0.5 时是 0.25。</p>
+        <p className="card-foot">三列只比较图模型当前版本下的同一批预测。Brier 分数是预估首次通过概率和实际结果（通过 = 1）之差的平方的平均。</p>
       </Card>
 
       <h2 className="sec-head">多维融合<span>每个维度的权重按数据学，每天夜里更新</span></h2>
@@ -175,20 +181,20 @@ export default function Models({ cls }: { cls: ClassInfo }) {
         <FusionWeights d={d} />
       </div>
 
-      <h2 className="sec-head">图模型（试验中）<span>根因推断、和 v1 差别大的地方、前置关系的统计</span></h2>
+      <h2 className="sec-head">图模型（试验中）<span>可复查的先修技能、模型分歧、前置关系统计</span></h2>
       <div className="grid-2">
-        <Card title="全班共同的根因" sub="学生反复失败时，图模型认为真正没掌握的前置技能" bodyClass="">
-          {d.commonRoots.length === 0 ? <Empty title="目前没有推断出共同的根因" /> : (
+        <Card title="多人需要复查的先修技能" sub="至少两名学生出现同一条线索，按涉及人数汇总" bodyClass="">
+          {d.commonRoots.length === 0 ? <Empty title="暂无多人共有的线索" /> : (
             <table className="table">
               <thead><tr><th scope="col">前置技能</th><th scope="col" className="num">学生人数</th></tr></thead>
               <tbody>{d.commonRoots.map((c) => <tr key={c.code}><td className="cell-title">{c.name} <Code>{c.code}</Code></td><td className="num">{c.students}</td></tr>)}</tbody>
             </table>
           )}
         </Card>
-        <Card title="逐个学生的根因推断" bodyClass="">
-          {d.rootCauses.length === 0 ? <Empty title="目前没有" /> : (
+        <Card title="先修技能复查线索" sub="至少两次尚无改正证据的失败，且先修技能有直接证据、图模型估计低于 0.4" bodyClass="">
+          {d.rootCauses.length === 0 ? <Empty title={rootEmpty} /> : (
             <table className="table">
-              <thead><tr><th scope="col">学生</th><th scope="col">反复失败的技能</th><th scope="col">可能的根因</th></tr></thead>
+              <thead><tr><th scope="col">学生</th><th scope="col">反复失败的技能</th><th scope="col">建议复查的先修技能</th></tr></thead>
               <tbody>
                 {d.rootCauses.map((r, i) => (
                   <tr key={i}><td><Link className="link" to={`/teacher/students/${r.userId}`}>{r.name}</Link></td><td>{r.skill.name}</td><td>{r.root.name} <Code>{r.p.toFixed(2)}</Code></td></tr>
@@ -199,20 +205,20 @@ export default function Models({ cls }: { cls: ClassInfo }) {
         </Card>
       </div>
 
-      <Card title="v1 和图模型差别大的地方" sub="同一个学生同一个技能，两个模型的估计相差 0.3 以上" bodyClass="">
-        {d.gaps.length === 0 ? <Empty title="目前没有差别大的" /> : (
+      <Card title="v2 与图模型的分歧" sub="同一技能有直接证据，当前 v2 估计与最近一次图模型估计相差至少 0.3" bodyClass="">
+        {d.gaps.length === 0 ? <Empty title={d.data.updatedAt ? "暂无符合条件的分歧" : "当前版本的图模型还在更新"} /> : (
           <div className="table-scroll">
             <table className="table">
-              <thead><tr><th scope="col">学生</th><th scope="col">技能</th><th scope="col">学生端档位</th><th scope="col" className="num">v1</th><th scope="col" className="num">图模型</th></tr></thead>
+              <thead><tr><th scope="col">学生</th><th scope="col">技能</th><th scope="col">技能档位（v2）</th><th scope="col" className="num">v2</th><th scope="col" className="num">图模型</th><th scope="col" className="num">v2 证据（会 / 不会）</th></tr></thead>
               <tbody>
-                {d.gaps.slice(0, 30).map((gap, i) => (
-                  <tr key={i}><td><Link className="link" to={`/teacher/students/${gap.userId}`}>{gap.name}</Link></td><td>{gap.skill.name} <Code>{gap.skill.code}</Code></td><td>{gap.level}</td><td className="num">{gap.simple.toFixed(2)}</td><td className="num">{gap.graph.toFixed(2)}</td></tr>
+                {d.gaps.map((gap, i) => (
+                  <tr key={i}><td><Link className="link" to={`/teacher/students/${gap.userId}`}>{gap.name}</Link></td><td>{gap.skill.name} <Code>{gap.skill.code}</Code></td><td>{gap.level}</td><td className="num">{gap.v2.toFixed(2)}</td><td className="num">{gap.graph.toFixed(2)}</td><td className="num">{gap.yes.toFixed(2)} / {gap.no.toFixed(2)}</td></tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        {d.gaps.length > 30 && <p className="card-foot">只列前 30 条，一共 {d.gaps.length} 条。</p>}
+        {d.gapTotal > 30 && <p className="card-foot">只列前 30 条，一共 {d.gapTotal} 条。</p>}
       </Card>
 
       <Card title="前置关系" sub="描述性统计，不是边的强度估计：两头都有数据的学生里，前置会和不会时，后续技能“会”的比例。前置会不会没有差别的边标出来，供修正知识点图参考" bodyClass="">

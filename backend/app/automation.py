@@ -18,14 +18,14 @@ import logging
 import threading
 import time
 
-from . import assess, db, pdftext, pipeline, review
+from . import assess, db, graphmodel, pdftext, pipeline, review
 from .labeling import problems
 from .chat import workflow
 
 log = logging.getLogger("automation")
 
 _last: dict[str, float] = {}
-EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
+EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
 
 
 def _due(name: str) -> bool:
@@ -64,6 +64,8 @@ def idle_work() -> int:
         if closed:
             log.info("自动结束了 %d 个超时的对话回合", closed)
         done += closed
+    if _due("graph_refresh"):
+        done += graphmodel.refresh_old_posteriors()
     if _due("assess"):
         assessed = assess.run_pending()
         if assessed:

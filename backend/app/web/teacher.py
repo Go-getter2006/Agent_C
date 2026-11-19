@@ -594,7 +594,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     problem_set = set(class_problems(s, cls))
     simple = {c: v for c, v in mastery.skill_states(s, user_id, model="v1").items() if in_course(c, course)}
     v2 = mastery.skill_states(s, user_id, model="v2", with_predicted=True)
-    post_all = {r.skill_code: r for r in s.scalars(select(m.GraphPosterior).where(m.GraphPosterior.user_id == user_id)).all()}
+    post_all = graphmodel.current_posteriors(s, user_id)
     post = {c: r for c, r in post_all.items() if in_course(c, course)}
     gap = config.GRAPH["big_gap"]
     skills = []
@@ -611,7 +611,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
                "v2Interval": [round(x, 2) for x in st2.interval] if st2 else None,
                "halfLife": round(st2.half_life) if st2 and st2.half_life else None,
                "discounted": st2.discounted if st2 else 0, "graph": round(g.p, 2) if g else None}
-        row["bigGap"] = bool(st2 and g and abs(st2.p - g.p) >= gap)
+        row["bigGap"] = bool(st2 and g and g.has_evidence and abs(st2.p - g.p) >= gap)
         skills.append(row)
     kp1 = mastery.kp_states(s, user_id, model="v1")
     kp2 = mastery.kp_states(s, user_id, model="v2", with_predicted=True)
@@ -685,7 +685,8 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
                         "confidence": a.confidence, "outcome": a.outcome, "correct": a.correct,
                         "time": a.created_at.isoformat()})
     # 根因：数据结构这边可以追到 C 语言的先修技能（只给估计值，不给记录）
-    roots = graphmodel.root_causes(simple, {c: r.p for c, r in post_all.items()})
+    roots = graphmodel.root_causes({c: st for c, st in v2.items() if in_course(c, course)},
+                                   {c: r.p for c, r in post_all.items() if r.has_evidence})
     # 概况的几个数（和学生列表同一个算法）
     by_problem: dict[int, list[m.Submission]] = defaultdict(list)
     for x in sorted(subs, key=lambda x: x.submission_id):
@@ -752,30 +753,36 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
     course = _course_of_class(s, cls)
     people = {st.user_id: st.name for st in class_students(s, cls)}
     ids = list(people)
-    gaps, per_simple, roots_by_skill = [], {}, Counter()
+    gaps, per_simple, roots_by_skill = [], {}, defaultdict(set)
     root_rows = []
     updated = None
     n_post = 0
+    repeated_students = 0
     for uid in ids:
-        everything = mastery.skill_states(s, uid)
-        simple = {c: st for c, st in everything.items() if in_course(c, course)}
-        # 数据结构这边统计跨课程的边时要用到 C 语言那头的估计值
+        everything = mastery.skill_states(s, uid, model="v2")
+        current = {c: st for c, st in everything.items() if in_course(c, course)}
+        # 数据结构的跨课程边使用 C 语言和数据结构的实际证据。
         per_simple[uid] = {code: st.p for code, st in everything.items()
                            if st.raw >= 1 and (in_course(code, course) or course == "D")}
-        post_rows = s.scalars(select(m.GraphPosterior).where(m.GraphPosterior.user_id == uid)).all()
-        post = {r.skill_code: r.p for r in post_rows}
-        n_post += sum(1 for r in post_rows if in_course(r.skill_code, course))
-        for r in post_rows:
-            updated = r.updated_at if updated is None or r.updated_at > updated else updated
-        for code, st in simple.items():
+        post_rows = graphmodel.current_posteriors(s, uid)
+        post = {c: row.p for c, row in post_rows.items() if row.has_evidence}
+        for code, row in post_rows.items():
+            if in_course(code, course):
+                n_post += 1
+                updated = row.updated_at if updated is None or row.updated_at > updated else updated
+        repeated_students += any(st.unresolved_submissions >= 2 for st in current.values())
+        for code, st in current.items():
             if code in post and st.raw >= 1 and abs(st.p - post[code]) >= config.GRAPH["big_gap"]:
                 gaps.append({"userId": uid, "name": people[uid], "skill": _skill_view(code),
-                             "simple": round(st.p, 2), "graph": round(post[code], 2), "level": st.level})
-        for r in graphmodel.root_causes(simple, post):
-            roots_by_skill[r["root"]] += 1
+                             "v2": round(st.p, 2), "graph": round(post[code], 2), "level": st.level,
+                             "yes": round(st.s, 2), "no": round(st.f, 2)})
+        for r in graphmodel.root_causes(current, post):
+            roots_by_skill[r["root"]].add(uid)
             root_rows.append({"userId": uid, "name": people[uid], "skill": _skill_view(r["skill"]),
                               "root": _skill_view(r["root"]), "p": r["p"]})
-    gaps.sort(key=lambda r: -abs(r["simple"] - r["graph"]))
+    gaps.sort(key=lambda r: -abs(r["v2"] - r["graph"]))
+    common = sorted(((code, len(students)) for code, students in roots_by_skill.items()
+                     if len(students) >= 2), key=lambda pair: (-pair[1], pair[0]))
     n_evidence = s.scalar(select(func.count()).select_from(m.SkillEvidence).where(
         m.SkillEvidence.user_id.in_(ids), m.SkillEvidence.skill_code.like(course + "%"))) if ids else 0
     n_pred = s.scalar(select(func.count()).select_from(m.PredictionLog).where(
@@ -786,13 +793,15 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
         "class": {"key": key, "name": cls.class_name},
         "trial": True, "version": config.GRAPH_VERSION, "prereqStatus": PREREQ_STATUS,
         "data": {"students": len(ids), "evidence": n_evidence, "posteriors": n_post, "predictions": n_pred,
-                 "updatedAt": updated.isoformat() if updated else None},
+                 "updatedAt": updated.isoformat() if updated else None, "repeatedStudents": repeated_students},
         "params": {k: config.GRAPH[k] for k in ("root_prior", "beta", "gamma", "guess", "slip")},
-        "gaps": gaps[:40],
+        "gaps": gaps[:30],
+        "gapTotal": len(gaps),
         "rootCauses": root_rows,
-        "commonRoots": [{**_skill_view(code), "students": n} for code, n in roots_by_skill.most_common(8)],
+        "commonRoots": [{**_skill_view(code), "students": n} for code, n in common[:8]],
         "edges": edges,
-        "weekly": graphmodel.weekly_accuracy(s, ids, course=course),
+        "weekly": graphmodel.weekly_accuracy(s, ids, course=course, version=config.GRAPH_VERSION),
+        "fusionWeekly": graphmodel.weekly_accuracy(s, ids, course=course),
         "fusion": _fusion_view(s, course),
     }
 

@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from app import config, crypto, db, graphmodel, sources
+from app import config, crypto, db, graphmodel, mastery, sources
 from app import models as m
 from app.web import teacher as teacher_api
 from app.web.app import create_app
@@ -139,7 +139,7 @@ def test_stuck_list_and_graph_page(client, demo):
     assert g["data"]["posteriors"] > 100 and g["data"]["updatedAt"]
     assert g["weekly"] and all(0 <= w["simpleAccuracy"] <= 1 and 0 <= w["graphAccuracy"] <= 1 for w in g["weekly"])
     assert g["edges"] and {"parent", "child", "n", "withParent", "withoutParent", "doubtful"} <= set(g["edges"][0])
-    assert all(abs(x["simple"] - x["graph"]) >= config.GRAPH["big_gap"] - 0.006 for x in g["gaps"])
+    assert all(abs(x["v2"] - x["graph"]) >= config.GRAPH["big_gap"] - 0.006 for x in g["gaps"])
     assert all(x["name"] in ("林晓", "周航") or len(x["name"]) <= 4 for x in g["gaps"]) and all("code" in x["skill"] for x in g["gaps"])
 
 
@@ -231,6 +231,57 @@ def test_graph_model_directions(database):
     assert graphmodel.infer({}) == {}
     again = graphmodel.infer({"C06.03.02": (0.0, 3.0)})
     assert again == weak, "同样的证据得到同样的结果（随机种子固定）"
+
+
+def test_graph_prior_and_oj_failures_do_not_overstate_mastery(database):
+    skill = "C06.03.02"
+    parents = ("C02.04.02", "C06.03.03")
+    supported_parents = {code: (20.0, 0.0) for code in parents}
+    no_local_evidence = graphmodel.infer({**supported_parents, skill: (0.0, 0.0)})
+    assert 0.65 < no_local_evidence[skill] < 0.75
+
+    with db.session_scope() as s:
+        at = db.now()
+        for code in parents:
+            mastery.add_evidence(s, UID, code, "pass_first_try", True, 20, f"fixture:{code}", at)
+        mastery.add_evidence(s, UID, skill, "pass_first_try", True, 1.0, "pass:1:10", at,
+                             independent=True, reliability=0.4)
+        for sid in (11, 12):
+            sub = m.Submission(server_id=1, submission_id=sid, user_id=UID, problem_id=1,
+                               submit_time=at, judgement="WA")
+            s.add(sub)
+            assert mastery.record_failed_submission(s, sub, skill)
+        assert mastery.skill_states(s, UID, at=at, model="v1")[skill].f == 0
+        weights = graphmodel.evidence_of(s, UID, at)
+        assert weights[skill] == (0.4, 0.75)
+        assert graphmodel.infer(weights)[skill] < no_local_evidence[skill]
+
+
+def test_graph_looks_for_prerequisites_with_direct_evidence_after_repeated_failures():
+    skill, parent = "C06.03.02", "C02.04.02"
+    state = mastery.SkillState(skill, f=0.65, unresolved_submissions=2)
+    assert graphmodel.root_causes({skill: state}, {skill: 0.32}) == []
+    assert graphmodel.root_causes({skill: state}, {skill: 0.32, parent: 0.65}) == []
+    assert graphmodel.root_causes({skill: state}, {skill: 0.32, parent: 0.27}) == [
+        {"skill": skill, "root": parent, "p": 0.27}]
+
+
+def test_graph_refresh_uses_current_version_and_keeps_old_predictions(database):
+    skill = "C01.02.01"
+    with db.session_scope() as s:
+        mastery.add_evidence(s, UID, skill, "pass_first_try", True, 1.0, "fixture:printf")
+        s.add(m.GraphPosterior(user_id=UID, skill_code=skill, p=0.99, has_evidence=True, model_version="old"))
+        for model_version in ("old", config.GRAPH_VERSION):
+            s.add(m.PredictionLog(user_id=UID, skill_code=skill, source_key=f"fixture:{model_version}", ts=db.now(),
+                                  outcome=True, p_simple=0.6, p_v2=0.7, p_graph=0.99, model_version=model_version))
+        assert graphmodel.current_posteriors(s, UID) == {}
+    assert graphmodel.refresh_old_posteriors() == 1
+    assert graphmodel.refresh_old_posteriors() == 0
+    with db.session_scope() as s:
+        rows = graphmodel.current_posteriors(s, UID)
+        assert skill in rows and rows[skill].p < 0.99 and rows[skill].has_evidence
+        assert graphmodel.weekly_accuracy(s, [UID], version=config.GRAPH_VERSION)[0]["n"] == 1
+        assert graphmodel.weekly_accuracy(s, [UID])[0]["n"] == 2
 
 
 def test_prediction_log_is_idempotent(demo):
