@@ -12,6 +12,12 @@
 - 改了前端：在有 Node 的机器上 `cd frontend && npm run build`，把 `frontend/dist` 一起提交（服务器上不装 Node）。
 - 改了表结构：写一个迁移（`backend/alembic/versions/`），并在 `app/db.py` 的 `_REVISION_MARKS` 里加上这一版的痕迹（新加的列或新表）。启动时 `db.migrate()` 自动升级；以前用 `create_all` 建的库也能认出停在哪一版。迁移里建表先看表在不在。
 
+## 合并（维护者也直接在 main 上改，不得覆盖）
+
+- 开始改之前、开 PR 之前，都先 `git fetch origin main`，用 `git merge origin/main` 把 main 合进自己的分支（不 rebase，不 force push）；先看 `git log HEAD..origin/main` 维护者改了什么。
+- 冲突逐个手工合，两边的改动都留下：不用 `-X ours`、`git checkout --ours`，也不拿自己分支上的旧文件整个盖上去。`frontend/dist` 冲突时，在合并后的源码上重新 `npm run build`。迁移编号撞了，main 上已有的编号不动，自己的往后排，并改 `_REVISION_MARKS`。
+- 开 PR、合并之前跑 `python3 scripts/check_main_kept.py`：会列出维护者在 main 上写的、这个分支要删掉或改掉的行。有输出就逐条确认，维护者要求改的才可以删，并在 PR 里写明；否则恢复。退出码 0 才合并。
+
 ## 必须遵守
 
 - 对 XDOJ **只读**：只请求 `backend/app/xdoj/client.py` 里白名单上的接口；所有请求串行，间隔不低于 0.2 秒。
