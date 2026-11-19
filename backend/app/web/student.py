@@ -22,7 +22,7 @@ from .. import accounts, catalog, changes, config, db, llm, pdftext, progress, q
 from .. import models as m
 from ..chat import workflow
 from ..chat.text import dedent, quote_range
-from ..taxonomy import UI_EVENTS, course_of
+from ..taxonomy import KNOWLEDGE_POINTS, UI_EVENTS, course_of, kp_of_skill
 from ..xdoj import api as sync_api
 from ..xdoj import store
 from ..xdoj.assemble import source_text
@@ -671,6 +671,26 @@ def review_page(user: m.User = Depends(student), s: Session = Depends(get_sessio
             out["current"] = {"itemId": item.id, "lead": review.lead_for(s, user.student_id, item, q),
                               "quiz": quiz.view(s, attempt)}
     return out
+
+
+@router.get("/review/attempts")
+def review_attempts(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    """复习提升左边的列表：做完的复习题（最近的在上），每道是一段对话（题、反馈、之后的提问）。"""
+    rows = s.scalars(select(m.QuizAttempt).where(
+        m.QuizAttempt.user_id == user.student_id, m.QuizAttempt.reason == "review", m.QuizAttempt.state == quiz.DONE,
+        m.QuizAttempt.skipped.is_(False), m.QuizAttempt.skill_code.like(user.course + "%"))
+        .order_by(m.QuizAttempt.finished_at.desc(), m.QuizAttempt.id.desc()).limit(60)).all()
+    return {"attempts": [{"attemptId": a.id, "title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), "复习题"),
+                          "time": (a.finished_at or a.created_at).isoformat(), "right": bool(a.correct),
+                          "asked": len(a.discussion or [])} for a in rows]}
+
+
+@router.get("/review/attempts/{attempt_id}")
+def review_attempt(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    """一道做完的复习题：题和反馈（和当时看到的一样），之后可以接着就这道题提问。"""
+    a = _finished_review(s, user, attempt_id)
+    return {"attemptId": a.id, "title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), "复习题"),
+            "time": (a.finished_at or a.created_at).isoformat(), "quiz": quiz.view(s, a)}
 
 
 @router.post("/review/{item_id}/start")

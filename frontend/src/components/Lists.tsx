@@ -2,13 +2,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useSlider } from "./Slider";
 import { Link } from "react-router-dom";
-import { Check, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Hourglass, Layers } from "lucide-react";
-import { useEscape } from "../lib/hooks";
+import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Hourglass, Layers, MessageCircle } from "lucide-react";
+import { api } from "../api";
+import { useEscape, useLoad } from "../lib/hooks";
 import { deadline, fullTime, shortTime } from "../lib/time";
 import { sortProblems } from "../lib/problems";
 import { statementBlocks } from "../lib/statement";
 import type { Homework, ProblemDetail, ProblemRow, SubmissionChange } from "../types";
-import { Cells, Meter } from "./ui";
+import { Cells, CodeBlock, Loading, Meter, Problem } from "./ui";
 
 export function homeworkSummary(hw: Homework): string {
   return `已通过 ${hw.passed} 题，共 ${hw.total} 题，${deadline(hw.endTime, hw.ended)}`;
@@ -214,30 +215,54 @@ export function changeSummary(change: SubmissionChange | undefined): string | nu
   return parts.join("；");
 }
 
-/** 本题的一次提交：第几次、时间、结果、测试点方块、通过组数、看代码。方块旁边一定有文字。 */
-function SubmissionRow({ sub, change, onCode }: { sub: ProblemDetail["submissions"][number]; change?: SubmissionChange; onCode: () => void }) {
+/** 展开在这次提交下面的代码（不另开窗口）。 */
+function SourceInline({ sub, onAsk }: { sub: ProblemDetail["submissions"][number]; onAsk: () => void }) {
+  const code = useLoad(() => api.source(sub.key), [sub.key]);
+  return (
+    <div className="srow-code" id={`code-${sub.key}`}>
+      {code.loading && !code.data && <Loading what="正在取代码" lines={2} />}
+      {code.error && <Problem message={code.error} onRetry={code.reload} />}
+      {code.data && <CodeBlock caption={`第 ${sub.attemptNo} 次提交的代码`} lines={code.data.lines} />}
+      <button type="button" className="btn btn-sm" onClick={onAsk}><MessageCircle size={15} aria-hidden="true" />就这一版问</button>
+    </div>
+  );
+}
+
+/** 本题的一次提交：第几次、时间、结果、测试点方块、通过组数、看代码（就地展开）。方块旁边一定有文字。 */
+function SubmissionRow({ sub, change, open, onToggle, onAsk }: {
+  sub: ProblemDetail["submissions"][number]; change?: SubmissionChange; open: boolean; onToggle: () => void; onAsk: () => void;
+}) {
   const ok = sub.result === "AC";
   const wait = sub.result === "PENDING" || sub.result === "UNKNOWN";
   const passedCount = sub.grid ? sub.grid.filter(Boolean).length : 0;
   const summary = changeSummary(change);
   return (
-    <div className="srow">
+    <div className={open ? "srow srow-open" : "srow"}>
       <span className="srow-when"><strong>第 {sub.attemptNo} 次</strong><small>{fullTime(sub.time)}</small></span>
       <span className={ok ? "srow-result ok" : wait ? "srow-result" : "srow-result bad"}>{sub.resultText}</span>
       <span className="srow-cells">
         {sub.grid ? <Cells grid={sub.grid} /> : <span className="note">{sub.result === "PENDING" ? "正在评测" : sub.result === "CE" ? "编译错误，没运行测试点" : "测试点结果正在取"}</span>}
       </span>
       <span className="srow-count num">{sub.grid ? `${passedCount}/${sub.grid.length} 通过` : ""}</span>
-      <button type="button" className="btn btn-sm" onClick={onCode}>看代码</button>
+      <button type="button" className="btn btn-sm" aria-expanded={open} aria-controls={`code-${sub.key}`} onClick={onToggle}>
+        {open ? "收起代码" : "看代码"}{open ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+      </button>
       {summary && <p className="srow-change">{summary}</p>}
+      {open && <SourceInline sub={sub} onAsk={onAsk} />}
     </div>
   );
 }
 
-/** 右栏：题面、本题的每一次提交（最近的在上，都直接列出来）、用到的知识点。 */
-export function SidePanel({ detail, onDiff, onDocument, onCode }: {
-  detail: ProblemDetail; onDiff: (a: string, b: string) => void; onDocument?: () => void; onCode: (key: string) => void;
+/** 右栏：题面、本题的每一次提交（最近的在上，都直接列出来；看代码在那一行下面展开）、用到的知识点。 */
+export function SidePanel({ detail, onDiff, onDocument, onAsk }: {
+  detail: ProblemDetail; onDiff: (a: string, b: string) => void; onDocument?: () => void; onAsk: (key: string) => void;
 }) {
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => setOpen(null), [detail.key]);
+  const toggle = (key: string) => {
+    if (open !== key) void api.event("open_code", key);
+    setOpen(open === key ? null : key);
+  };
   const subs = detail.submissions;
   return (
     <div className="side">
@@ -251,7 +276,7 @@ export function SidePanel({ detail, onDiff, onDocument, onCode }: {
         <div className="srows">
           {subs.map((sub, i) => (
             <SubmissionRow key={sub.key} sub={sub} change={subs[i + 1] ? detail.changes?.[sub.key] : undefined}
-              onCode={() => onCode(sub.key)} />
+              open={open === sub.key} onToggle={() => toggle(sub.key)} onAsk={() => onAsk(sub.key)} />
           ))}
         </div>
         {subs.length > 1 && (

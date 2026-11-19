@@ -59,6 +59,7 @@ function Routed() {
         <Route path="/chat/:key" element={<LegacyChat />} />
         <Route path="/submissions" element={<Submissions />} />
         <Route path="/review" element={<Review />} />
+        <Route path="/review/:key" element={<Review />} />
         <Route path="/progress" element={<Progress />} />
         <Route path="*" element={<Navigate to={landing()} replace />} />
       </Routes>
