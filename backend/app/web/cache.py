@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from collections import OrderedDict
@@ -34,6 +35,24 @@ def data_version(s: Session) -> tuple:
     """一条查询取齐：每张表各取一个最大值（各自的子查询，不做连接）。"""
     row = s.execute(select(*[select(func.max(c)).scalar_subquery() for c in _VERSION_COLUMNS])).one()
     return (id(s.get_bind()), *row)
+
+
+_CLASS_COLUMNS = (m.XClass.class_id, m.XClass.fetched_at, m.Enrollment.id, m.ClassSource.class_id, m.TeacherSource.created_at)
+REFRESH = 600   # 秒：数据没变也最多隔这么久让页面重取一次（“本周”、随遗忘变化的掌握程度这类按时间算的数）
+
+
+def _short(x) -> str:
+    return hashlib.sha1(repr(x).encode("utf-8")).hexdigest()[:16]
+
+
+def version_tag(s: Session) -> dict:
+    """教师端页面定时只问这一个“数据变没变”，变了才重取（不再每页各自每分钟重取一遍）。
+    data：几张会变的表的最大编号和最近更新时间（和结果缓存同一个），加上十分钟一档的时间；
+    classes：班级、名单、老师关联的数据源（班级列表只在它变了时重取）。"""
+    row = data_version(s)[1:]
+    classes = s.execute(select(*[select(func.count(c)).scalar_subquery() for c in _CLASS_COLUMNS],
+                               *[select(func.max(c)).scalar_subquery() for c in _CLASS_COLUMNS])).one()
+    return {"data": _short((row, int(time.time() // REFRESH))), "classes": _short(tuple(classes))}
 
 
 def cached(s: Session, key: tuple, build: Callable[[], Any], ttl: int = TTL) -> Any:

@@ -8,7 +8,7 @@ import { StackedBar } from "../../components/charts";
 import KnowledgeGraph, { hasData, type KMEdge, type KMNode, type KMTopic } from "../../components/KnowledgeGraph";
 import { Card, LEVELS, Loading, Problem, Segmented, levelClass } from "../../components/ui";
 import { useEscape, useLayout, useLoad } from "../../lib/hooks";
-import { Code, RESOLUTION, ScoreBadge, type ClassInfo } from "./common";
+import { Code, RESOLUTION, ScoreBadge, useClasses, type ClassInfo } from "./common";
 
 interface MapData {
   class: { key: string; name: string; course: "C" | "D" };
@@ -52,7 +52,8 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
   cls: ClassInfo; node: KMNode; home: "C" | "D"; studentId: string; studentName: string | null;
   onSelect: (code: string) => void; onClose: () => void;
 }) {
-  const detail = useLoad(() => get<KpDetail>(`/api/teacher/classes/${cls.key}/knowledge-map/${node.code}`), [cls.key, node.code], 0, false, `t:node:${cls.key}:${node.code}`);
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const detail = useLoad(() => get<KpDetail>(`/api/teacher/classes/${cls.key}/knowledge-map/${node.code}`), [cls.key, node.code, tick], 0, false, `t:node:${cls.key}:${node.code}`, String(tick));
   const d = detail.data;
   const total = node.dist.reduce((a, b) => a + b, 0);
   const foundation = node.course !== home;
@@ -226,10 +227,11 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
 }
 
 export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
   const layoutKind = useLayout();
   const [params, setParams] = useSearchParams();
   const student = params.get("student") ?? "";
-  const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student], 120000, false, `t:map:${cls.key}:${student ?? ""}`);
+  const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student, tick], 0, false, `t:map:${cls.key}:${student ?? ""}`, String(tick));
   const [scope, setScope] = useState<"home" | "all">("home");
   const view: "graph" | "table" = params.get("view") === "table" ? "table" : "graph";
   const sort = (["weak", "stuck", "silent"] as const).find((x) => x === params.get("sort")) ?? "topic";

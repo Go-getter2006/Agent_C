@@ -319,23 +319,21 @@ def test_log_request_scoped_audited_and_minimal(client, demo):
     assert [x["status"] for x in listed][:2] == ["ready", "revoked"] and listed[1]["downloads"] == 1
 
 
-def test_research_export_is_deidentified(client, demo):
-    """研究用：学号换成化名（每次一样）、没有姓名和提交编号；卡点、求助回合、理解评估、独立作答的字段都在。"""
-    from app import logs
-
+def test_research_export_keeps_student_ids(client, demo):
+    """研究用的几类记录也带学号和姓名（老师要和期末考试系统按学号比对），不做化名；
+    卡点、求助回合、理解评估、独立作答的字段和指标版本都在。"""
     login(client, "demo-teacher")
-    body = {"ids": UID, "dateFrom": "2026-06-01", "dateTo": "2027-05-31", "format": "json", "deidentify": True,
+    body = {"ids": UID, "dateFrom": "2026-06-01", "dateTo": "2027-05-31", "format": "json",
             "kinds": ["submission", "ask", "quiz", "review", "round", "stuck", "assess"], "purpose": "论文数据分析",
-            "includeText": True}
+            "deidentify": True}   # 以前的“去标识”参数：现在不认，照样带学号
     req = client.post("/api/teacher/logs", json=body).json()["request"]
-    assert req["deidentified"] is True
+    assert "deidentified" not in req
     js = client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": req["token"]}).json()
-    blob = json.dumps(js, ensure_ascii=False)
-    alias = logs.pseudonym(UID)
-    assert UID not in blob and "林晓" not in blob and js["request"]["students"] == [alias]
-    assert {r["user_id"] for r in js["rows"]} == {alias} and all("name" not in r and "submission_id" not in r for r in js["rows"])
+    assert js["request"]["students"] == [UID]
+    assert {r["user_id"] for r in js["rows"]} == {UID} and {r["name"] for r in js["rows"]} == {"林晓"}
     kinds = {r["kind"] for r in js["rows"]}
     assert {"卡点", "求助回合", "理解评估", "在 XDOJ 提交"} <= kinds
+    assert any(r["submission_id"] for r in js["rows"] if r["kind"] == "在 XDOJ 提交")
     stuck = next(r for r in js["rows"] if r["kind"] == "卡点")["data"]
     assert stuck["version"] == "stuck-kp-1" and stuck["kp"] == stuck["skill"][:6] and "passed" in stuck
     rnd = next(r for r in js["rows"] if r["kind"] == "求助回合")["data"]
@@ -344,10 +342,9 @@ def test_research_export_is_deidentified(client, demo):
     assert {"protocol", "judgedHasBug", "firstLines", "locateHit", "firstFixPass", "firstFixClean", "hints",
             "sampleRuns", "events"} <= set(quiz)
     assert js["request"]["versions"]["stuck"] == "stuck-kp-1"
-    # 同一个学生再导一次，化名一样（几份文件能对上）
     again = client.post("/api/teacher/logs", json={**body, "format": "csv"}).json()["request"]
     text = client.get(f"/api/teacher/logs/{again['id']}/download", params={"token": again["token"]}).content.decode("utf-8-sig")
-    assert text.splitlines()[0].startswith("化名,时间,类型,交互") and alias in text and "林晓" not in text
+    assert text.splitlines()[0].startswith("学号,姓名,时间,类型,交互") and UID in text and "林晓" in text
 
 
 def test_other_teacher_cannot_get_logs_of_my_students(client, demo):
@@ -620,3 +617,24 @@ def test_stale_review_is_marked_and_rewritten_nightly(client, demo):
     assert client.get(f"/api/teacher/students/{UID}").json()["agentReview"]["stale"] is True
     assert profile.refresh_reviews(include_stale=True) >= 1         # 夜里核对：变了就重写
     assert client.get(f"/api/teacher/students/{UID}").json()["agentReview"]["stale"] is False
+
+
+def test_version_tells_pages_when_to_refetch(client, demo):
+    """教师端页面定时只问 /version：数据没变就不重取；有了新数据 data 变；班级、名单没变时 classes 不变。"""
+    from app.chat import workflow
+
+    login(client, "demo-teacher")
+    v1 = client.get("/api/teacher/version").json()
+    assert set(v1) == {"data", "classes"} and client.get("/api/teacher/version").json() == v1
+    with db.session_scope() as s:   # 学生在对话里卡住了：有新数据
+        workflow.handle(s, UID, (demo["server_id"], 406), action="hint")
+    v2 = client.get("/api/teacher/version").json()
+    assert v2["data"] != v1["data"] and v2["classes"] == v1["classes"]
+    with db.session_scope() as s:   # 名单变了：班级列表要重取
+        s.add(m.Student(user_id="2599999999", name="新同学"))
+        s.flush()
+        s.add(m.Enrollment(user_id="2599999999", server_id=demo["server_id"], class_id=31))
+    assert client.get("/api/teacher/version").json()["classes"] != v2["classes"]
+    client.post("/api/auth/logout")
+    login(client, UID)
+    assert client.get("/api/teacher/version").status_code == 403

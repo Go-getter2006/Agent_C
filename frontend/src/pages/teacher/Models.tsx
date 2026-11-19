@@ -8,7 +8,7 @@ import { LineChart } from "../../components/charts";
 import { Card, Empty, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime } from "../../lib/time";
-import { Code, pct, type ClassInfo, type SkillRef } from "./common";
+import { Code, pct, useClasses, type ClassInfo, type SkillRef } from "./common";
 
 interface GraphData {
   version: string; prereqStatus: string;
@@ -89,7 +89,8 @@ const SERIES = [
 ];
 
 export default function Models({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key], 300000, false, `t:models:${cls.key}`);
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key, tick], 0, false, `t:models:${cls.key}`, String(tick));
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在取模型的结果" lines={5} /></div>;

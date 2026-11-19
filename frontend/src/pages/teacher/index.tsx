@@ -35,7 +35,7 @@ function Routed() {
         <Route path="rating" element={<TeacherPage title="理解评估" sub="智能体评“理解”可不可信：老师盲评，和大模型、规则对照">{(cls) => cls && <Rating cls={cls} />}</TeacherPage>} />
         <Route path="help" element={<TeacherPage title="求助效果" sub="分级帮助有没有用：卡住以后怎么样了，谁卡住了又没来问">{(cls) => cls && <Help cls={cls} />}</TeacherPage>} />
         {/* 数据 */}
-        <Route path="logs" element={<TeacherPage title="日志申请" withClass={false} sub="按需取自己学生的使用记录，研究用的可以去标识">{() => <Logs />}</TeacherPage>} />
+        <Route path="logs" element={<TeacherPage title="日志申请" withClass={false} sub="按需取自己学生的使用记录，带学号">{() => <Logs />}</TeacherPage>} />
         <Route path="sources" element={<TeacherPage title="数据源" withClass={false} sub="从 XDOJ 同步数据的状态">{() => <Sources />}</TeacherPage>} />
         {/* 旧地址：原来的“卡点”页（谁卡在哪个知识点）现在在知识图谱的表和知识点详情里；“模型对比”改叫模型检验 */}
         <Route path="stuck" element={<Navigate to="/teacher/map?view=table&sort=stuck" replace />} />

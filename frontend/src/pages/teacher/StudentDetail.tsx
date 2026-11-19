@@ -12,7 +12,7 @@ import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, Facts, LevelLegend, Loading, Problem, ResultPill, Tabs, levelClass } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
-import { Code, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, endReason, type SkillRef } from "./common";
+import { Code, endReason, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, useClasses, type SkillRef } from "./common";
 import { DiagnosisCard, type DiagnosisRow } from "./Diagnosis";
 
 interface Detail {
@@ -482,9 +482,10 @@ function ModelTab({ d }: { d: Detail }) {
 const TABS: Tab[] = ["overview", "help", "quiz", "subs", "model"];
 
 export default function StudentDetail() {
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
-  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}`), [id], 60000, false, `t:student:${id}`);
+  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}`), [id, tick], 0, false, `t:student:${id}`, String(tick));
   const d = data.data;
   const tab: Tab = TABS.includes(params.get("tab") as Tab) ? (params.get("tab") as Tab) : "overview";
   const setTab = (v: Tab) => {

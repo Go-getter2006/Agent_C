@@ -461,7 +461,14 @@ def _rule_review(payload: dict) -> dict:
 
 
 def _digest(payload: dict) -> str:
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    """评语该不该重写，只看画像的结论：每个知识点的档位和提示、看出来的错误想法、对话里建构性和索要答案的大致比例
+    （一成一档）。各维度的数值每天都会随遗忘曲线变一点，不算变化——不然每个学生每天都要重写一遍，白调大模型。"""
+    dia = payload.get("dialogue") or {}
+    key = {"kp": sorted([r["code"], r["level"], sorted(r["flags"])] for r in payload["knowledge"]),
+           "misconceptions": sorted(set(payload.get("misconceptions") or [])),
+           "dialogue": [round(dia.get("constructive") or 0, 1), round(dia.get("answerSeeking") or 0, 1)]
+           if dia.get("total") else None}
+    return hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def review_is_current(s: Session, row: m.AgentReview | None, user_id: str, course: str) -> bool:

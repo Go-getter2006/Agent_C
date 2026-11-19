@@ -6,7 +6,7 @@ import { get } from "../../api";
 import { Avatar, Card, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { shortTime } from "../../lib/time";
-import { ScoreBadge, type ClassInfo } from "./common";
+import { ScoreBadge, useClasses, type ClassInfo } from "./common";
 
 interface StudentRow {
   userId: string; name: string; tried: number; passed: number; submissions: number; avgToPass: number | null;
@@ -32,7 +32,8 @@ const COLUMNS: { key: SortKey; label: string; num: boolean; title?: string }[] =
 ];
 
 export default function Students({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<{ total: number; students: StudentRow[] }>(`/api/teacher/classes/${cls.key}/students`), [cls.key], 60000, false, `t:students:${cls.key}`);
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const data = useLoad(() => get<{ total: number; students: StudentRow[] }>(`/api/teacher/classes/${cls.key}/students`), [cls.key, tick], 0, false, `t:students:${cls.key}`, String(tick));
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "userId", dir: 1 });
   const [q, setQ] = useState("");
   const rows = useMemo(() => {
