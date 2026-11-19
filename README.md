@@ -64,10 +64,15 @@ git clone https://github.com/Go-getter2006/Agent_C.git && cd Agent_C
 |---|---|
 | `./run.sh` | 在后台启动（网页和同步在同一个进程里） |
 | `./run.sh stop` / `restart` / `status` | 停止、重启、看在不在跑 |
-| `./run.sh log` | 看运行日志（Ctrl+C 只是退出看日志，程序继续跑） |
+| `./run.sh log` | 看运行日志（Ctrl+C 只是退出看日志，程序继续跑）。日志在 `data/server.log`，每次启动时超过 20 MB 就换新文件，旧的留一份 `server.log.1` |
 | `./run.sh update` | 拉最新代码、更新依赖、把数据库升到最新版本（新加的表和列自动补上，原有数据不动）、重启 |
-| `./run.sh service` | 装成开机自启的系统服务 |
+| `./run.sh service` | 装成开机自启的系统服务（要 sudo） |
 | `./run.sh demo` | 用演示数据启动（单独一个库） |
+| `./run.sh fg` | 在前台运行（调试用，Ctrl+C 停止） |
+
+端口默认 8000，可以 `PORT=8080 ./run.sh` 改。
+
+装成系统服务以后，上面的命令照样用：`./run.sh`、`stop`、`restart`、`update`、`status` 交给系统服务去做（会要 sudo），不会另起一份抢端口；`./run.sh log` 改看系统日志（`journalctl -u agent-c`）。
 
 然后浏览器打开 `http://这台机器的地址:8000`：
 

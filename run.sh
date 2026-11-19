@@ -231,7 +231,7 @@ case "${1:-}" in
     fi
     mkdir -p data
     (cd backend && .venv/bin/python -m app.cli demo-seed >/dev/null)
-    say "演示账号：学生 2500000001；教师在登录页选“教师”，账号 demo-teacher。密码都是 .env 里的 DEV_LOGIN_PASSWORD"
+    say "演示账号：学生 2500000001，老师 demo-teacher（同一个登录框）。密码都是 .env 里的 DEV_LOGIN_PASSWORD"
     bg_start
     ;;
   update)
