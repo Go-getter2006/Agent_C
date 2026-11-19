@@ -6,11 +6,16 @@
 - 最后问一句回顾的问题（当时卡住的关键是什么），让他自己说出来——自己解释比看答案记得牢。
 
 只对两天内的新通过发；一次就过的不发；每道题只发一次。不出现测试点的数据（对比也要过泄露检查）。
+
+学生回答了回顾的问题（reflect_facts、reflect_reply）：智能体接着他说的回一两句——说到点上就肯定、说得更准一点，
+说偏了就温和地点出关键；没有大模型时用模板。这一问一答单独一个回合（models.REFLECT_END），
+挂到这道题前面没过时的技能和错误上，后台照常评“理解”、进盲评，但不算求助回合。
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
+from dataclasses import dataclass, field
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -123,6 +128,86 @@ def on_pass(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> m.
     llm.flush_records(s)
     log.info("通过后的总结（%s）", "大改" if big else "小改")
     return msg
+
+
+@dataclass
+class ReflectFacts:
+    """回顾用的已知情况：刚通过的那次提交、前面没过时的问题、最后改的几行。"""
+    ac: m.Submission
+    skill: str = ""
+    error: str = ""
+    names: list[str] = field(default_factory=list)
+    fix: list[str] = field(default_factory=list)
+
+
+def reflect_facts(s: Session, summary_msg: m.ChatMessage) -> ReflectFacts | None:
+    """summary_msg 是通过后的总结。返回回顾要用的事实；找不到那次通过的提交返回 None。"""
+    from ..labeling.labeler import current_problem_label
+    from .proactive import _primary
+
+    info = (summary_msg.content or {}).get("summary") or {}
+    ac = s.get(m.Submission, (summary_msg.server_id, info.get("submission"))) if info.get("submission") else None
+    if ac is None:
+        return None
+    subs = [x for x in catalog.user_submissions(s, ac.user_id, ac.server_id, ac.problem_id)
+            if x.submission_id < ac.submission_id and x.judgement not in ("AC", "PENDING", "UNKNOWN")]
+    facts = ReflectFacts(ac=ac)
+    for x in reversed(subs):   # 最后一次没过的、有标注的那次
+        label = _primary(s, x)
+        if label is not None and label.confidence >= 0.5 and label.error_code != "OT99":
+            facts.skill, facts.error = label.skill_code, label.error_code
+            break
+    if not facts.skill:
+        plabel = current_problem_label(s, ac.server_id, ac.problem_id)
+        facts.skill = plabel.primary_skill if plabel is not None else ""
+    facts.names = [n for n in dict.fromkeys(error_name(c, student_facing=True)
+                                            for x in subs for c in changes.error_codes(s, x)) if n][:3]
+    if subs:
+        excerpt = fix_excerpt(changes.code_lines(s, subs[-1]) or [], changes.code_lines(s, ac) or [])
+        facts.fix = list(excerpt[1]) if excerpt is not None else []
+    return facts
+
+
+_REFLECT_SYSTEM = """你是 C 语言课程的助教。一名学生刚把一道题改对、通过了，你问他“当时卡住的关键是什么”，下面是他的回答。
+已知前面没过时程序诊断出的问题，和他最后改的几行代码。回他一到两句话（不超过 80 个字）：
+- 他说到了关键：肯定他，用一句话把关键说得更准一点；
+- 没说到点上、说偏了：先肯定他愿意回顾，再温和地点出真正的关键；
+- 说“不知道”或者很含糊：直接用一句话告诉他关键是什么。
+不要出题，不要贴代码，不要提测试数据和具体的输入输出，不要提学号、姓名，用“你”称呼他。
+只输出 JSON：{"reply":"……"}"""
+
+
+def reflect_template(facts: ReflectFacts | None) -> str:
+    if facts is not None and facts.names:
+        return f"好，记住这次的关键：{'、'.join(facts.names)}。以后写到类似的地方，先停一下想想这一点。"
+    return "好，把这一点记下来。以后遇到类似的情况，先想想这里。"
+
+
+def reflect_reply(facts: ReflectFacts | None, text: str, tests: list[dict], course: str) -> tuple[str, str]:
+    """回顾的回复：(文字, llm / template)。大模型不合格或没有时用模板。"""
+    from .validate import _leaks
+
+    if facts is None or not llm.available():
+        return reflect_template(facts), "template"
+
+    def validate(d: dict) -> str:
+        out = str(d.get("reply") or "").strip()
+        if not out:
+            raise ValueError("reply 是空的")
+        if len(out) > 120:
+            raise ValueError("太长了")
+        if "```" in out or _leaks(out, tests):
+            raise ValueError("不能贴代码、不能出现测试数据")
+        return out
+
+    user = ("【前面没过时的问题】" + ("、".join(facts.names) or "（没有标出来）")
+            + "\n【他最后改的几行】\n" + (llm.strip_identity("\n".join(facts.fix)) or "（没有）")
+            + "\n【他的回答】\n" + llm.strip_identity(text))
+    try:
+        return llm.call_json("reflect_reply", course_prompt(_REFLECT_SYSTEM, course), user, validate,
+                             retries=1, max_tokens=200), "llm"
+    except llm.LLMUnavailable:
+        return reflect_template(facts), "template"
 
 
 def drop_reflection(msg: m.ChatMessage) -> None:

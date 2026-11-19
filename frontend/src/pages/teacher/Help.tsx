@@ -14,8 +14,14 @@ interface KpRow {
   recall: R; passed: R; transfer: R; silent: number;
 }
 
+interface HelpNextRow {
+  level: string; name: string; n: number; resubmitted: R; nextPass: R; errorGone: R; passed: R;
+  medianMinutes: number | null; medianTries: number | null;
+}
+
 interface HelpData {
   rows: KpRow[]; silentFails: number; version: string;
+  helpNext: { version: string; rows: HelpNextRow[] };
   totals: { students: number; stuck: number; episodes: number; recall: R; passed: R; transfer: R; silent: number };
   dialogue: { students: number; constructive: number | null; answerSeeking: number | null };
 }
@@ -74,6 +80,43 @@ export default function Help({ cls }: { cls: ClassInfo }) {
           反复：卡住两个回合以上的人。顽固：第三次卡在同一技能的人。第二次自己想起来：智能体先请他回忆时自己说出来。
           卡后通过：卡住时那道题后来在 XDOJ 上通过。之后新题一次通过：第一次卡在这里以后才开始做的同知识点题，第一次提交就通过。
           没来问：一道题没过的提交不少于 {d.silentFails} 次，没就这道题求助。指标版本 {d.version}。
+        </p>
+      </Card>
+
+      <Card title="每次帮助之后" sub="作业引导里每次帮助以后，这道题的下一次提交；分子 / 分母" bodyClass="">
+        {d.helpNext.rows.length === 0 ? (
+          <Empty icon={CircleCheck} title="还没有帮助记录">学生在作业引导里求助、智能体给出帮助以后，会按帮助的级别列在这里。</Empty>
+        ) : (
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">帮助</th><th scope="col" className="num">次数</th><th scope="col" className="num">再交了</th>
+                  <th scope="col" className="num">下一次就通过</th><th scope="col" className="num">讨论的错误没了</th>
+                  <th scope="col" className="num">之后通过</th><th scope="col" className="num">隔多久再交</th>
+                  <th scope="col" className="num">到通过交了几次</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.helpNext.rows.map((r) => (
+                  <tr key={r.level} className={r.level === "all" ? "row-total" : undefined}>
+                    <td>{r.name}</td>
+                    <td className="num">{r.n}</td>
+                    <td className="num">{frac(r.resubmitted)}</td>
+                    <td className="num">{frac(r.nextPass)}</td>
+                    <td className="num">{frac(r.errorGone)}</td>
+                    <td className="num">{frac(r.passed)}</td>
+                    <td className="num">{r.medianMinutes === null ? "—" : `${r.medianMinutes} 分钟`}</td>
+                    <td className="num">{r.medianTries === null ? "—" : `${r.medianTries} 次`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="card-foot">
+          两次提交之间给了几次帮助的，算最后那一次。讨论的错误没了：下一次通过，或者程序没在下一次提交里再标出帮助时诊断的那个错误。
+          时间和次数是中位数。帮助级别是按学生当时的情况选的，级别之间不能直接比效果。指标版本 {d.helpNext.version}。
         </p>
       </Card>
 

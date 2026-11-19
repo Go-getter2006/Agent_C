@@ -979,3 +979,6 @@ li code,
     }
   }
 }
+
+/* 表格最后的“全部”一行 */
+.table tr.row-total td { font-weight: 600; border-top: 1px solid var(--line-strong); }

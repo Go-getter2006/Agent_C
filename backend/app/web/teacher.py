@@ -426,7 +426,8 @@ def _weekly(s: Session, data: "_ClassData", now: dt.datetime, weeks: int = 8) ->
     local = now.astimezone(db.BEIJING)
     monday = (local - dt.timedelta(days=local.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     rounds = s.scalars(select(m.ChatRound.started_at).where(
-        m.ChatRound.user_id.in_(data.ids), m.ChatRound.course == data.course)).all() if data.ids else []
+        m.ChatRound.user_id.in_(data.ids), m.ChatRound.course == data.course,
+        m.ChatRound.end_reason != m.REFLECT_END)).all() if data.ids else []
     out = []
     for i in range(weeks - 1, -1, -1):
         start, end = monday - dt.timedelta(weeks=i), monday - dt.timedelta(weeks=i - 1)
@@ -518,7 +519,8 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
             stuck[sp.user_id] += 1
             stubborn[sp.user_id] += 1 if sp.stubborn else 0
         rounds = dict(s.execute(select(m.ChatRound.user_id, func.count()).where(
-            m.ChatRound.user_id.in_(data.ids), m.ChatRound.course == data.course)
+            m.ChatRound.user_id.in_(data.ids), m.ChatRound.course == data.course,
+            m.ChatRound.end_reason != m.REFLECT_END)
             .group_by(m.ChatRound.user_id)).all())
     else:
         rounds = {}
@@ -561,10 +563,14 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
 def help_effect(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     """研究 · 求助效果：按知识点的卡点结局（app/stuckstats.py）和对话行为与做题表现。
     谁卡在哪个知识点（上课用）在知识图谱的知识点详情里看，这里只给比例。"""
+    from .. import helpeffect
+
     cls = _class(s, user, key)
     people = {st.user_id: st.name for st in class_students(s, cls)}
     course = _course_of_class(s, cls)
-    stats = stuckstats.compute(s, list(people), course, class_problems(s, cls))
+    problems = class_problems(s, cls)
+    stats = stuckstats.compute(s, list(people), course, problems)
+    help_next = helpeffect.summarize(helpeffect.episodes(s, list(people), course, set(problems)))
     rows = [{k: v for k, v in r.items() if k not in ("studentRows", "silentRows")}
             for r in stuckstats.kp_rows(s, stats, people)]
 
@@ -582,7 +588,8 @@ def help_effect(key: str, user: m.User = Depends(teacher), s: Session = Depends(
                        "episodes": sum(len(st.episodes) for st in stats.values()),
                        "recall": pooled("recall"), "passed": pooled("passed"), "transfer": pooled("transfer"),
                        "silent": len(silent_people)},
-            "dialogue": _dialogue_vs_outcome(s, data.ids, course, data.subs)}
+            "dialogue": _dialogue_vs_outcome(s, data.ids, course, data.subs),
+            "helpNext": {"version": helpeffect.VERSION, "rows": help_next}}
 
 
 # ------------------------------------------------------------ 学生明细

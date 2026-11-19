@@ -127,6 +127,39 @@ def _round_for(s: Session, user_id: str, key: tuple[int, int] | None, now: dt.da
     return rnd
 
 
+def _reflect_target(s: Session, user_id: str, thread: tuple[int, int] | None, last_agent: m.ChatMessage | None,
+                    action: str | None, pasted: str, prose: str) -> m.ChatMessage | None:
+    """这条消息是不是在回答通过后的回顾问题：上一条是这道题的总结，之后没再交过，他说的不是新问题。"""
+    if thread is None or action or pasted or last_agent is None or not prose.strip():
+        return None
+    if not ((last_agent.content or {}).get("summary") or {}).get("submission"):
+        return None
+    if prose.rstrip().endswith(("？", "?")):
+        return None   # 他问了个新问题：照常回答
+    newer = s.scalar(select(m.Submission.submission_id).where(
+        m.Submission.server_id == thread[0], m.Submission.problem_id == thread[1], m.Submission.user_id == user_id,
+        m.Submission.submit_time > last_agent.created_at))
+    return last_agent if newer is None else None
+
+
+def _reflect_round(s: Session, user_id: str, thread: tuple[int, int], now: dt.datetime, course: str,
+                   summary_msg: m.ChatMessage, facts) -> m.ChatRound:
+    """回顾单独一个回合：挂到这道题前面没过时的技能和错误上；总结那条消息也放进来，评估能看到问的是什么。"""
+    rnd = open_round(s, user_id, course)
+    if rnd is not None:
+        same = (rnd.server_id, rnd.problem_id) == thread
+        close_round(s, rnd, "通过" if same else "换题", now)
+    rnd = m.ChatRound(user_id=user_id, server_id=thread[0], problem_id=thread[1], course=course,
+                      started_at=now, last_message_at=now,
+                      skill_code=facts.skill if facts else "", error_code=facts.error if facts else "",
+                      submission_id=facts.ac.submission_id if facts else None)
+    s.add(rnd)
+    s.flush()
+    if summary_msg.round_id is None:
+        summary_msg.round_id = rnd.id
+    return rnd
+
+
 # ------------------------------------------------------------ 卡住时怎么办（5.6）
 def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool | None,
                 now: dt.datetime) -> tuple[str, str, m.StuckPoint | None, m.StuckPoint | None]:
@@ -172,7 +205,7 @@ def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool 
 # ------------------------------------------------------------ 生成与校验
 def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history: list[tuple[str, str]],
              prior: m.StuckPoint | None, prior_ref: str, kind: str,
-             visible_titles: dict[str, str]) -> tuple[validate.Draft, str, dict, int]:
+             visible_titles: dict[str, str], reflect=None) -> tuple[validate.Draft, str, dict, int]:
     testcases = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)   # 全部测试点都不能出现在回复里
 
     def run_check(d: validate.Draft) -> list[str]:
@@ -180,6 +213,17 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
             d, help_level=decision.help_level, reveal_level=decision.reveal_level, kind=kind, source=ctx.source,
             testcases=testcases, reference=ctx.reference, current_title=ctx.problem.title if ctx.problem else "",
             visible_titles=visible_titles)
+
+    if flow == "reflect":   # 通过后的回顾：接着他说的回一两句（chat/summary.py）
+        from . import summary
+
+        said, source = summary.reflect_reply(reflect, text, testcases, ctx.course)
+        draft = validate.Draft(before=said)
+        problems = run_check(draft)
+        if problems and source == "llm":
+            draft, source = validate.Draft(before=summary.reflect_template(reflect)), "template"
+            problems = run_check(draft)
+        return draft, source, {"ok": not problems, "problems": problems}, 0
 
     retries = 0
     if llm.available() and flow not in TEMPLATE_ONLY:
@@ -245,7 +289,16 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     # 第 2 步 绑定 → 回合
     key, _sub, _by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now, course,
                                           knowledge=knowledge, pin=pin)
-    rnd = _round_for(s, user_id, key, now, course)
+    reflect_on = None if knowledge else _reflect_target(s, user_id, thread, last_agent, action, pasted, prose)
+    reflect = None
+    if reflect_on is not None:
+        from . import summary
+
+        reflect = summary.reflect_facts(s, reflect_on)
+        rnd = _reflect_round(s, user_id, thread, now, course, reflect_on, reflect)
+        awaiting = True   # 他在回答“当时卡住的关键是什么”
+    else:
+        rnd = _round_for(s, user_id, key, now, course)
     awaiting = awaiting or rnd.recall_stage in ("asked", "blanked")  # 让他回忆时也在等他回答
     if not awaiting and not action and rnd.help_count > 0 and _PUSHBACK.search(prose or text):
         awaiting = True
@@ -286,9 +339,15 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
                 if code in SKILLS:
                     options.append((code, SKILLS[code][0]))
         analysis = analyze(prose or text, bool(pasted), awaiting, last_agent_text,
-                           ctx.fill(hint.why) if awaiting else "", options, bound=ctx.problem is not None, course=course)
+                           ctx.fill(hint.why) if awaiting and reflect_on is None else "", options,
+                           bound=ctx.problem is not None, course=course)
         if analysis.intent == "REPLY" and awaiting and analysis.answer_correct is None and not analysis.understood:
             analysis.answer_correct = bool(hints.answered(text, hint))  # 判不了按没答对处理：多帮一点比错夸要稳妥
+        if reflect_on is not None:
+            # 回顾没有“标准答案”，不记答对答错；说了有内容的话就是在解释自己的想法（进理解评估）
+            analysis.answer_correct = None
+            if analysis.intent not in ("STUCK", "ANSWER") and len(re.sub(r"\s", "", prose)) >= 4:
+                analysis.intent, analysis.has_attempt = "REPLY", True
     # 知识问答里没带上作业题、也没贴代码：“为什么……”“怎么……”按概念问题直接答，不反问是哪道题
     if knowledge and ctx.problem is None and not pasted and analysis.intent in ("DEBUG", "STUCK", "TASK"):
         analysis.intent = "CONCEPT"
@@ -307,12 +366,14 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         same_error_resubmit=ctx.same_error_resubmit, no_progress=ctx.no_progress,
         needs_example=analysis.intent != "CONCEPT" and action != "think" and teaching.needs_example(prose or text)))
     flow = decision.kind
+    if reflect_on is not None:
+        decision, flow = Decision("R00", "NA", "甲", "reflect"), "reflect"
     prior: m.StuckPoint | None = None
     stuck_point: m.StuckPoint | None = None
-    if in_recall and ctx.root_skill:
+    if in_recall and ctx.root_skill and reflect_on is None:
         decision = Decision("R07", "H3", "乙", "stuck")
         flow = "stuck"
-    if ctx.problem is not None and flow not in ("other", "concept", "task", "ack"):
+    if ctx.problem is not None and flow not in ("other", "concept", "task", "ack", "reflect"):
         if ctx.submission is not None and ctx.submission.detail_status != "done" and not ctx.source:
             decision, flow = Decision("R00", "NA", "甲", "pending"), "pending"
         elif ctx.submission is not None and ctx.submission.judgement == "AC" and not pasted \
@@ -346,7 +407,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             visible_titles[info.title] = info.brief
     history = [(x.role, message_text(x)) for x in thread_messages(s, user_id, thread, course, topic)[-6:] if x.kind == "text"]
     draft, source, check_result, retries = _produce(ctx, decision, flow, text, history, prior, prior_ref,
-                                                    decision.kind, visible_titles)
+                                                    decision.kind, visible_titles, reflect)
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
         stuck_point.given_code, stuck_point.key_line = draft.code, draft.key_line or 1
     actions = list(draft.actions)
@@ -362,9 +423,9 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
 
     # 第 8 步 收尾
     rnd.last_message_at = now
-    if ctx.submission is not None:
+    if ctx.submission is not None and reflect_on is None:
         rnd.submission_id = ctx.submission.submission_id
-    if ctx.root_skill:
+    if ctx.root_skill and reflect_on is None:
         rnd.skill_code, rnd.error_code = ctx.root_skill, ctx.root_error
     if analysis.intent == "REPLY" and analysis.answer_correct is False and action is None:
         rnd.failed_replies += 1
@@ -377,13 +438,16 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             rnd.asked_back += 1
     if draft.quote is not None:
         rnd.located = True
-    if analysis.understood and action is None:
+    if reflect_on is not None:
+        close_round(s, rnd, m.REFLECT_END, now)   # 一问一答就结束；后台照常评“理解”
+    elif analysis.understood and action is None:
         close_round(s, rnd, "学生表示懂了", now)
 
     s.add(m.ChatStep(
         message_id=student_msg.id, round_id=rnd.id, user_id=user_id,
         intent=analysis.intent, skill_code=analysis.skill_code or ctx.root_skill, has_attempt=analysis.has_attempt,
-        act=dialogue_act(analysis.intent, analysis.has_attempt, action), answer_correct=analysis.answer_correct,
+        act=("self_explain" if reflect_on is not None and analysis.has_attempt
+             else dialogue_act(analysis.intent, analysis.has_attempt, action)), answer_correct=analysis.answer_correct,
         has_code=bool(pasted), icap=analysis.icap, analysis_source=analysis.source,
         course_id=course, server_id=ctx.problem.server_id if ctx.problem else None,
         problem_id=ctx.problem.problem_id if ctx.problem else None,
