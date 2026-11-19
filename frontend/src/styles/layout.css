@@ -1585,12 +1585,20 @@
   white-space: pre-wrap;
 }
 
+/* 小标题（题目描述、输入格式……）：加粗、比正文大一号，前面空出一段 */
 .stmt-h {
-  margin: var(--sp-10) 0 var(--sp-4);
-  font-size: var(--fs-13);
-  font-weight: 600;
+  margin: var(--sp-16) 0 var(--sp-6);
+  font-size: var(--fs-16);
+  font-weight: 700;
+  line-height: 1.4;
   color: var(--ink);
 }
+
+/* 公式（KaTeX）：行内的跟着正文走；单独一行的居中，太长时左右滚动 */
+.stmt-math { white-space: normal; }
+.stmt-math .katex { font-size: 1.12em; }
+.stmt-math-block { display: block; margin: var(--sp-6) 0; overflow-x: auto; overflow-y: hidden; }
+.stmt-math-raw { font-family: var(--font-code); font-size: .95em; }
 
 .stmt-h:first-child {
   margin-top: 0;
