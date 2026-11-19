@@ -286,6 +286,9 @@ _SYSTEM = """你在整理一道 C 语言程序设计题的题面。下面的文�
 - 输入示例1、输出示例1等编号形式统一写成“样例输入 1”“样例输出 1”，标题后换行再写数据。样例输出只含输出数据；样例说明、推导、提示必须另起标题和正文，不能混进样例代码块；输出格式不能包住后面的样例；
 - 样例的输入、输出逐行照抄，一个字符都不能改，保留原来的换行；
 - 不许增加原文没有的内容；不许改数字；不许解释题目、不许给思路和代码；
+- 题目描述、输入输出格式、提示里的数学式子（范围、上下标、幂、分式、求和、取模）写成 LaTeX，用 $ 包起来，
+  比如 $1 \\le n \\le 10^{5}$、$a_i$、$10^{9}+7$、$\\frac{a}{b}$；单独成行的长式子用 $$...$$。$ 里不写汉字；
+  样例的输入、输出不写 LaTeX、不加 $；C 语言的代码、运算符（比如 a<=b、i++）照原样，不当成数学式子；
 - [图1] 这样的标记是示意图的位置（你看不到图），原样留在原来的位置；
 - 实在认不出的字，按上下文最可能的字还原，并把 restored 设为 true。
 
@@ -293,6 +296,7 @@ _SYSTEM = """你在整理一道 C 语言程序设计题的题面。下面的文�
 
 _HEADINGS = ("题目描述", "输入格式", "输出格式", "样例输入", "样例输出", "提示", "输入", "输出", "样例")
 _NUM = re.compile(r"\d+(?:\.\d+)?")
+_MATH = re.compile(r"\$\$(.+?)\$\$|\$([^$\n]+?)\$", re.S)
 
 
 def _cjk(text: str) -> list[str]:
@@ -312,6 +316,10 @@ def check_tidy(raw: str, out: str, raw_garbled: bool) -> str | None:
     raw_body, out_body = FIG_MARK.sub("", raw), FIG_MARK.sub("", out)
     if garbled(out_body) is not None:
         return "整理后还是乱码"
+    if out_body.count("$") % 2:
+        return "公式的 $ 没有配对"
+    if any(_cjk("".join(m)) for m in _MATH.findall(out_body)):
+        return "公式里写了汉字"
     # 全角样例编号被规范成半角仍是同一个数字；样例正文的改动已由上面的逐项检查拦住。
     src_nums = {unicodedata.normalize("NFKC", n) for n in _NUM.findall(raw_body)}
     out_nums = {unicodedata.normalize("NFKC", n) for n in _NUM.findall(out_body)}

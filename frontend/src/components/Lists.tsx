@@ -1,5 +1,5 @@
 // 作业选择器、题目列表、右栏“这道题”。
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useSlider } from "./Slider";
 import { Link } from "react-router-dom";
 import { Check, ChevronDown, ChevronUp, ChevronsUpDown, Circle, CircleCheck, CircleX, FileText, GitCompare, History, Hourglass, Layers, MessageCircle } from "lucide-react";
@@ -7,7 +7,7 @@ import { api } from "../api";
 import { useEscape, useLoad } from "../lib/hooks";
 import { deadline, fullTime, shortTime } from "../lib/time";
 import { sortProblems } from "../lib/problems";
-import { statementBlocks } from "../lib/statement";
+import { mathPieces, statementBlocks } from "../lib/statement";
 import type { Homework, ProblemDetail, ProblemRow, SubmissionChange } from "../types";
 import { Cells, CodeBlock, Loading, Meter, Problem } from "./ui";
 
@@ -152,6 +152,35 @@ export function ChangeNote({ change, onDiff }: { change: SubmissionChange | unde
 type Figure = ProblemDetail["figures"][number];
 
 /** 正文里的 [图N] 换成图。 */
+type Render = (tex: string, display: boolean) => string;
+let mathModule: Promise<Render> | null = null;
+/** KaTeX 只在题面里真有公式时才加载。 */
+function loadMath(): Promise<Render> {
+  mathModule ??= import("../lib/math").then((m) => m.renderMath);
+  return mathModule;
+}
+
+/** 一段题面文字：公式用 KaTeX 排，别的原样（换行照旧）。KaTeX 还没加载好时先显示原文。 */
+function MathText({ text }: { text: string }) {
+  const pieces = useMemo(() => mathPieces(text), [text]);
+  const hasMath = pieces.some((p) => p.kind === "math");
+  const [render, setRender] = useState<Render | null>(null);
+  useEffect(() => {
+    if (!hasMath) return;
+    let alive = true;
+    loadMath().then((r) => { if (alive) setRender(() => r); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [hasMath]);
+  if (!hasMath) return <span>{text}</span>;
+  return (
+    <span>
+      {pieces.map((p, i) => p.kind === "text" ? <Fragment key={i}>{p.text}</Fragment>
+        : render ? <span key={i} className={p.display ? "stmt-math stmt-math-block" : "stmt-math"} dangerouslySetInnerHTML={{ __html: render(p.tex, p.display) }} />
+          : <span key={i} className="stmt-math-raw">{p.tex}</span>)}
+    </span>
+  );
+}
+
 function WithFigures({ text, byN }: { text: string; byN: Map<number, Figure> }) {
   const parts = text.split(/\[图(\d+)\]/);
   return (
@@ -162,7 +191,7 @@ function WithFigures({ text, byN }: { text: string; byN: Map<number, Figure> }) 
           let s = part;
           if (i > 0) s = s.replace(/^\n/, "");
           if (i < parts.length - 1) s = s.replace(/\n$/, "");
-          return s ? <span key={i}>{s}</span> : null;
+          return s ? <MathText key={i} text={s} /> : null;
         }
         const f = byN.get(Number(part));
         return f ? <FigureImg key={`f${f.n}`} f={f} /> : null;
