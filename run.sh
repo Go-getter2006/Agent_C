@@ -138,7 +138,7 @@ bg_start() {
   sleep 2
   if running; then
     say "已在后台启动：$(url_hint)"
-    echo "    停止：./run.sh stop    看日志：./run.sh log    看状态：./run.sh status"
+    echo "    停止：./run.sh stop    看日志：./run.sh log    看状态：./run.sh status    更新：./run.sh update"
   else
     tail -n 20 "$LOGFILE" || true
     die "没有启动起来，上面是日志的最后几行"
