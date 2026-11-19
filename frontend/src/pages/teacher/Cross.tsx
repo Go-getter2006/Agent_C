@@ -166,7 +166,7 @@ function Links({ d, reload }: { d: CrossData; reload: () => void }) {
 }
 
 export default function Cross({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<CrossData>(`/api/teacher/classes/${cls.key}/cross`), [cls.key], 120000);
+  const data = useLoad(() => get<CrossData>(`/api/teacher/classes/${cls.key}/cross`), [cls.key], 120000, false, `t:cross:${cls.key}`);
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!data.data) return <div className="card card-body"><Loading what="正在取跨课程的数据" lines={5} /></div>;
   return (

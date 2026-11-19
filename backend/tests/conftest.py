@@ -27,6 +27,16 @@ config.SYNC_IN_WEB = False
 
 
 @pytest.fixture(autouse=True)
+def _fresh_page_cache():
+    """教师端汇总页的结果缓存（app/web/cache.py）每个测试清空，别拿到上一个测试的库算出来的结果。"""
+    from app.web import cache
+
+    cache.clear()
+    yield
+    cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_xdoj(monkeypatch):
     """测试不连真实的 XDOJ：登录时没注入假 XDOJ 的，一律当作连不上（代码里写着 C 语言那台的真实地址）。"""
     import httpx
