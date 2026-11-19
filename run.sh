@@ -106,6 +106,23 @@ PY
 
 running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
+# 装成了系统服务（./run.sh service）：停止、重启、更新、看日志都交给 systemd，不再自己起一份抢端口
+UNIT=agent-c
+service_on() {
+  command -v systemctl >/dev/null 2>&1 && [ -f "/etc/systemd/system/$UNIT.service" ] \
+    && systemctl is-enabled --quiet "$UNIT" 2>/dev/null
+}
+
+# 日志超过 20 MB 就换一个新文件，旧的留一份 server.log.1
+LOG_MAX=$((20 * 1024 * 1024))
+rotate_log() {
+  [ -f "$LOGFILE" ] || return 0
+  if [ "$(stat -c %s "$LOGFILE" 2>/dev/null || echo 0)" -gt "$LOG_MAX" ]; then
+    mv -f "$LOGFILE" "$LOGFILE.1"
+    say "日志超过 20 MB，旧的挪到了 server.log.1"
+  fi
+}
+
 url_hint() {
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -130,6 +147,7 @@ bg_start() {
     return 0
   fi
   prepare_db
+  rotate_log
   cd "$ROOT/backend"
   nohup .venv/bin/python -m app.cli serve --host "$HOST" --port "$PORT" < /dev/null >> "$LOGFILE" 2>&1 &
   echo $! > "$PIDFILE"
@@ -184,20 +202,21 @@ case "${1:-}" in
   "")
     setup_all
     move_demo_out
-    bg_start
+    if service_on; then sudo systemctl start "$UNIT"; say "系统服务已启动：$(url_hint)"; else bg_start; fi
     ;;
   stop)
-    bg_stop
+    if service_on; then sudo systemctl stop "$UNIT"; say "已停止（系统服务）"; else bg_stop; fi
     ;;
   restart)
-    bg_stop
-    bg_start
+    if service_on; then sudo systemctl restart "$UNIT"; say "已重启（系统服务）：$(url_hint)"; else bg_stop; bg_start; fi
     ;;
   status)
-    if running; then say "在运行（进程 $(cat "$PIDFILE")）：$(url_hint)"; else say "没有在运行。启动：./run.sh"; fi
+    if service_on; then
+      if systemctl is-active --quiet "$UNIT"; then say "系统服务在运行：$(url_hint)"; else say "系统服务没有在运行。启动：./run.sh"; fi
+    elif running; then say "在运行（进程 $(cat "$PIDFILE")）：$(url_hint)"; else say "没有在运行。启动：./run.sh"; fi
     ;;
   log)
-    tail -n 50 -f "$LOGFILE"
+    if service_on; then journalctl -u "$UNIT" -n 50 -f; else tail -n 50 -f "$LOGFILE"; fi
     ;;
   fg|start)  # start：给以前装的系统服务用
     fg_start
@@ -219,8 +238,7 @@ case "${1:-}" in
     say "拉最新代码"
     git pull --ff-only
     setup_all
-    bg_stop
-    bg_start
+    if service_on; then sudo systemctl restart "$UNIT"; say "已更新并重启（系统服务）：$(url_hint)"; else bg_stop; bg_start; fi
     ;;
   deps)
     command -v apt-get >/dev/null 2>&1 || die "这个命令只支持 Ubuntu / Debian，别的系统请自己装 Python 3.11+ 和 gcc"
@@ -231,7 +249,7 @@ case "${1:-}" in
     ;;
   service)
     setup_all
-    bg_stop >/dev/null
+    bg_stop >/dev/null   # 脚本自己在后台起的那份先停掉，免得和服务抢端口
     install_service
     ;;
   *)
