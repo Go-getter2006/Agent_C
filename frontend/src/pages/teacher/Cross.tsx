@@ -7,7 +7,7 @@ import { Check, CircleAlert, X } from "lucide-react";
 import { get, post } from "../../api";
 import { Card, Empty, Loading, Problem, Segmented } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
-import { Code, pct, type ClassInfo } from "./common";
+import { Code, pct, useClasses, type ClassInfo } from "./common";
 
 interface SkillSide { code: string; name: string; kp: string; kpCode?: string }
 interface CrossLinkRow {
@@ -166,7 +166,8 @@ function Links({ d, reload }: { d: CrossData; reload: () => void }) {
 }
 
 export default function Cross({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<CrossData>(`/api/teacher/classes/${cls.key}/cross`), [cls.key], 120000, false, `t:cross:${cls.key}`);
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const data = useLoad(() => get<CrossData>(`/api/teacher/classes/${cls.key}/cross`), [cls.key, tick], 0, false, `t:cross:${cls.key}`, String(tick));
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!data.data) return <div className="card card-body"><Loading what="正在取跨课程的数据" lines={5} /></div>;
   return (

@@ -1,5 +1,5 @@
 // 教师端共用：导航、班级选择、页面骨架、几个对照表。
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ClipboardCheck, Database, FileDown, GitCompare, LayoutDashboard, LifeBuoy, Link2, Users, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
@@ -63,15 +63,45 @@ interface ClassesValue {
   role: string;
   course: "C" | "D"; // 这次登录的课程：两门课分开登录
   reload: () => void;
+  /** 数据的版本：数据变了加一。页面拿它当依赖（变了才重取），不各自定时刷新。 */
+  tick: number;
 }
 
-const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher", course: "C", reload: () => undefined });
+const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher", course: "C", reload: () => undefined, tick: 0 });
+
+/** 教师端只在这一个地方定时问“数据变没变”（/api/teacher/version）：页面看得见时每分钟一次（还没有班级时 15 秒），
+ *  切回这个标签页马上问一次；变了才让页面重取。返回两个计数：data（任何数据）、classes（班级和名单）。 */
+function useVersionTicks(fast: boolean): { data: number; classes: number } {
+  const [ticks, setTicks] = useState({ data: 0, classes: 0 });
+  const last = useRef<{ data: string; classes: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      get<{ data: string; classes: string }>("/api/teacher/version").then((v) => {
+        if (!alive) return;
+        const prev = last.current;
+        last.current = v;
+        if (!prev || (prev.data === v.data && prev.classes === v.classes)) return;   // 第一次只记下（页面刚取过）
+        setTicks((t) => ({ data: t.data + (prev.data !== v.data ? 1 : 0), classes: t.classes + (prev.classes !== v.classes ? 1 : 0) }));
+      }).catch(() => undefined);
+    };
+    if (!last.current) check();   // 只是快慢变了（有了班级）就不用马上再问
+    const timer = window.setInterval(check, fast ? 15000 : 60000);
+    const onShow = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onShow);
+    return () => { alive = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", onShow); };
+  }, [fast]);
+  return ticks;
+}
 
 export function ClassesProvider({ children }: { children: ReactNode }) {
-  // 定时刷新：第一次登录后班级和名单是后台陆续同步进来的，页面要跟着出现（还没有班级时 15 秒一次，有了以后一分钟一次）
-  const [poll, setPoll] = useState(15000);
-  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string; course: "C" | "D" }>("/api/teacher/classes"), [], poll, false, "t:classes");
-  useEffect(() => setPoll(list.data?.classes.length ? 60000 : 15000), [list.data]);
+  // 第一次登录后班级和名单是后台陆续同步进来的：还没有班级时问得勤一点，班级、名单变了才重取
+  const [fast, setFast] = useState(true);
+  const ticks = useVersionTicks(fast);
+  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string; course: "C" | "D" }>("/api/teacher/classes"),
+    [ticks.classes], 0, false, "t:classes", String(ticks.classes));
+  useEffect(() => setFast(!list.data?.classes.length), [list.data]);
   const [picked, setPicked] = useState<string | null>(() => {
     try {
       return window.localStorage.getItem(CLASS_KEY);
@@ -90,8 +120,8 @@ export function ClassesProvider({ children }: { children: ReactNode }) {
     }
   }, []);
   const value = useMemo(() => ({ classes, current, pick, loading: list.loading && !list.data, error: list.error,
-    role: list.data?.role ?? "teacher", course: list.data?.course ?? "C", reload: list.reload }),
-  [classes, current, pick, list.loading, list.data, list.error, list.reload]);
+    role: list.data?.role ?? "teacher", course: list.data?.course ?? "C", reload: list.reload, tick: ticks.data }),
+  [classes, current, pick, list.loading, list.data, list.error, list.reload, ticks.data]);
   return <ClassesContext.Provider value={value}>{children}</ClassesContext.Provider>;
 }
 

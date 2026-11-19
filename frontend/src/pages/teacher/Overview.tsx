@@ -8,7 +8,7 @@ import { BarList, ColumnChart, LineChart } from "../../components/charts";
 import { Avatar, Card, Empty, Loading, Problem, Stat } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { deadline } from "../../lib/time";
-import { Code, type ClassInfo } from "./common";
+import { Code, useClasses, type ClassInfo } from "./common";
 
 interface Overview {
   class: { key: string; name: string; students: number; activeThisWeek: number };
@@ -26,7 +26,8 @@ interface Overview {
 }
 
 export default function ClassOverview({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<Overview>(`/api/teacher/classes/${cls.key}/overview`), [cls.key], 60000, false, `t:overview:${cls.key}`);
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const data = useLoad(() => get<Overview>(`/api/teacher/classes/${cls.key}/overview`), [cls.key, tick], 0, false, `t:overview:${cls.key}`, String(tick));
   const d = data.data;
   if (data.error && !d) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在汇总全班的情况" lines={5} /></div>;

@@ -5,7 +5,7 @@ import { CircleCheck } from "lucide-react";
 import { get } from "../../api";
 import { Card, Empty, Facts, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
-import type { ClassInfo } from "./common";
+import { useClasses, type ClassInfo } from "./common";
 
 type R = { n: number; d: number } | null;
 
@@ -24,7 +24,8 @@ const frac = (r: R) => (r ? `${r.n}/${r.d}` : "—");
 const corr = (x: number | null) => (x === null ? "样本不够" : x.toFixed(2));
 
 export default function Help({ cls }: { cls: ClassInfo }) {
-  const data = useLoad(() => get<HelpData>(`/api/teacher/classes/${cls.key}/help`), [cls.key], 120000, false, `t:help:${cls.key}`);
+  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const data = useLoad(() => get<HelpData>(`/api/teacher/classes/${cls.key}/help`), [cls.key, tick], 0, false, `t:help:${cls.key}`, String(tick));
   const d = data.data;
   if (data.error && !d) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在汇总" lines={5} /></div>;
