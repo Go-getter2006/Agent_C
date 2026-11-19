@@ -104,11 +104,14 @@ def test_stuck_list_and_graph_page(client, demo):
     login(client, "demo-teacher")
     key = f"c{sid}-31"
     stuck = client.get(f"/api/teacher/classes/{key}/stuck").json()
-    row = stuck["rows"][0]
-    assert (row["userId"], row["name"], row["skill"]["code"], row["times"], row["lastProblem"]) == (
-        UID, "林晓", "C06.03.02", 2, "成绩最高分")
-    assert row["skill"]["name"].startswith("最值的初值设定")
-    assert stuck["onceOnly"] >= 1 and stuck["common"][0]["students"] >= 1
+    row = next(r for r in stuck["rows"] if r["code"] == "C06.03")   # 按知识点汇总
+    assert (row["name"], row["episodes"], row["repeat"]) == ("最值、求和、统计", 2, 1)
+    assert row["skills"][0]["code"] == "C06.03.02" and row["skills"][0]["episodes"] == 2
+    me = row["studentRows"][0]
+    assert (me["userId"], me["name"], me["times"], me["rounds"], me["lastProblem"]) == (UID, "林晓", 2, 2, "成绩最高分")
+    assert me["skills"][0].startswith("最值的初值设定")
+    assert row["passed"]["d"] >= 1 and stuck["version"] == "stuck-kp-1"
+    assert all(set(r) >= {"recall", "passed", "transfer", "silent", "silentRows"} for r in stuck["rows"])
     g = client.get(f"/api/teacher/classes/{key}/graph").json()
     assert g["trial"] is True and g["prereqStatus"] == "初稿，未审定"
     assert g["data"]["students"] == 12 and g["data"]["evidence"] > 100 and g["data"]["predictions"] > 50
@@ -295,6 +298,37 @@ def test_log_request_scoped_audited_and_minimal(client, demo):
     assert client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": req["token"]}).status_code == 410
     listed = client.get("/api/teacher/logs").json()["requests"]
     assert [x["status"] for x in listed][:2] == ["ready", "revoked"] and listed[1]["downloads"] == 1
+
+
+def test_research_export_is_deidentified(client, demo):
+    """研究用：学号换成化名（每次一样）、没有姓名和提交编号；卡点、求助回合、理解评估、独立作答的字段都在。"""
+    from app import logs
+
+    login(client, "demo-teacher")
+    body = {"ids": UID, "dateFrom": "2026-06-01", "dateTo": "2027-05-31", "format": "json", "deidentify": True,
+            "kinds": ["submission", "ask", "quiz", "review", "round", "stuck", "assess"], "purpose": "论文数据分析",
+            "includeText": True}
+    req = client.post("/api/teacher/logs", json=body).json()["request"]
+    assert req["deidentified"] is True
+    js = client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": req["token"]}).json()
+    blob = json.dumps(js, ensure_ascii=False)
+    alias = logs.pseudonym(UID)
+    assert UID not in blob and "林晓" not in blob and js["request"]["students"] == [alias]
+    assert {r["user_id"] for r in js["rows"]} == {alias} and all("name" not in r and "submission_id" not in r for r in js["rows"])
+    kinds = {r["kind"] for r in js["rows"]}
+    assert {"卡点", "求助回合", "理解评估", "在 XDOJ 提交"} <= kinds
+    stuck = next(r for r in js["rows"] if r["kind"] == "卡点")["data"]
+    assert stuck["version"] == "stuck-kp-1" and stuck["kp"] == stuck["skill"][:6] and "passed" in stuck
+    rnd = next(r for r in js["rows"] if r["kind"] == "求助回合")["data"]
+    assert {"maxHelp", "askedBack", "failedReplies", "studentMessages", "minutes", "endReason"} <= set(rnd)
+    quiz = next(r for r in js["rows"] if r["kind"] in ("小题", "复习"))["data"]
+    assert {"protocol", "judgedHasBug", "firstLines", "locateHit", "firstFixPass", "firstFixClean", "hints",
+            "sampleRuns", "events"} <= set(quiz)
+    assert js["request"]["versions"]["stuck"] == "stuck-kp-1"
+    # 同一个学生再导一次，化名一样（几份文件能对上）
+    again = client.post("/api/teacher/logs", json={**body, "format": "csv"}).json()["request"]
+    text = client.get(f"/api/teacher/logs/{again['id']}/download", params={"token": again["token"]}).content.decode("utf-8-sig")
+    assert text.splitlines()[0].startswith("化名,时间,类型,交互") and alias in text and "林晓" not in text
 
 
 def test_other_teacher_cannot_get_logs_of_my_students(client, demo):

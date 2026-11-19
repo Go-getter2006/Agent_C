@@ -11,7 +11,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from .. import config, db, llm, pipeline, quiz
+from .. import config, db, llm, pipeline, quiz, review
 from .. import models as m
 from ..chat import workflow
 from ..labeling.problems import reference_solution, save_problem_label
@@ -185,6 +185,11 @@ def _run_timeline(server_id: int, now: dt.datetime, with_story: bool) -> None:
 
     def answer_quiz(minutes_ago: float, confidence: str):
         def run(s, at):
+            # 演示学生稍后进入复习提升，在独立窗口检查刚刚改对的技能。
+            target = s.scalar(select(m.ReviewItem).where(m.ReviewItem.user_id == uid,
+                              m.ReviewItem.origin_problem_id == 410))
+            if target is not None:
+                review.start(s, uid, target.id, at, "C")
             attempt = s.scalars(select(m.QuizAttempt).where(
                 m.QuizAttempt.user_id == uid, m.QuizAttempt.state != "done").order_by(m.QuizAttempt.id.desc())).first()
             if attempt is None:
@@ -219,6 +224,9 @@ def _run_timeline(server_id: int, now: dt.datetime, with_story: bool) -> None:
     for at, kind, payload in sorted(events, key=lambda e: (e[0], e[1])):
         with db.session_scope() as s:
             if kind == 0:
+                sub = s.get(m.Submission, (server_id, payload))
+                if with_story and sub.user_id == uid and sub.problem_id == 406:
+                    sub.notice_eligible = True
                 pipeline.process_submission(s, server_id, payload, now=at + dt.timedelta(seconds=30))
             else:
                 payload(s, at)

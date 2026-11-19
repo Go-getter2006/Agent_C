@@ -226,7 +226,7 @@ export default function Workbench() {
   const xdoj = status?.xdoj;
 
   const listPane = (onNavigate?: () => void) => (
-    <HomeworkNavigator homeworks={homeworks} current={current} problems={problems} currentKey={key ?? null}
+    <HomeworkNavigator unread={status?.unread} homeworks={homeworks} current={current} problems={problems} currentKey={key ?? null}
       entered={entered} loading={hwLoading} ready={listOk} error={list.error ?? hwError}
       onEnter={pickHomework} onBack={() => { setSelectFirstFor(null); setEntered(false); }} onNavigate={onNavigate} />
   );
@@ -319,7 +319,7 @@ export default function Workbench() {
           </header>
           {isProblem ? (
             <Thread threadKey={key!} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
-              welcomeKey={!passed && latest && !["AC", "PENDING", "UNKNOWN"].includes(latest.result) ? latest.key : null}
+              latestNotice={status?.unread?.problems[key!]} onNoticeRead={reloadStatus}
               emptyReady={!!d || !!row?.last} waitingContext={!!picked && !d} context={context} onActivity={refresh} />
           ) : (
             <HomeworkIntro noHomework={!current && !hwLoading && homeworks.length === 0} />

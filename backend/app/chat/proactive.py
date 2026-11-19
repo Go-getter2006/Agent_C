@@ -5,7 +5,7 @@ import datetime as dt
 import difflib
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from .. import catalog, config, db
@@ -101,16 +101,19 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
         return None
     s.scalar(select(m.Submission.submission_id).where(m.Submission.server_id == sub.server_id,
              m.Submission.submission_id == sub.submission_id).with_for_update())
-    if s.scalar(select(m.ChatMessage.id).where(m.ChatMessage.server_id == sub.server_id,
-                m.ChatMessage.failure_submission_id == sub.submission_id)) is not None:
+    existing = s.scalar(select(m.ChatMessage).where(m.ChatMessage.server_id == sub.server_id,
+                        m.ChatMessage.failure_submission_id == sub.submission_id))
+    if existing is not None and (existing.notice_read_at is not None or
+            (existing.content or {}).get("proactive", {}).get("kind") != "failure"):
+        return None
+    label = _primary(s, sub)
+    if existing is not None and label is None:
         return None
     if not catalog.is_visible(s, sub.user_id, sub.server_id, sub.problem_id):
         return None
     subs = catalog.user_submissions(s, sub.user_id, sub.server_id, sub.problem_id)
     upto = [x for x in subs if x.submission_id <= sub.submission_id]
-    label = _primary(s, sub)
     attempt = len(upto)
-    info = catalog.problem_info(s, sub.server_id, sub.problem_id)
     blocks: list[dict] = []
     kind = ""
     recur = find_recurrence(s, sub, label) if label is not None and label.confidence >= config.CHAT["low_confidence"] else None
@@ -138,17 +141,23 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
         if attempt >= cfg()["stuck_attempts"] and (same or attempt >= cfg()["stuck_attempts"] + 1):
             blocks.append({"t": "p", "text": f"第 {attempt} 次提交还是没过（{_grid_text(s, sub)}）。"
                                              f"{'问题好像还在同一个地方。' if same else ''}要不要一起看看？"})
-            blocks.append({"t": "p", "text": "你觉得问题可能出在哪一部分？说说你的想法，或者点下面的按钮。"})
+            blocks.append({"t": "p", "text": "你觉得问题可能出在哪一部分？说说你已经检查过哪一步。"})
             kind = "stuck"
     if not kind:
         kind = "failure"
         blocks.append({"t": "p", "text": f"你的第 {attempt} 次提交没有通过。你原本期待程序在哪一步得到什么结果？"})
+    content = {"blocks": blocks, "actions": list(HELP_ACTIONS),
+               "proactive": {"kind": kind, "submission": sub.submission_id}}
+    if existing is not None:
+        if kind != "failure":
+            s.execute(update(m.ChatMessage).where(m.ChatMessage.id == existing.id,
+                      m.ChatMessage.notice_read_at.is_(None)).values(content=content))
+        return None
     msg = m.ChatMessage(user_id=sub.user_id, failure_submission_id=sub.submission_id,
                         server_id=sub.server_id, problem_id=sub.problem_id,
                         course=_course(s, sub.server_id), role="agent", kind="text", created_at=now,
-                        content={"blocks": blocks, "actions": list(HELP_ACTIONS),
-                                 "proactive": {"kind": kind, "submission": sub.submission_id}})
+                        content=content)
     s.add(msg)
     s.flush()
-    log.info("主动消息（%s）：%s", kind, info.title if info else sub.problem_id)
+    log.debug("作业提醒已写入（%s）", kind)
     return msg

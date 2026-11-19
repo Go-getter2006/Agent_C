@@ -105,6 +105,7 @@ export interface QuizView {
 }
 
 export interface Message {
+  unreadNotice?: boolean;
   id: number;
   role: "student" | "agent";
   kind: "text" | "quiz";
@@ -245,6 +246,7 @@ export interface Me {
 }
 
 export interface StatusInfo {
+  unread?: { problems: Record<string, number>; homeworks: string[] };
   xdoj: { ok: boolean; dataTime: string | null; demo: boolean };
   dueReviews: number;
   llm: boolean;

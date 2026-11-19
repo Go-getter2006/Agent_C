@@ -43,7 +43,12 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
             mastery.record_failed_submission(s, sub, primary.skill_code)
             if review.on_recurrence(s, sub, primary.error_code, primary.skill_code) is None:
                 review.enqueue(s, sub.user_id, primary.skill_code, "failed", sub.server_id,
-                               sub.problem_id, sub.submit_time or db.now())
+                               sub.problem_id, sub.submit_time or db.now(), sub.submission_id)
+        elif sub.judgement != "UNKNOWN":
+            problem = labeler.current_problem_label(s, server_id, sub.problem_id)
+            if problem is not None:
+                review.enqueue(s, sub.user_id, problem.primary_skill, "failed", server_id,
+                               sub.problem_id, sub.submit_time or db.now(), sub.submission_id)
         from .chat import proactive
 
         proactive.on_failed_submission(s, sub, now)   # 卡住或重犯：智能体主动先说一句

@@ -18,7 +18,7 @@ interface LogMeta {
 
 interface RequestView {
   id: number; createdAt: string; requester: string; from: string; to: string; kinds: string[]; kindNames: string[];
-  includeText: boolean; format: string; purpose: string; granted: number; denied: string[]; rows: number;
+  includeText: boolean; deidentified: boolean; format: string; purpose: string; granted: number; denied: string[]; rows: number;
   status: "ready" | "expired" | "revoked"; expiresAt: string; downloads: number; token: string | null;
 }
 
@@ -47,6 +47,7 @@ export default function Logs() {
   const [to, setTo] = useState(() => isoDay(new Date()));
   const [kinds, setKinds] = useState<string[] | null>(null);
   const [includeText, setIncludeText] = useState(false);
+  const [deidentify, setDeidentify] = useState(false);
   const [format, setFormat] = useState<"csv" | "json">("csv");
   const [purpose, setPurpose] = useState("");
   const [busy, setBusy] = useState(false);
@@ -65,7 +66,7 @@ export default function Logs() {
     setError(null);
     try {
       const r = await post<CreateResult>("/api/teacher/logs", {
-        ids, classKeys, dateFrom: from, dateTo: to, kinds: chosenKinds, includeText, format, purpose,
+        ids, classKeys, dateFrom: from, dateTo: to, kinds: chosenKinds, includeText, deidentify, format, purpose,
       });
       setResult(r);
       meta.reload();
@@ -131,6 +132,10 @@ export default function Logs() {
                 <input type="checkbox" checked={includeText} onChange={(e) => setIncludeText(e.target.checked)} />
                 包括学生提问和智能体回复的原文（默认不给，只给长度和类型）
               </label>
+              <label className="check">
+                <input type="checkbox" checked={deidentify} onChange={(e) => setDeidentify(e.target.checked)} />
+                去标识（研究用）：学号换成化名，不含姓名和提交编号
+              </label>
             </fieldset>
             <fieldset>
               <legend>格式和用途</legend>
@@ -158,6 +163,7 @@ export default function Logs() {
               <li><ShieldCheck size={16} aria-hidden="true" /><span><b>每一行是一次交互</b>：学号、姓名、时间、类型（登录、提交、提问、回复、小题、复习、看代码）、题目、提交编号。</span></li>
               <li><ShieldCheck size={16} aria-hidden="true" /><span><b>样例只有过没过</b>，比如“没通过第 3 组”“过过×过过”；测试数据的输入输出不会给出。</span></li>
               <li><ShieldCheck size={16} aria-hidden="true" /><span><b>不含密码、令牌、登录 IP</b>；这些从来不进库。</span></li>
+              <li><ShieldCheck size={16} aria-hidden="true" /><span><b>去标识</b>：同一个学生每次的化名一样，几份文件能对上；卡点、求助回合、理解评估带指标版本。</span></li>
               <li><Clock size={16} aria-hidden="true" /><span>下载链接 {m.limits.ttlDays} 天后失效，随时可以撤销；每次下载都会记录。</span></li>
             </ul>
           </Card>
@@ -205,7 +211,7 @@ export default function Logs() {
                   <tr key={r.id}>
                     <td className="nowrap muted">{shortTime(r.createdAt)}</td>
                     {m.admin && <td>{r.requester}</td>}
-                    <td><span className="cell-title">{r.granted} 人 · {r.rows} 条</span><span className="cell-sub">{r.from.slice(0, 10)} 到 {r.to.slice(0, 10)} · {r.format.toUpperCase()}{r.includeText ? " · 含原文" : ""}</span></td>
+                    <td><span className="cell-title">{r.granted} 人 · {r.rows} 条</span><span className="cell-sub">{r.from.slice(0, 10)} 到 {r.to.slice(0, 10)} · {r.format.toUpperCase()}{r.includeText ? " · 含原文" : ""}{r.deidentified ? " · 去标识" : ""}</span></td>
                     <td className="muted">{r.kindNames.join("、")}</td>
                     <td>{r.purpose}</td>
                     <td><span className={STATUS[r.status].cls}>{STATUS[r.status].text}</span>{r.status === "ready" && <span className="cell-sub">{shortTime(r.expiresAt)} 失效</span>}</td>

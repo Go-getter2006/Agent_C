@@ -179,7 +179,7 @@ def can_start(s: Session, user_id: str, skill_code: str, at: dt.datetime | None 
 
 
 def choose_item(s: Session, user_id: str, skill_code: str, rng: random.Random | None = None,
-                exclude_scenes: set[str] | None = None) -> m.QuizItem | None:
+                exclude_scenes: set[str] | None = None, has_bug: bool | None = None) -> m.QuizItem | None:
     """选一道这个技能的小题。按最近 10 道控制“正确代码”占 40%~50%，具体哪道随机。"""
     rng = rng or _rng
     items = s.scalars(select(m.QuizItem).where(
@@ -192,6 +192,8 @@ def choose_item(s: Session, user_id: str, skill_code: str, rng: random.Random | 
         .where(m.QuizAttempt.user_id == user_id).order_by(m.QuizAttempt.id.desc())
         .limit(config.QUIZ["ratio_window"])).all()
     done_ids = {r[0] for r in recent}
+    if has_bug is not None:
+        items = [i for i in items if i.has_bug == has_bug] or items
     fresh = [i for i in items if i.id not in done_ids] or list(items)
     if exclude_scenes:
         fresh = [i for i in fresh if i.scene not in exclude_scenes] or fresh
@@ -446,7 +448,12 @@ def judge2(s: Session, attempt: m.QuizAttempt, says_bug: bool, confidence: str |
     attempt.judge_correct = says_bug == item.has_bug
     if confidence in CONFIDENCE:
         attempt.confidence, attempt.confidence_ms = confidence, elapsed_ms
-    _event(attempt, "judge", says="bug" if says_bug else "ok", confidence=confidence or "")
+    prepared = next((e for e in attempt.events or [] if e.get("kind") == "prepared"), {})
+    timing = {}
+    if prepared.get("triggerAt"):
+        delta = db.now() - dt.datetime.fromisoformat(prepared["triggerAt"])
+        timing["secondsSinceTrigger"] = max(0, int(delta.total_seconds()))
+    _event(attempt, "judge", says="bug" if says_bug else "ok", confidence=confidence or "", **timing)
     attempt.state = "locate"
 
 

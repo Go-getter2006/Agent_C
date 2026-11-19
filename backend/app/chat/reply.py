@@ -175,8 +175,8 @@ def template(ctx: Ctx, decision: Decision, flow: str, text: str = "", prior=None
         code = ex.code if ex is not None else (prior.given_code if prior is not None and prior.given_code else None)
         if code:
             return Draft(before="这个点已经卡过几次了，这次先看一个完整的小例子：", code=code, key_line=1,
-                         after="看懂之后做下面这道小题，它换了一个场景。")
-        return Draft(before="这个点已经卡过几次了。" + ctx.fill(hint.why), after="建议找老师当面讲一遍。下面这道小题先试试。")
+                         after="试着用自己的话说说，这一处为什么要这样改。")
+        return Draft(before="这个点已经卡过几次了。" + ctx.fill(hint.why), after="建议找老师当面讲一遍。")
     if flow == "explain":
         return Draft(before="先把上面那段照着写进你的代码里，交一次看看。哪一行没看懂，把那一行发给我。")
     return Draft(before="再把你的想法说具体一点，我接着帮你看。")

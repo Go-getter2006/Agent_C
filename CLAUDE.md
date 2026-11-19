@@ -27,6 +27,10 @@
 - 学生端三个栏目（知识问答 `/ask`、作业引导 `/homework`、复习提升 `/review`）加左下角我的学情（`/progress`，全部提交记录 `/submissions` 从这里进），依据 `docs/design/界面改造方案/`，进度在 `docs/界面改造落实记录.md`。知识问答不自动绑作业题、不插小题；各栏目记住最近位置和草稿（`frontend/src/lib/memory.ts`）；旧的 `/chat/...` 链接要一直能跳过去。
 - 复习提升的小题按独立作答（`quiz_attempts.protocol` 2）：先判断、再选位置或依据、判断有问题的再改；首次判断、首次选行、首稿记一次不改，运行和提示按顺序进 `events`。反馈之前不下发对错、错误行、标准改法、解释，也不标任何一行。新加的题型、页面都照这个做。
 - 判断、定位、修改三维（`app/diagnosis.py`）每个数都要能从作答记录复算，写清分子分母；定位、修改只算独立作答，旧版记录标“旧版未测定位”不补；不和掌握分配权重。学生端只给知识点名称、几比几、一句话。
+- 教师端“卡点”按知识点汇总（`app/stuckstats.py`），原始记录（`stuck_points`）仍是技能一层。卡点、盲评、三维这些研究指标每个数写清分子分母；定义改了就改模块里的 `VERSION`，并改 `docs/研究数据与指标.md`。
+- 老师盲评（`app/rating.py`）：材料和大模型看到的一样（`assess.dialogue`），不显示学生是谁、大模型和规则的等级、摘抄的原话。新加的大模型评估也要能盲评、进一致率。
+- 研究导出去标识（`logs.collect(deidentify=True)`）：学号换成 `logs.pseudonym`，不给姓名和提交编号，原文过 `strip_identity`；新加的导出类别照做，并带版本。
+- 教师端的班级汇总页加 `@page_cache`（`app/web/cache.py`）；新加的表会影响这些页面的，把它的最大编号或更新时间加进 `_VERSION_COLUMNS`。教师端请求开了 `mastery.memoize`，会写证据再读状态的地方（学生端、后台任务）不要开。
 - 学生和老师**一个登录入口**（学号 / 工号），不要再加学生、教师两个标签：名单里没有的账号去这门课的 XDOJ 试登，`userType` 是 1 就进教师端（`auth._teacher_or_new_student`）。测试一律不连真实 XDOJ（`conftest._no_real_xdoj`），要测登录就注入假 XDOJ。
 
 ## 已经实测确认的接口细节

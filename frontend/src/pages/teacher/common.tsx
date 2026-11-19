@@ -1,6 +1,6 @@
 // 教师端共用：导航、班级选择、页面骨架、几个对照表。
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { CircleAlert, Database, FileDown, GitCompare, LayoutDashboard, Link2, Users, Waypoints } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { CircleAlert, ClipboardCheck, Database, FileDown, GitCompare, LayoutDashboard, Link2, Users, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { Empty, Loading, Problem } from "../../components/ui";
@@ -12,6 +12,7 @@ export const NAV: NavItem[] = [
   { to: "/teacher/stuck", label: "卡点", icon: CircleAlert, section: "班级" },
   { to: "/teacher/map", label: "知识图谱", icon: Waypoints, section: "班级" },
   { to: "/teacher/models", label: "模型对比", icon: GitCompare, section: "研究" },
+  { to: "/teacher/rating", label: "盲评", icon: ClipboardCheck, section: "研究" },
   { to: "/teacher/logs", label: "日志申请", icon: FileDown, section: "数据" },
   { to: "/teacher/sources", label: "数据源", icon: Database, section: "数据" },
 ];
@@ -66,8 +67,10 @@ interface ClassesValue {
 const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher", course: "C", reload: () => undefined });
 
 export function ClassesProvider({ children }: { children: ReactNode }) {
-  // 定时刷新：第一次登录后班级和名单是后台陆续同步进来的，页面要跟着出现
-  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string; course: "C" | "D" }>("/api/teacher/classes"), [], 15000);
+  // 定时刷新：第一次登录后班级和名单是后台陆续同步进来的，页面要跟着出现（还没有班级时 15 秒一次，有了以后一分钟一次）
+  const [poll, setPoll] = useState(15000);
+  const list = useLoad(() => get<{ classes: ClassInfo[]; name: string; role: string; course: "C" | "D" }>("/api/teacher/classes"), [], poll, false, "t:classes");
+  useEffect(() => setPoll(list.data?.classes.length ? 60000 : 15000), [list.data]);
   const [picked, setPicked] = useState<string | null>(() => {
     try {
       return window.localStorage.getItem(CLASS_KEY);

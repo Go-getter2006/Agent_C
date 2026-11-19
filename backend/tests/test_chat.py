@@ -65,6 +65,8 @@ def test_seeded_story(demo):
     sid = demo["server_id"]
     with db.session_scope() as s:
         msgs = workflow.thread_messages(s, UID, (sid, 406))
+        assert len({x.failure_submission_id for x in msgs if x.failure_submission_id}) == 3
+        msgs = msgs[-5:]
         assert [x.role for x in msgs] == ["agent", "student", "agent", "student", "agent"]
         # 第 2 次提交又犯了在「最大差值」里改正过的错：智能体主动先说，摘出当时改对的代码
         assert msgs[0].content["proactive"]["kind"] == "recurrence" and "最大差值" in texts(msgs[0])
@@ -90,7 +92,7 @@ def test_seeded_story(demo):
         # 昨天那一回合：给了示例代码后通过，出了一道小题
         rounds = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 410)).all()
         assert [(r.status, r.end_reason, r.max_help_level, r.quiz_triggered) for r in rounds] == [
-            ("closed", "通过", "H3", True)]
+            ("closed", "通过", "H3", False)]
         stuck = s.scalars(select(m.StuckPoint).order_by(m.StuckPoint.id)).all()
         assert [(p.problem_id, p.skill_code, p.nth, p.resolution, p.passed_after) for p in stuck] == [
             (301, "C02.01.02", 1, "example_given", None), (410, "C06.03.02", 1, "example_given", True)]
@@ -213,7 +215,7 @@ def test_general_thread_binding_and_other_intents(demo):
         assert context.bind(s, UID, None, None, "交换两个数那题怎么做", "", later)[0] is None
 
 
-def test_pass_closes_round_and_triggers_quiz(demo):
+def test_pass_closes_round_and_queues_review(demo):
     sid = demo["server_id"]
     with db.session_scope() as s:
         last = s.scalars(select(m.Submission).where(m.Submission.user_id == UID, m.Submission.problem_id == 406)
@@ -225,12 +227,14 @@ def test_pass_closes_round_and_triggers_quiz(demo):
         s.flush()
         pipeline.process_submission(s, sid, new_id)
         rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406, m.ChatRound.user_id == UID)).one()
-        assert (rnd.status, rnd.end_reason, rnd.quiz_triggered) == ("closed", "通过", True)
+        assert (rnd.status, rnd.end_reason, rnd.quiz_triggered) == ("closed", "通过", False)
         ev = s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.source_key == f"pass:{sid}:{new_id}")).all()
         assert {e.event_type for e in ev} == {"pass_after_h2"} and {e.weight for e in ev} == {0.2}
         assert {e.skill_code for e in ev} == {"C06.03.02", "C06.02.01", "C06.03.03", "C05.04.03"}
         msgs = workflow.thread_messages(s, UID, (sid, 406))
-        assert msgs[-1].kind == "quiz" and texts(msgs[-1]) == "过了。顺手问一道："
+        assert all(msg.kind != "quiz" for msg in msgs)
+        ri = s.scalar(select(m.ReviewItem).where(m.ReviewItem.user_id == UID, m.ReviewItem.skill_code == "C06.03.02"))
+        assert ri.trigger_submission_id == new_id and ri.due_at <= db.now()
         pipeline.process_submission(s, sid, new_id)   # 重复处理：不重复记证据，不重复出题
         assert len(workflow.thread_messages(s, UID, (sid, 406))) == len(msgs)
         del last

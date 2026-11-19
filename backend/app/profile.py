@@ -106,7 +106,7 @@ class Sources:
 
     def __init__(self, s: Session, user_id: str, at: dt.datetime | None = None, with_graph: bool = True):
         self.s, self.user_id, self.at = s, user_id, at or db.now()
-        self.states = mastery.skill_states(s, user_id, at=self.at, model="v2", with_predicted=True)
+        self.states = mastery.skill_states(s, user_id, at=at, model="v2", with_predicted=True)   # at 为空：现在
         self.evidence = [r for r in s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.user_id == user_id)).all()
                          if r.ts <= self.at]
         self.assessments = [a for a in s.scalars(select(m.AgentAssessment).where(
@@ -327,9 +327,10 @@ def kp_profile(s: Session, user_id: str, course: str, at: dt.datetime | None = N
             by_kp[kp_of_skill(code)].append(skill_dims(src, code))
     w = weights_for(s, course)
     out = {}
+    kp_all = mastery.kp_states(s, user_id)
     for kp, parts in by_kp.items():
         d = _merge(parts)
-        kp_state = mastery.kp_states(s, user_id).get(kp)
+        kp_state = kp_all.get(kp)
         d.level = kp_state.level if kp_state is not None else LEVEL_NONE
         d.flags = _flags(d)
         d.fused = fuse(d, w)

@@ -54,6 +54,7 @@ export const api = {
     request<{ role: Me["role"]; name: string }>("POST", "/api/auth/login", { loginName, password, course }, true),
   logout: () => post<{ ok: boolean }>("/api/auth/logout"),
 
+  readNotices: (key: string, ids: number[]) => post<{ ok: boolean }>(`/api/threads/${key}/read`, { ids }),
   status: () => get<StatusInfo>("/api/status"),
   homeworks: () => get<{ homeworks: Homework[] }>("/api/homeworks"),
   homework: (key: string) => get<{ homework: Homework; problems: ProblemRow[] }>(`/api/homeworks/${key}`),
@@ -68,8 +69,6 @@ export const api = {
   source: (key: string) => get<{ key: string; lines: string[] }>(`/api/submissions/${key}/source`),
 
   thread: (key: string, signal?: AbortSignal) => request<{ messages: Message[] }>("GET", `/api/threads/${key}`, undefined, false, signal),
-  offerReview: (key: string) => post<{ status: string }>(`/api/threads/${key}/review`),
-  welcome: (key: string) => post<{ messages: Message[] }>(`/api/threads/${key}/welcome`),
   send: (key: string, body: { text?: string; action?: string; submissionKey?: string; problemKey?: string }) =>
     post<{ messages: Message[]; thread: string }>(`/api/threads/${key}/messages`, body),
   topics: () => get<{ topics: Topic[] }>("/api/topics"),

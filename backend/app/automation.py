@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 from . import assess, db, pdftext, pipeline, profile, review
@@ -25,7 +26,7 @@ from .chat import workflow
 log = logging.getLogger("automation")
 
 _last: dict[str, float] = {}
-EVERY = {"rounds": 60.0, "reviews": 300.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 120.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
+EVERY = {"rounds": 60.0, "reviews": 300.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
 
 
 def _due(name: str) -> bool:
@@ -34,6 +35,25 @@ def _due(name: str) -> bool:
         return False
     _last[name] = now
     return True
+
+
+_review_worker: threading.Thread | None = None
+
+
+def schedule_reviews() -> None:
+    """同步拥有者定期唤醒独立的备题线程，抓取、会话读取和页面渲染都无需等它。"""
+    global _review_worker
+    if (_review_worker is not None and _review_worker.is_alive()) or not _due("quizprep"):
+        return
+
+    def run():
+        try:
+            review.prepare_active(limit=3)
+        except Exception:
+            log.exception("提前备复习题失败")
+
+    _review_worker = threading.Thread(target=run, name="review-preparation", daemon=True)
+    _review_worker.start()
 
 
 def idle_work() -> int:
@@ -60,11 +80,6 @@ def idle_work() -> int:
         if labeled or filled:
             _last["labels"] = -1e9
         done += labeled + filled
-    if _due("quizprep"):
-        try:
-            done += review.prepare_active(limit=3)
-        except Exception:   # 出题失败不能拖累别的自动工作；下次再试
-            log.exception("提前备复习题失败")
     if _due("pdftext"):
         # 以前的程序处理的 PDF 题面重新抽；还没交给大模型整理的整理（每次两道）
         with db.session_scope() as s:

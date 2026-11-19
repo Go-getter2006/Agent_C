@@ -46,20 +46,19 @@ def test_pending_review_does_not_hide_remaining_daily_slot(database, monkeypatch
         assert review.summary(s, UID, now, "C")["doneToday"] == 0
 
 
-def test_offer_is_automatic_idempotent_and_stays_in_general_chat(database, monkeypatch):
+def test_preparation_is_idempotent_and_stays_in_review(database, monkeypatch):
     now = db.now()
     calls = []
     with db.session_scope() as s:
         item,q = setup(s,now)
         monkeypatch.setattr(quizgen,"generate",lambda *_a,**_k:(calls.append(1) or q))
-        assert review.offer_in_chat(s,UID,"C",now) == "ready"
-        assert review.offer_in_chat(s,UID,"C",now) == "ready"
+        assert review.prepare(s,UID,"C",now) == "ready"
+        assert review.prepare(s,UID,"C",now) == "ready"
         assert len(calls) == 1
         messages = s.scalars(select(m.ChatMessage).where(m.ChatMessage.user_id==UID)).all()
-        assert len(messages)==1 and messages[0].kind=="quiz"
-        assert messages[0].server_id is None and messages[0].problem_id is None
-        assert s.get(m.QuizAttempt,messages[0].quiz_attempt_id).review_item_id == item.id
-        assert review.offer_in_chat(s,UID,"D",now) == "idle"
+        assert not messages
+        assert s.get(m.QuizAttempt,item.attempt_id).review_item_id == item.id
+        assert review.prepare(s,UID,"D",now) == "idle"
 
 
 def test_unavailable_quiz_keeps_due_and_backs_off(database, monkeypatch):
@@ -68,21 +67,22 @@ def test_unavailable_quiz_keeps_due_and_backs_off(database, monkeypatch):
     with db.session_scope() as s:
         item,q=setup(s,now)
         monkeypatch.setattr(quizgen,"generate",lambda *_a,**_k:(calls.append(1) or None))
-        assert review.offer_in_chat(s,UID,"C",now)=="waiting"
-        assert review.offer_in_chat(s,UID,"C",now+dt.timedelta(seconds=30))=="waiting"
+        assert review.prepare(s,UID,"C",now)=="waiting"
+        assert review.prepare(s,UID,"C",now+dt.timedelta(seconds=30))=="waiting"
         assert calls == [1]
         assert [r.id for r in review.due_items(s,UID,now,"C")]==[item.id]
         assert item.attempt_id is None
 
 
-def test_recent_student_message_defers_automatic_question(database, monkeypatch):
+def test_background_preparation_during_chat_does_not_interrupt(database, monkeypatch):
     now=db.now()
     with db.session_scope() as s:
         _,q=setup(s,now)
         s.add(m.ChatMessage(user_id=UID,course="C",role="student",kind="text",created_at=now-dt.timedelta(seconds=20),content={}))
         s.flush()
-        monkeypatch.setattr(quizgen,"generate",lambda *_a,**_k:pytest.fail("不能打断正在进行的对话"))
-        assert review.offer_in_chat(s,UID,"C",now)=="busy"
+        monkeypatch.setattr(quizgen,"generate",lambda *_a,**_k:q)
+        assert review.prepare(s,UID,"C",now)=="ready"
+        assert all(msg.role == "student" for msg in s.scalars(select(m.ChatMessage)))
 
 
 def test_failures_are_prioritized_over_spot_checks(database):
@@ -97,7 +97,7 @@ def test_fixed_submission_retains_review_and_upgrades_reason(database):
     now=db.now()
     with db.session_scope() as s:
         item=review.enqueue(s,UID,SKILL,"failed",1,406,now-dt.timedelta(hours=2))
-        sub=SimpleNamespace(user_id=UID,server_id=1,problem_id=406,submit_time=now)
+        sub=SimpleNamespace(user_id=UID,submission_id=10,server_id=1,problem_id=406,submit_time=now)
         label=SimpleNamespace(primary_skill=SKILL,secondary_skills=[])
         review.on_independent_practice(s,sub,label,1,"NA",1.0)
         assert item.origin=="corrected" and item.state=="active" and item.streak==0
@@ -120,7 +120,7 @@ def test_missing_historical_error_is_backfilled_once(demo):
 def test_api_generation_failure_does_not_claim_review_is_unnecessary(demo,monkeypatch):
     with TestClient(create_app()) as client:
         assert client.post('/api/auth/login',json={'loginName':'2500000001','password':'test-pass'}).status_code==200
-        monkeypatch.setattr(quizgen,'generate',lambda *_a,**_k:None)   # 进复习提升会当场备题：先让出题失败
+        monkeypatch.setattr(quizgen,'generate',lambda *_a,**_k:pytest.fail("读取页面或点击入口不能触发出题"))
         page=client.get('/api/review').json()
         assert 'current' not in page and page['due']
         due=page['due'][0]
@@ -150,3 +150,70 @@ def test_tidy_keeps_samples_separate_and_preserves_tokens():
     assert pdftext.check_tidy(raw,tidy,False) is None
     assert "样例" in pdftext.check_tidy(raw,tidy.replace("Thursday","Friday"),False)
     assert "样例" in pdftext.check_tidy(raw,tidy.replace("样例说明\n",""),False)
+
+
+def test_real_wait_is_measured_at_first_judgement(database, monkeypatch):
+    at = db.now()
+    with db.session_scope() as s:
+        item, q = setup(s, at)
+        item.origin_server_id, item.origin_problem_id = 1, 6
+        item = review.enqueue(s, UID, SKILL, "corrected", 1, 6, at, 901)
+        monkeypatch.setattr(quizgen, "generate", lambda *_a, **_k: q)
+        _, a = review.start(s, UID, item.id, at + dt.timedelta(seconds=12), "C")
+        assert a.events[0]["phase"] == "recent" and a.events[0]["submissionId"] == 901
+        monkeypatch.setattr(db, "now", lambda: at + dt.timedelta(seconds=300))
+        quiz.judge2(s, a, q.has_bug)
+        quiz.judge2(s, a, not q.has_bug)
+        assert [e["secondsSinceTrigger"] for e in a.events if e["kind"] == "judge"] == [300]
+
+
+def test_slow_background_question_does_not_hold_homework_or_review_requests(demo, monkeypatch):
+    from threading import Event, Thread
+
+    entered, release = Event(), Event()
+    errors = []
+    uid = "2500000001"
+    with TestClient(create_app()) as client:
+        client.post("/api/auth/login", json={"loginName": uid, "password": "test-pass"})
+        with db.session_scope() as s:
+            review.seed_missing(s, uid, "C", db.now())
+        def slow(*_args, **_kwargs):
+            entered.set()
+            if not release.wait(8):
+                raise TimeoutError("前台请求等待了出题")
+            return None
+        monkeypatch.setattr(quizgen, "generate", slow)
+        def work():
+            try:
+                with db.session_scope() as s:
+                    review.prepare(s, uid, "C")
+            except Exception as error:
+                errors.append(error)
+        worker = Thread(target=work)
+        worker.start()
+        try:
+            assert entered.wait(5)
+            th = client.get(f"/api/threads/p{demo['server_id']}-406")
+            assert th.status_code == 200 and th.json()["messages"]
+            page = client.get("/api/review")
+            assert page.status_code == 200 and "current" not in page.json()
+            assert client.get("/api/status").status_code == 200 and worker.is_alive()
+        finally:
+            release.set()
+            worker.join(10)
+        assert not errors and not worker.is_alive()
+
+
+def test_worker_prepares_recent_correction_before_student_opens_any_page(database, monkeypatch):
+    at = db.now()
+    with db.session_scope() as s:
+        _, q = setup(s, at)
+        item = review.enqueue(s, UID, SKILL, "corrected", 1, 406, at, 901)
+        assert item.due_at == at
+        qid = q.id
+    monkeypatch.setattr(quizgen, "generate", lambda s, *_a, **_k: s.get(m.QuizItem, qid))
+    assert review.prepare_active(at=at) == 1
+    assert review.prepare_active(at=at) == 0
+    with db.session_scope() as s:
+        assert review.ready_count(s, UID, "C") == 1
+        assert s.scalar(select(m.ChatMessage.id)) is None

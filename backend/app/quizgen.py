@@ -81,14 +81,16 @@ def make_plan(s: Session, user_id: str, skill: str, reason: str, origin: tuple[i
               review_item: m.ReviewItem | None = None, rng: random.Random | None = None) -> Plan:
     rng = rng or quiz._rng
     level = mastery.skill_state(s, user_id, skill).level
-    recent = s.execute(
-        select(m.QuizItem.has_bug, m.QuizAttempt.confidence, m.QuizAttempt.correct)
-        .join(m.QuizItem, m.QuizItem.id == m.QuizAttempt.item_id)
-        .where(m.QuizAttempt.user_id == user_id).order_by(m.QuizAttempt.id.desc())
-        .limit(config.QUIZ["ratio_window"])).all()
+    history = select(m.QuizItem.has_bug, m.QuizAttempt.confidence, m.QuizAttempt.correct).join(
+        m.QuizItem, m.QuizItem.id == m.QuizAttempt.item_id).where(m.QuizAttempt.user_id == user_id)
+    if reason == "review":
+        history = history.where(m.QuizAttempt.skill_code == skill, m.QuizAttempt.reason == "review")
+    recent = s.execute(history.order_by(m.QuizAttempt.id.desc()).limit(config.QUIZ["ratio_window"])).all()
     sure = [r for r in recent if r[1] == "很有把握" and r[2] is not None]
     overconfident = len([r for r in sure if not r[2]]) >= 2 and len([r for r in sure if not r[2]]) / len(sure) >= 0.3
     low, high = config.QUIZ["correct_ratio"]
+    if reason == "review":
+        low, high = .4, .6
     ratio = (sum(1 for r in recent if not r[0]) / len(recent)) if recent else (low + high) / 2
     notes = []
     if ratio < low:
@@ -97,7 +99,7 @@ def make_plan(s: Session, user_id: str, skill: str, reason: str, origin: tuple[i
     elif ratio >= high:
         has_bug = True
         notes.append(f"最近的小题里正确代码已占 {ratio:.0%}，这道出有错的")
-    elif overconfident:
+    elif overconfident and reason != "review":
         has_bug = True
         notes.append("他常常很有把握却答错，这道出有错的帮他校准")
     else:
@@ -108,10 +110,10 @@ def make_plan(s: Session, user_id: str, skill: str, reason: str, origin: tuple[i
     if review_item is not None:
         origin = origin or ((review_item.origin_server_id, review_item.origin_problem_id)
                             if review_item.origin_problem_id is not None else None)
-        prefer_own = review_item.reps == 0
-        notes.append("第一次复习，用他自己的代码回忆" if prefer_own else "已经复习过，换一个场景检验能不能迁移")
+        prefer_own = False
+        notes.append("同一技能换一个场景，独立检验判断、定位和修改")
     else:
-        prefer_own = True
+        prefer_own = reason != "review"
     return Plan(user_id=user_id, skill=skill, reason=reason, quiz_type=quiz_type, has_bug=has_bug, level=level,
                 errors=_student_errors(s, user_id, skill), origin=origin, prefer_own=prefer_own,
                 overconfident=overconfident, notes=notes)
@@ -639,7 +641,9 @@ def from_llm(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | None:
         return None
     names = _student_names(s, plan)
     scene = ""
-    if plan.origin:
+    if plan.reason == "review":
+        scene = "用一个新的简短场景，针对给定的技能和易错点，不复用原作业题意。"
+    elif plan.origin:
         info = catalog.problem_info(s, *plan.origin)
         scene = info.brief if info else ""
 
@@ -728,7 +732,7 @@ def from_template(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | No
         return None
     bank = s.scalars(select(m.QuizItem).where(
         m.QuizItem.skill_code == plan.skill, m.QuizItem.source == "bank", m.QuizItem.verified.is_(True))).all()
-    pool = [b for b in bank if b.has_bug == plan.has_bug] or list(bank)
+    pool = [b for b in bank if b.has_bug == plan.has_bug]
     rng.shuffle(pool)
     for base in pool:
         used = set(re.findall(r"[A-Za-z_]\w*", base.template + base.shown_code))
@@ -756,7 +760,7 @@ def from_template(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | No
 
 
 def from_bank(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | None:
-    return quiz.choose_item(s, plan.user_id, plan.skill, rng)
+    return quiz.choose_item(s, plan.user_id, plan.skill, rng, has_bug=plan.has_bug)
 
 
 # ============================================================ 入口
@@ -770,8 +774,6 @@ def generate(s: Session, user_id: str, skill: str, reason: str, origin: tuple[in
         order.append(from_own_code)
     if llm.available():
         order.append(from_llm)
-    if not plan.prefer_own:
-        order.append(from_own_code)
     order += [from_template, from_bank]
     for gen in order:
         try:

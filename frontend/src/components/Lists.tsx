@@ -79,8 +79,8 @@ function RowIcon({ p }: { p: ProblemRow }) {
 }
 
 /** 题目列表。只显示题目名，不显示题号。 */
-export function ProblemList({ problems, currentKey, onNavigate }: {
-  problems: ProblemRow[]; currentKey: string | null; onNavigate?: () => void;
+export function ProblemList({ problems, currentKey, onNavigate, unread }: {
+  unread?: Record<string, number>; problems: ProblemRow[]; currentKey: string | null; onNavigate?: () => void;
 }) {
   const box = useRef<HTMLElement>(null);
   const ordered = sortProblems(problems);
@@ -98,7 +98,7 @@ export function ProblemList({ problems, currentKey, onNavigate }: {
             <RowIcon p={p} />
             <span className="prow-main">
               <span className="prow-top">
-                <span className="prow-title">{p.title}</span>
+                <span className="prow-title">{p.title}{!!unread?.[p.key] && <i className="failure-dot" role="img" aria-label="未读提醒" />}</span>
                 <span className="prow-time">{p.last ? shortTime(p.last.time) : ""}</span>
               </span>
               {p.last ? (

@@ -453,6 +453,8 @@ def welcome(key: str, user: m.User = Depends(student), s: Session = Depends(get_
 @router.post("/threads/{key}/review")
 def offer_review(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     _thread(s, user, key)
+    if key != "general":
+        return {"status": "busy"}
     return {"status": "ready" if review.ready_count(s, user.student_id, user.course) else "idle"}
 
 
@@ -655,7 +657,7 @@ def progress_page(user: m.User = Depends(student), s: Session = Depends(get_sess
 # ------------------------------------------------------------ 复习
 @router.get("/review")
 def review_page(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    """复习提升：进来就是一道备好的题（后台提前备好；没备好就现在出一道，出不了就退避，稍后自动再试）。
+    """复习提升：进来就是一道备好的题（后台提前备好，未就绪时页面可以继续使用）。
     中途离开的，回来接着做同一道。今天没有可做的题时，给最近一次的反馈和下一次的安排。"""
     s.add(m.UiEvent(user_id=user.student_id, kind="open_review", target="", course=user.course))
     out = review.summary(s, user.student_id, course=user.course)

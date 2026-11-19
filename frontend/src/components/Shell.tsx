@@ -19,9 +19,9 @@ export interface NavItem {
   match?: string[];   // 哪些路径算在这一项里（不写就是 to 本身）
 }
 
-export const studentNav = (dueReviews = 0): NavItem[] => [
+export const studentNav = (dueReviews = 0, unreadProblems = 0): NavItem[] => [
   { to: sectionTarget("ask"), match: ["/ask"], label: "知识问答", icon: MessagesSquare },
-  { to: sectionTarget("homework"), match: ["/homework"], label: "作业引导", icon: NotebookPen },
+  { to: sectionTarget("homework"), match: ["/homework"], label: "作业引导", icon: NotebookPen, badge: unreadProblems },
   { to: sectionTarget("review"), match: ["/review"], label: "复习提升", icon: RotateCcw, badge: dueReviews },
 ];
 
@@ -178,5 +178,5 @@ export function Shell({ nav, bottom = [], kind = "student", children }: ShellPro
 /** 学生端的外壳：侧边栏上“复习”带上该复习的数量。 */
 export function StudentShell({ children }: { children: ReactNode }) {
   const { status } = useStatus();
-  return <Shell nav={studentNav(status?.dueReviews ?? 0)} bottom={studentBottom()}>{children}</Shell>;
+  return <Shell nav={studentNav(status?.dueReviews ?? 0, Object.keys(status?.unread?.problems ?? {}).length)} bottom={studentBottom()}>{children}</Shell>;
 }

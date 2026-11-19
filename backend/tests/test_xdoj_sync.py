@@ -372,11 +372,11 @@ def test_crash_midway_then_rerun_no_dup_no_miss(database, clock, monkeypatch):
     calls = {"n": 0}
     real = sync_submissions._store_submission
 
-    def flaky(s, c, row, backfill):
+    def flaky(s, c, row, backfill, live):
         calls["n"] += 1
         if calls["n"] == 150:  # 第二页写到一半时崩溃
             raise RuntimeError("模拟崩溃")
-        return real(s, c, row, backfill)
+        return real(s, c, row, backfill, live)
 
     monkeypatch.setattr(sync_submissions, "_store_submission", flaky)
     with pytest.raises(RuntimeError):

@@ -44,7 +44,7 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
   cls: ClassInfo; node: KMNode; home: "C" | "D"; studentId: string; studentName: string | null;
   onSelect: (code: string) => void; onClose: () => void;
 }) {
-  const detail = useLoad(() => get<KpDetail>(`/api/teacher/classes/${cls.key}/knowledge-map/${node.code}`), [cls.key, node.code]);
+  const detail = useLoad(() => get<KpDetail>(`/api/teacher/classes/${cls.key}/knowledge-map/${node.code}`), [cls.key, node.code], 0, false, `t:node:${cls.key}:${node.code}`);
   const d = detail.data;
   const total = node.dist.reduce((a, b) => a + b, 0);
   const foundation = node.course !== home;
@@ -193,7 +193,7 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   const layoutKind = useLayout();
   const [params, setParams] = useSearchParams();
   const student = params.get("student") ?? "";
-  const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student], 120000);
+  const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student], 120000, false, `t:map:${cls.key}:${student ?? ""}`);
   const [scope, setScope] = useState<"home" | "all">("home");
   const [view, setView] = useState<"graph" | "table">("graph");
   const [showCross, setShowCross] = useState(true);

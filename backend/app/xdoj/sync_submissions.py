@@ -32,11 +32,14 @@ def poll_new_submissions(ctx: SyncContext, backfill: bool = False, max_requests:
             cursor = int(get_state(s, ctx.server_id, key, "0") or 0)
         batch, _total = ep.list_submissions_after(ctx.client, cursor, rows_per_page)
         with db.session_scope() as s:
+            live = not backfill and get_state(s, ctx.server_id, key + ":caught_up") == "1"
             for row in batch:
-                total_new += _store_submission(s, ctx, row, backfill)
+                total_new += _store_submission(s, ctx, row, backfill, live)
             if batch:
                 set_state(s, ctx.server_id, key, batch[-1].submission_id)
                 set_time(s, ctx.server_id, "last_new_submission_at", ctx.now())
+            if len(batch) < rows_per_page:
+                set_state(s, ctx.server_id, key + ":caught_up", "1")
             set_time(s, ctx.server_id, "last_poll_at", ctx.now())
         if len(batch) < rows_per_page:
             ctx.stats["poll_has_more"] = False
@@ -48,7 +51,7 @@ def poll_new_submissions(ctx: SyncContext, backfill: bool = False, max_requests:
     return total_new
 
 
-def _store_submission(s, ctx: SyncContext, row: ep.SubmissionRow, backfill: bool) -> int:
+def _store_submission(s, ctx: SyncContext, row: ep.SubmissionRow, backfill: bool, live: bool = False) -> int:
     if s.get(m.Submission, (ctx.server_id, row.submission_id)) is not None:
         return 0
     if row.user_id and s.get(m.Student, row.user_id) is None:
@@ -66,8 +69,8 @@ def _store_submission(s, ctx: SyncContext, row: ep.SubmissionRow, backfill: bool
     if code == "UNKNOWN" and row.judgement_text:
         log.warning("不认识的评测结果，已原样保存（提交 %s）", row.submission_id)
     sub = m.Submission(
-        notice_eligible=(not backfill and row.submit_time is not None and
-                         ctx.now() - row.submit_time <= dt.timedelta(minutes=config.PROACTIVE["recent_minutes"])),
+        notice_eligible=(not backfill and (live or (row.submit_time is not None and
+                         ctx.now() - row.submit_time <= dt.timedelta(minutes=config.PROACTIVE["recent_minutes"])))),
         server_id=ctx.server_id, submission_id=row.submission_id, user_id=row.user_id, problem_id=row.problem_id,
         contest_id=row.contest_id, class_id=row.class_id, submit_time=row.submit_time, language=row.language,
         judgement_text=row.judgement_text, judgement=code, points=row.points, fetched_at=ctx.now())

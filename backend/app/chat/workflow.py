@@ -238,6 +238,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             m.Submission.submit_time > last_agent.created_at))
         if newer is not None:
             awaiting = False  # 智能体问完以后他又交过一次：这条消息是在说新的提交，不是在回答那个问题
+    if last_agent is not None and last_agent.failure_submission_id and (prose or text).rstrip().endswith(("？", "?")):
+        awaiting = False  # 对提醒提出新的调试问题，不把它记成答错一次。
     since_reply = (now - last_agent.created_at).total_seconds() if last_agent is not None else None
 
     # 第 2 步 绑定 → 回合
@@ -261,6 +263,16 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     if ctx.submission is not None and ctx.submission.detail_status != "done" and picked is None:
         sync_api.request_priority(s, ctx.submission.server_id, ctx.submission.submission_id)
     ctx._located = bool(rnd.located)
+    if last_agent is not None and last_agent.failure_submission_id and ctx.submission and ctx.root_error:
+        from .proactive import _primary
+
+        previous = s.scalars(select(m.Submission).where(
+            m.Submission.server_id == ctx.submission.server_id, m.Submission.user_id == user_id,
+            m.Submission.problem_id == ctx.submission.problem_id,
+            m.Submission.submission_id < ctx.submission.submission_id).order_by(m.Submission.submission_id.desc()).limit(1)).first()
+        label = _primary(s, previous) if previous and previous.judgement not in ("AC", "PENDING", "UNKNOWN") else None
+        if label and label.confidence >= config.CHAT["low_confidence"] and label.error_code == ctx.root_error:
+            ctx.same_error_resubmit = True
     hint = ctx.hint()
 
     # 第 1 步 消息分析（点按钮不用分析）

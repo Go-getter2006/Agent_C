@@ -49,7 +49,8 @@ interface Props {
   placeholder?: string;
   emptyReady?: boolean;
   waitingContext?: boolean;
-  welcomeKey?: string | null;  // 未通过的最新提交：让智能体主动提问。
+  latestNotice?: number;
+  onNoticeRead?: () => void;
   context?: ThreadContext | null;
   contextOffer?: { label: string; onPick: () => void } | null;   // 还没带上时：可以点一下带上
   onThread?: (key: string) => void;   // 新建问答发出第一条以后，有了自己的编号
@@ -60,7 +61,7 @@ function looksLikeCode(text: string): boolean {
   return text.includes("\n") && /[;{}]|#include/.test(text);
 }
 
-export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, welcomeKey, context, contextOffer,
+export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, onNoticeRead, context, contextOffer,
   emptyReady = true, waitingContext = false, onThread, onActivity }: Props) {
   const cache = useRef(new KeyCache<Message[]>());
   const request = useRef<AbortController | null>(null);
@@ -85,9 +86,10 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   keyRef.current = threadKey;
   const busy = pending !== null;
   const loadSeq = useRef(0);
-  const interacting = useRef(false);
-  const welcomed = useRef(new Set<string>());
-  interacting.current = busy || !!text.trim();
+  const followBottom = useRef(true);
+  const [newBelow, setNewBelow] = useState(false);
+  const reading = useRef(new Set<number>());
+  const requestedNotice = useRef<number>();
 
   const load = useCallback((silent: boolean) => {
     const key = keyRef.current;
@@ -117,6 +119,9 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     const cached = cache.current.get(threadKey);
     setMessages(cached ?? null);
     setOwner(threadKey);
+    followBottom.current = true;
+    requestedNotice.current = undefined;
+    setNewBelow(false);
     setLoadError(null);
     setPending(sending.current.get(threadKey) ?? null);
     setFailed(failures.current.get(threadKey) ?? null);
@@ -126,7 +131,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     return () => { request.current?.abort(); loadSeq.current += 1; };
   }, [threadKey, load]);
 
-  // 定时看一眼（自动的）：提交没过时智能体可能主动先说一句；题目通过后可能追加一道小题
+  // 当前题的提醒和对话，切回标签后也会在下一次轮询时更新。
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && !busy) load(true);
@@ -135,22 +140,42 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   }, [busy, load]);
 
   useEffect(() => {
-    if (!welcomeKey || !threadKey.startsWith("p") || messages === null || stale || interacting.current) return;
-    const token = `${threadKey}:${welcomeKey}`;
-    if (welcomed.current.has(token)) return;
-    welcomed.current.add(token);
-    const seq = ++loadSeq.current;
-    void api.welcome(threadKey).then(r => {
-      if (threadKey !== keyRef.current || seq !== loadSeq.current || interacting.current) return;
-      cache.current.put(threadKey, r.messages);
-      setMessages(r.messages);
-    }).catch(() => { welcomed.current.delete(token); });
-  }, [welcomeKey, threadKey, messages, stale]); // 首次请求失败时，下次正常轮询可以自动重试。
-  // 复习小题不再插进对话：在“复习提升”里做（以前对话里出过的题照样能看、能接着做）
+    if (latestNotice && !stale && messages && !busy && requestedNotice.current !== latestNotice
+        && latestNotice > (messages[messages.length - 1]?.id ?? 0)) {
+      requestedNotice.current = latestNotice;
+      load(true);
+    }
+  }, [latestNotice, threadKey, stale, busy, messages, load]);
+
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root || stale || !messages?.some(m => m.unreadNotice)) return;
+    const observer = new IntersectionObserver(entries => {
+      if (document.visibilityState !== "visible" || keyRef.current !== threadKey || document.querySelector('[aria-modal="true"]')) return;
+      const ids = entries.filter(e => e.isIntersecting).map(e => Number((e.target as HTMLElement).dataset.notice))
+        .filter(id => !reading.current.has(id)).slice(0, 100);
+      if (!ids.length) return;
+      ids.forEach(id => reading.current.add(id));
+      void api.readNotices(threadKey, ids).then(() => {
+        if (keyRef.current === threadKey) setMessages(old => old && cache.current.put(threadKey,
+          old.map(m => ids.includes(m.id) ? { ...m, unreadNotice: false } : m)));
+        else cache.current.delete(threadKey);
+        onNoticeRead?.();
+      }).catch(() => {}).finally(() => ids.forEach(id => reading.current.delete(id)));
+    }, { root });
+    const observe = () => {
+      observer.disconnect();
+      root.querySelectorAll("[data-notice]").forEach(el => observer.observe(el));
+    };
+    observe();
+    document.addEventListener("visibilitychange", observe);
+    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", observe); };
+  }, [messages, stale, threadKey, onNoticeRead]);
 
   const send = useCallback(async (payload: Payload) => {
     const key = keyRef.current;
     if (sending.current.has(key)) return;
+    followBottom.current = true;
     sending.current.set(key, payload);
     failures.current.delete(key);
     setPending(payload);
@@ -190,9 +215,12 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     if (restoreScroll.current !== null) {
       el.scrollTop = restoreScroll.current;
       restoreScroll.current = null;
+      followBottom.current = el.scrollHeight - el.clientHeight - el.scrollTop < 48;
+      setNewBelow(!followBottom.current && !!messages[messages.length - 1]?.unreadNotice);
       return;
     }
-    el.scrollTop = el.scrollHeight;
+    if (followBottom.current) el.scrollTop = el.scrollHeight;
+    else if (messages[messages.length - 1]?.unreadNotice) setNewBelow(true);
   }, [messages?.length, pending, failed, threadKey, stale]);
 
   useLayoutEffect(() => {
@@ -229,7 +257,11 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
 
   return (
     <>
-      <div className="chat-scroll" ref={scroller} onScroll={(e) => saveScroll(threadKey, e.currentTarget.scrollTop)}>
+      <div className="chat-scroll" ref={scroller} onScroll={({ currentTarget: el }) => {
+        followBottom.current = el.scrollHeight - el.clientHeight - el.scrollTop < 48;
+        if (followBottom.current) setNewBelow(false);
+        saveScroll(threadKey, el.scrollTop);
+      }}>
         {(stale || messages === null || (!list.length && !emptyReady && !shown)) && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
         {loadError && <div className="chat-list"><Problem message={loadError} onRetry={() => load(false)} /></div>}
         {!stale && messages !== null && (
@@ -282,6 +314,11 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
           </div>
         )}
       </div>
+      {newBelow && <button type="button" className="new-notice" onClick={() => {
+        const el = scroller.current;
+        if (el) el.scrollTop = el.scrollHeight;
+        setNewBelow(false);
+      }}>有新消息 ↓</button>}
       <form className="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         {(context || contextOffer) && (
           <div className="composer-context">
@@ -343,7 +380,7 @@ function MessageItem({ message, layout, disabled, daySep, onAction, onQuiz, onCo
   return (
     <>
       {daySep && <div className="day-sep" role="separator">{daySep}</div>}
-      <div className="msg msg-agent">
+      <div className="msg msg-agent" data-notice={message.unreadNotice ? message.id : undefined}>
         <AgentMark />
         <div className="msg-body">
           <span className="msg-meta"><strong>智能体</strong></span>

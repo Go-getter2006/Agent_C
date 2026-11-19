@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app import db
+from app import db, review
 from app import models as m
 from app.web.app import create_app
 
@@ -143,6 +143,8 @@ def test_chat_roundtrip_and_buttons(client, demo):
     sid = demo["server_id"]
     th = client.get(f"/api/threads/p{sid}-406").json()["messages"]
     # 第一条是智能体主动发的：第 3 次又犯了以前在「最大差值」里改正过的错，摘出当时改对的代码
+    assert len([x for x in th if x.get("unreadNotice")]) == 3
+    th = th[-5:]
     assert [x["role"] for x in th] == ["agent", "student", "agent", "student", "agent"]
     first = th[0]["blocks"]
     assert "最大差值" in first[0]["text"]
@@ -175,7 +177,7 @@ def test_ask_why_from_submission(client, demo):
     assert code["caption"].startswith("你的第 2 次提交") and out[-1]["actions"] == ["think", "hint", "tell"]
 
 
-def test_review_flow_over_api(client, demo):
+def test_review_flow_over_api(client, demo, monkeypatch):
     login(client)
     # 本例专门检查整型复习的完整生命周期；其他失败技能的入队与每日名额由独立测试覆盖。
     with db.session_scope() as s:
@@ -197,6 +199,9 @@ def test_review_flow_over_api(client, demo):
     assert "C02" not in str(page) and "skill" not in str(page).lower()
     up = [u["title"] for u in page["upcoming"]]
     assert "最值、求和、统计" in up
+    assert "current" not in page
+    with db.session_scope() as s:
+        assert review.prepare(s, UID, "C") == "ready"
     r = client.post(f"/api/review/{due['id']}/start")
     assert r.status_code == 200
     body = r.json()
@@ -215,6 +220,10 @@ def test_review_flow_over_api(client, demo):
     assert client.post(f"/api/quiz/{aid}/locate", json={"lines": []}).status_code == 400
     q = client.post(f"/api/quiz/{aid}/locate", json={"lines": [line]}).json()
     if q["state"] == "edit":
+        from app.sandbox import sandbox_available
+        if not sandbox_available():
+            monkeypatch.setattr("app.quiz.run_checks", lambda item, code: {
+                "status": "pass" if code == item.standard_fix else "wrong"})
         q = client.post(f"/api/quiz/{aid}/submit", json={"code": fix}).json()
     assert q["state"] == "done" and q["result"]["outcome"] == "right"
     with db.session_scope() as s:

@@ -24,7 +24,7 @@ interface Detail {
     labels: { code: string; name: string; skill: string; line: number | null; confidence: number; source: string }[];
   }[];
   moreSubmissions: number;
-  stuck: (SkillRef & { nth: number; stubborn: boolean; resolution: string; problem: string; problemId: number | null; error: string; errorName: string; time: string; passedAfter: boolean | null; givenCode: string })[];
+  stuck: (SkillRef & { kpCode: string; nth: number; stubborn: boolean; resolution: string; problem: string; problemId: number | null; error: string; errorName: string; time: string; passedAfter: boolean | null; triesAfter: number | null; givenCode: string })[];
   rounds: { problem: string; started: string; status: string; endReason: string; maxHelp: string; messages: number; quiz: boolean }[];
   quizzes: (SkillRef & { type: string; reason: string; state: string; confidence: string; outcome: string; correct: boolean | null; time: string })[];
   rootCauses: { skill: SkillRef; root: SkillRef; p: number }[];
@@ -152,7 +152,7 @@ export default function StudentDetail() {
   const { id } = useParams();
   const [params] = useSearchParams();
   const cls = params.get("classKey");
-  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}${cls ? `?classKey=${encodeURIComponent(cls)}` : ""}`), [id, cls], 60000);
+  const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}${cls ? `?classKey=${encodeURIComponent(cls)}` : ""}`), [id, cls], 60000, false, `t:student:${id}:${cls ?? ""}`);
   const [allSkills, setAllSkills] = useState(false);
   const d = data.data;
   const skills = useMemo(() => (d ? d.skills.filter((k) => allSkills || k.yes + k.no > 0) : []), [d, allSkills]);
@@ -372,16 +372,16 @@ export default function StudentDetail() {
                 {d.stuck.length === 0 ? <Empty title="没有记录到卡点" /> : (
                   <div className="table-scroll">
                     <table className="table">
-                      <thead><tr><th scope="col">技能</th><th scope="col">第几次</th><th scope="col">在哪道题</th><th scope="col">错误</th><th scope="col">怎么解决的</th><th scope="col">之后通过了吗</th><th scope="col">时间</th></tr></thead>
+                      <thead><tr><th scope="col">知识点 · 技能</th><th scope="col">第几次</th><th scope="col">在哪道题</th><th scope="col">错误</th><th scope="col">怎么解决的</th><th scope="col">之后通过了吗</th><th scope="col">时间</th></tr></thead>
                       <tbody>
                         {d.stuck.map((sp, i) => (
                           <tr key={i}>
-                            <td><span className="cell-title">{sp.name}</span><span className="cell-sub"><Code>{sp.code}</Code></span></td>
+                            <td><span className="cell-title">{sp.kp}</span><span className="cell-sub">{sp.name} <Code>{sp.code}</Code></span></td>
                             <td className="nowrap">第 {sp.nth} 次{sp.stubborn && <> <span className="pill pill-warn">顽固</span></>}</td>
                             <td>{sp.problem}{sp.problemId ? <> <Code>{sp.problemId}</Code></> : null}</td>
                             <td>{sp.errorName} <Code>{sp.error}</Code></td>
                             <td>{RESOLUTION[sp.resolution] ?? sp.resolution}</td>
-                            <td>{sp.passedAfter === true ? <span className="pill pill-pass">通过了</span> : sp.passedAfter === false ? "没有" : "还没有"}</td>
+                            <td>{sp.passedAfter === true ? <span className="pill pill-pass">通过了{sp.triesAfter ? ` · 又交 ${sp.triesAfter} 次` : ""}</span> : sp.passedAfter === false ? "还没有" : <span className="muted">没绑定题</span>}</td>
                             <td className="nowrap muted">{fullTime(sp.time)}</td>
                           </tr>
                         ))}

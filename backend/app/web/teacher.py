@@ -10,6 +10,7 @@ C 语言和数据结构分开登录（user.course 来自登录凭证）：
 from __future__ import annotations
 
 import datetime as dt
+import functools
 from collections import Counter, defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -17,7 +18,8 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import accounts, assess, catalog, config, cross, crypto, db, diagnosis, graphmodel, kpdesc, logs, mastery, profile, review
+from .. import (accounts, assess, catalog, config, cross, crypto, db, diagnosis, graphmodel, kpdesc, logs, mastery, profile,
+               rating, review, stuckstats)
 from .. import models as m
 from ..labeling.labeler import current_problem_label
 from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
@@ -27,9 +29,16 @@ from ..xdoj import api as sync_api
 from ..xdoj import store
 from ..xdoj.client import SessionError, XdojClient, XdojError, limiter_for
 from .auth import record_failure, set_login_cookie, throttle
+from . import cache
 from .deps import get_session, teacher
 
-router = APIRouter(prefix="/api/teacher", tags=["teacher"])
+
+def _memo_states(s: Session = Depends(get_session)) -> None:
+    """教师端的页面只读学生的状态，同一个请求里每个学生的状态只算一次（mastery.memoize）。"""
+    mastery.memoize(s)
+
+
+router = APIRouter(prefix="/api/teacher", tags=["teacher"], dependencies=[Depends(_memo_states)])
 _test_transport = None  # 测试时注入假的 XDOJ
 
 
@@ -175,6 +184,19 @@ def _class(s: Session, user: m.User, key: str) -> m.XClass:
     return found
 
 
+def page_cache(name: str):
+    """班级汇总页：先核对是不是他的班，再按（页面, 课程, 参数）查结果缓存（app/web/cache.py）。"""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(**kwargs):
+            s, user = kwargs["s"], kwargs["user"]
+            _class(s, user, kwargs["key"])
+            extra = tuple(sorted((k, v) for k, v in kwargs.items() if k not in ("s", "user")))
+            return cache.cached(s, (name, user.course, *extra), lambda: fn(**kwargs))
+        return wrapper
+    return deco
+
+
 def class_students(s: Session, cls: m.XClass) -> list[m.Student]:
     return list(s.scalars(
         select(m.Student).join(m.Enrollment, m.Enrollment.user_id == m.Student.user_id)
@@ -293,6 +315,7 @@ class _ClassData:
 
 
 @router.get("/classes/{key}/overview")
+@page_cache("overview")
 def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     cls = _class(s, user, key)
     data = _ClassData(s, cls)
@@ -471,6 +494,7 @@ def _attention(s: Session, data: "_ClassData", now: dt.datetime) -> list[dict]:
 
 
 @router.get("/classes/{key}/students")
+@page_cache("students")
 def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     cls = _class(s, user, key)
     data = _ClassData(s, cls)
@@ -520,33 +544,15 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
 
 
 @router.get("/classes/{key}/stuck")
+@page_cache("stuck")
 def stuck_list(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    """卡点名单：同一个技能卡住两次及以上的，顽固卡点（第三次及以上）排在前面，建议当面讲。"""
+    """卡点按知识点汇总（app/stuckstats.py）：卡住几个人、卡住以后怎么样了，展开看技能和学生；另列只在 OJ 上反复没过、没来问的。"""
     cls = _class(s, user, key)
     people = {st.user_id: st.name for st in class_students(s, cls)}
-    groups: dict[tuple[str, str], list[m.StuckPoint]] = defaultdict(list)
     course = _course_of_class(s, cls)
-    if people:
-        for sp in s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id.in_(list(people)),
-                                                       m.StuckPoint.skill_code.like(course + "%"))
-                            .order_by(m.StuckPoint.id)).all():
-            groups[(sp.user_id, sp.skill_code)].append(sp)
-    rows, single = [], 0
-    for (uid, skill), points in groups.items():
-        if len(points) < 2 and not any(p.stubborn for p in points):
-            single += 1
-            continue
-        last = points[-1]
-        problem = s.get(m.Problem, (last.server_id, last.problem_id)) if last.problem_id else None
-        rows.append({"userId": uid, "name": people[uid], "skill": _skill_view(skill), "times": len(points),
-                     "stubborn": any(p.stubborn for p in points), "lastTime": last.created_at.isoformat(),
-                     "lastProblem": problem.title if problem else "", "lastProblemId": last.problem_id,
-                     "resolution": last.resolution, "passedAfter": last.passed_after,
-                     "error": last.error_code, "errorName": error_name(last.error_code)})
-    rows.sort(key=lambda r: (not r["stubborn"], -r["times"], r["lastTime"]))
-    by_skill = Counter(skill for (_uid, skill) in groups)
-    common = [{**_skill_view(code), "students": n} for code, n in by_skill.most_common(8)]
-    return {"class": {"key": key, "name": cls.class_name}, "rows": rows, "onceOnly": single, "common": common}
+    stats = stuckstats.compute(s, list(people), course, class_problems(s, cls))
+    return {"class": {"key": key, "name": cls.class_name}, "version": stuckstats.VERSION,
+            "silentFails": stuckstats.SILENT_FAILS, "rows": stuckstats.kp_rows(s, stats, people)}
 
 
 # ------------------------------------------------------------ 学生明细
@@ -624,13 +630,15 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
                         "line": lab.line, "confidence": round(lab.confidence, 2), "source": lab.source}
                        for lab in sorted(labels, key=lambda lab: lab.role != "primary")]})
     stuck = []
-    for sp in s.scalars(select(m.StuckPoint).where(m.StuckPoint.user_id == user_id, m.StuckPoint.skill_code.like(course + "%"))
-                        .order_by(m.StuckPoint.id.desc())).all():
+    episodes = [e for st in stuckstats.compute(s, [user_id], course).values() for e in st.episodes]
+    for e in sorted(episodes, key=lambda e: -e.sp.id):
+        sp = e.sp
         problem = s.get(m.Problem, (sp.server_id, sp.problem_id)) if sp.problem_id else None
-        stuck.append({**_skill_view(sp.skill_code), "nth": sp.nth, "stubborn": sp.stubborn, "resolution": sp.resolution,
-                      "problem": problem.title if problem else "", "problemId": sp.problem_id,
+        stuck.append({**_skill_view(sp.skill_code), "kpCode": e.kp, "nth": sp.nth, "stubborn": sp.stubborn,
+                      "resolution": sp.resolution, "problem": problem.title if problem else "", "problemId": sp.problem_id,
                       "error": sp.error_code, "errorName": error_name(sp.error_code),
-                      "time": sp.created_at.isoformat(), "passedAfter": sp.passed_after, "givenCode": sp.given_code})
+                      "time": sp.created_at.isoformat(), "passedAfter": e.passed, "triesAfter": e.tries_after,
+                      "givenCode": sp.given_code})
     rounds = []
     for r in s.scalars(select(m.ChatRound).where(m.ChatRound.user_id == user_id, m.ChatRound.course == course)
                        .order_by(m.ChatRound.id.desc()).limit(30)).all():
@@ -699,6 +707,7 @@ def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) ->
 
 # ------------------------------------------------------------ 图模型（试验中）
 @router.get("/classes/{key}/graph")
+@page_cache("graph")
 def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     cls = _class(s, user, key)
     course = _course_of_class(s, cls)
@@ -749,6 +758,7 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
         "agreement": assess.agreement(list(s.scalars(select(m.AgentAssessment).where(
             m.AgentAssessment.user_id.in_(ids or ["-"]), m.AgentAssessment.course == course)).all())),
         "dialogue": _dialogue_vs_outcome(s, ids, course, _ClassData(s, cls).subs),
+        "human": rating.agreement(s, ids, course),
     }
 
 
@@ -820,6 +830,7 @@ def _course_of_class(s: Session, cls: m.XClass) -> str:
 
 
 @router.get("/classes/{key}/knowledge-map")
+@page_cache("map")
 def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(teacher),
                   s: Session = Depends(get_session)) -> dict:
     """知识点一层的图：节点是知识点，边由技能之间的先修边汇总而来。
@@ -893,6 +904,7 @@ def knowledge_map(key: str, student: str | None = None, user: m.User = Depends(t
 
 
 @router.get("/classes/{key}/knowledge-map/{kp}")
+@page_cache("node")
 def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     from ..taxonomy.prereq import kp_edges
 
@@ -968,6 +980,7 @@ def _ds(user: m.User) -> None:
 
 
 @router.get("/classes/{key}/cross")
+@page_cache("cross")
 def cross_page(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     """跨课程页：C 基础预警（按这个班作业涉及的知识点）、全部联系和它们的数据检验。"""
     _ds(user)
@@ -985,6 +998,34 @@ def cross_page(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
             "params": {"n0": config.CROSS["n0"], "mastered": config.CROSS["mastered"], "minN": config.CROSS["min_n"],
                        "supportProb": config.CROSS["support_prob"], "reliability": config.CROSS["reliability"]},
             "dKps": [{"code": c, "name": KNOWLEDGE_POINTS.get(c, "")} for c in d_kps]}
+
+
+# ------------------------------------------------------------ 老师盲评“理解”（app/rating.py）
+class RatingBody(BaseModel):
+    assessmentId: int
+    level: int | None = None
+    shownAt: int | None = None
+
+
+def _rating_scope(s: Session, user: m.User, key: str) -> tuple[list[str], str]:
+    cls = _class(s, user, key)
+    return [st.user_id for st in class_students(s, cls)], _course_of_class(s, cls)
+
+
+@router.get("/classes/{key}/rating")
+def rating_next(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    ids, course = _rating_scope(s, user, key)
+    return rating.next_item(s, user, ids, course)
+
+
+@router.post("/classes/{key}/rating")
+def rating_save(key: str, body: RatingBody, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    ids, course = _rating_scope(s, user, key)
+    try:
+        rating.rate(s, user, ids, course, body.assessmentId, body.level, body.shownAt)
+    except rating.RatingError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return rating.next_item(s, user, ids, course)
 
 
 class ReviewLinkBody(BaseModel):
@@ -1015,6 +1056,7 @@ class LogBody(BaseModel):
     dateTo: str
     kinds: list[str]
     includeText: bool = False
+    deidentify: bool = False
     format: str = "csv"
     purpose: str = ""
 
@@ -1049,11 +1091,12 @@ def log_create(body: LogBody, user: m.User = Depends(teacher), s: Session = Depe
         raise HTTPException(status_code=403, detail="选的班级里有不在你名下的。")
     try:
         req = logs.create(s, user, body.ids, body.classKeys, _day(body.dateFrom, False), _day(body.dateTo, True),
-                          body.kinds, body.includeText, body.format, body.purpose, course=user.course)
+                          body.kinds, body.includeText, body.format, body.purpose, course=user.course,
+                          deidentify=body.deidentify)
     except logs.RequestError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     rows = logs.collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text,
-                        req.course)
+                        req.course, deidentify=req.deidentified)
     preview = [{"userId": r.user_id, "name": r.name, "time": r.time.isoformat(), "kind": logs.KINDS.get(r.kind, r.kind),
                 "action": r.action, "problem": r.problem, "problemId": r.problem_id, "samples": r.samples,
                 "detail": r.detail} for r in rows[-12:]]

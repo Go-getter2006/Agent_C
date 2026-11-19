@@ -19,10 +19,10 @@ Leitner 盒子；半衰期回归（Settles 和 Meeder 2016）。
    讲了原理或给了代码才做出来的，算一次遗忘。
 5. 毕业：连续做对 graduate_streak 次，而且 h 已经超过 graduate_half_life 天。毕业后再出问题会重新进来。
 6. 不打扰：不弹窗，不往对话里插题。小题在“复习提升”里做（界面改造方案第 4 节）：后台空闲时给最近来过的学生
-   提前备好一道（prepare_active），进栏目就见题；没备好就当场出一道，出不了就退避，稍后自动再试；
+   提前备好一道（prepare_active），没备好时后台退避重试；
    侧边栏的数字只数已经备好的题（ready_count）。中途离开的，回来接着做同一道。
    每天最多 daily_limit 道，同一个技能一天最多一道；到期的里面先做记得最不牢的。
-7. 出什么题：第一次复习用他自己当时那道题的代码回忆；之后换一个场景（迁移）；刚答错过就降一级，出判断题。
+7. 出什么题：正式检查使用同一技能的新场景；刚答错过就降一级，出判断题。
 8. 两门课分开：复习项按技能编码属于哪门课，C 语言登录只看 C 语言的，数据结构只看数据结构的；每天的上限也各算各的。
 """
 from __future__ import annotations
@@ -73,13 +73,26 @@ def _schedule(item: m.ReviewItem) -> None:
 
 
 def enqueue(s: Session, user_id: str, skill: str, origin: str, server_id: int | None = None,
-            problem_id: int | None = None, at: dt.datetime | None = None) -> m.ReviewItem | None:
+            problem_id: int | None = None, at: dt.datetime | None = None,
+            submission_id: int | None = None) -> m.ReviewItem | None:
     """加进复习。已经在复习的，算一次遗忘；毕业了的，重新开始。"""
     if not skill:
         return None
     at = at or db.now()
     item = s.scalar(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id, m.ReviewItem.skill_code == skill)
                     .order_by(m.ReviewItem.id.desc()))
+    if submission_id is not None and item is not None and item.trigger_at is not None:
+        if at < item.trigger_at or (item.origin_server_id == server_id and
+                                    item.trigger_submission_id == submission_id):
+            return item
+
+    def record_trigger():
+        if submission_id is not None:
+            item.trigger_submission_id, item.trigger_at = submission_id, at
+            item.origin_server_id, item.origin_problem_id, item.origin = server_id, problem_id, origin
+            if origin in ("corrected", "heavy_help") and item.attempt_id is None:
+                item.due_at = at
+
     start_h = cfg()["initial_half_life"].get(origin, cfg()["initial_half_life"]["stuck"])
     if item is None:
         item = m.ReviewItem(user_id=user_id, skill_code=skill, origin=origin, origin_server_id=server_id,
@@ -88,10 +101,12 @@ def enqueue(s: Session, user_id: str, skill: str, origin: str, server_id: int | 
         s.add(item)
     else:
         same_episode = (item.state == ACTIVE and item.origin != "spot_check" and problem_id is not None and item.origin_problem_id == problem_id
+                        and item.origin_server_id == server_id
                         and (at - item.updated_at).total_seconds() < cfg()["spacing_hours"] * 3600)
         if same_episode:
             if origin == "corrected" and item.origin == "failed":
                 item.origin = "corrected"
+            record_trigger()
             return item   # 同一道题、同一段时间里的又一次（比如卡住后靠示例代码通过）：不重复算遗忘
         if item.state != ACTIVE:
             item.state, item.reps, item.streak = ACTIVE, 0, 0
@@ -100,11 +115,14 @@ def enqueue(s: Session, user_id: str, skill: str, origin: str, server_id: int | 
         item.half_life = min(item.half_life, start_h)
         item.last_success_at = at
         item.last_outcome = "lapse"
+        if submission_id is None:
+            item.trigger_submission_id, item.trigger_at = None, None
         item.origin = origin
         if problem_id is not None:
             item.origin_server_id, item.origin_problem_id = server_id, problem_id
         item.updated_at = at
     _schedule(item)
+    record_trigger()
     s.flush()
     return item
 
@@ -164,12 +182,12 @@ def on_independent_practice(s: Session, sub: m.Submission, label: m.ProblemLabel
     at = sub.submit_time or db.now()
     skills = [label.primary_skill, *(label.secondary_skills or [])]
     if help_level in ("H2", "H3"):
-        enqueue(s, sub.user_id, label.primary_skill, "heavy_help", sub.server_id, sub.problem_id, at)
+        enqueue(s, sub.user_id, label.primary_skill, "heavy_help", sub.server_id, sub.problem_id, at, sub.submission_id)
         return
     if reliability < 1.0:
         return   # 雷同的通过不当作他自己记住了
     if earlier_attempts > 0:
-        enqueue(s, sub.user_id, label.primary_skill, "corrected", sub.server_id, sub.problem_id, at)
+        enqueue(s, sub.user_id, label.primary_skill, "corrected", sub.server_id, sub.problem_id, at, sub.submission_id)
     elif cfg().get("spot_check_every", 10) > 0:
         # 偶尔抽查独立做对的题；既有薄弱项不被抽查重置，也不占据高优先级。
         passed_problems = select(m.Submission.server_id, m.Submission.problem_id).join(
@@ -180,7 +198,7 @@ def on_independent_practice(s: Session, sub: m.Submission, label: m.ProblemLabel
         exists = s.scalar(select(m.ReviewItem.id).where(m.ReviewItem.user_id == sub.user_id,
                                                        m.ReviewItem.skill_code == label.primary_skill))
         if n and n % cfg().get("spot_check_every", 10) == 0 and exists is None:
-            enqueue(s, sub.user_id, label.primary_skill, "spot_check", sub.server_id, sub.problem_id, at)
+            enqueue(s, sub.user_id, label.primary_skill, "spot_check", sub.server_id, sub.problem_id, at, sub.submission_id)
     for code in skills:
         item = s.scalar(select(m.ReviewItem).where(
             m.ReviewItem.user_id == sub.user_id, m.ReviewItem.skill_code == code, m.ReviewItem.state == ACTIVE))
@@ -210,7 +228,7 @@ def on_recurrence(s: Session, sub: m.Submission, error_code: str, skill: str) ->
             m.Submission.problem_id == problem_id, m.Submission.judgement == "AC",
             m.Submission.submission_id > sid, m.Submission.submission_id < sub.submission_id))
         if fixed is not None:
-            return enqueue(s, sub.user_id, skill, "recurrence", sub.server_id, sub.problem_id, at)
+            return enqueue(s, sub.user_id, skill, "recurrence", sub.server_id, sub.problem_id, at, sub.submission_id)
     return None
 
 
@@ -225,7 +243,8 @@ def _today_count(s: Session, user_id: str, at: dt.datetime, course: str | None =
     return len(rows), {r.skill_code for r in rows}
 
 
-def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None) -> list[m.ReviewItem]:
+def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None,
+              *, candidates: bool = False) -> list[m.ReviewItem]:
     """今天可以做的：到期的、今天还没做过这个技能的，记得最不牢的在前，最多 daily_limit 个。"""
     at = at or db.now()
     done, skills_today = _today_count(s, user_id, at, course)
@@ -235,9 +254,15 @@ def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: s
         or_(m.ReviewItem.due_at <= at, m.ReviewItem.attempt_id.is_not(None)))).all()
     rows = [r for r in rows if _in_course(r.skill_code, course)
             and (r.skill_code not in skills_today or r.attempt_id is not None)]
-    rows.sort(key=lambda r: (r.attempt_id is None, r.origin == "spot_check", retention(r, at), r.id))
+    def priority(r):
+        recent_check = (r.trigger_at is not None and at - dt.timedelta(days=1) <= r.trigger_at <= at
+                        and r.origin in ("corrected", "heavy_help") and r.due_at <= r.trigger_at)
+        return (r.attempt_id is None, r.origin == "spot_check", not recent_check, retention(r, at), r.id)
+
+    rows.sort(key=priority)
     pending = [r for r in rows if r.attempt_id is not None]
-    return pending + [r for r in rows if r.attempt_id is None][:room]
+    available = [r for r in rows if r.attempt_id is None]
+    return pending + (available if candidates and room else available[:room])
 
 
 def _origin_ref(s: Session, user_id: str, item: m.ReviewItem) -> dict | None:
@@ -290,11 +315,7 @@ def summary(s: Session, user_id: str, at: dt.datetime | None = None, course: str
     }
 
 
-def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None, course: str | None = None):
-    """开始复习一项：用出题器给他出一道题。返回 (复习项, 小题作答)；出不了题返回 (复习项, None)。"""
-    from . import quiz, quizgen
-
-    at = at or db.now()
+def prepared_attempt(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None, course: str | None = None):
     item = s.get(m.ReviewItem, item_id)
     if item is None or item.user_id != user_id or item.state != ACTIVE or not _in_course(item.skill_code, course):
         return None, None
@@ -302,7 +323,18 @@ def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None,
         attempt = s.get(m.QuizAttempt, item.attempt_id)
         if attempt is not None and attempt.state != "done":
             return item, attempt
-    if item.id not in {d.id for d in due_items(s, user_id, at, course)}:
+    return item, None
+
+
+def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None, course: str | None = None):
+    """后台准备独立作答。已准备的作答复用，页面只调用 prepared_attempt。"""
+    from . import quiz, quizgen
+
+    at = at or db.now()
+    item, attempt = prepared_attempt(s, user_id, item_id, at, course)
+    if item is None or attempt is not None:
+        return item, attempt
+    if item.id not in {d.id for d in due_items(s, user_id, at, course, candidates=True)}:
         return item, None
     q = quizgen.generate(s, user_id, item.skill_code, "review",
                          origin=(item.origin_server_id, item.origin_problem_id) if item.origin_problem_id else None,
@@ -310,6 +342,11 @@ def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None,
     if q is None:
         return item, None
     attempt = quiz.new_attempt(s, user_id, q, "review", at, review_item_id=item.id)
+    if item.trigger_at is not None:
+        attempt.events = [{**attempt.events[0], "triggerAt": item.trigger_at.isoformat(),
+                           "triggerReason": item.origin, "submissionId": item.trigger_submission_id,
+                           "serverId": item.origin_server_id,
+                           "phase": "recent" if item.due_at <= item.trigger_at else "delayed"}]
     item.attempt_id = attempt.id
     return item, attempt
 
@@ -349,58 +386,6 @@ def seed_missing(s: Session, user_id: str, course: str, at: dt.datetime, limit: 
     return done
 
 
-def offer_in_chat(s: Session, user_id: str, course: str, at: dt.datetime | None = None) -> str:
-    """综合对话空闲时主动出一道复习题；跨标签页串行、未完成题复用，出题失败退避。"""
-    from . import quiz
-
-    at = at or db.now()
-    s.scalar(select(m.Student).where(m.Student.user_id == user_id).with_for_update())
-    last = s.scalar(select(m.ChatMessage.created_at).where(
-        m.ChatMessage.user_id == user_id, m.ChatMessage.course == course,
-        m.ChatMessage.role == "student").order_by(m.ChatMessage.created_at.desc()).limit(1))
-    if last and (at - last).total_seconds() < 120:
-        return "busy"
-    seed_missing(s, user_id, course, at)
-    pending = s.scalars(select(m.QuizAttempt).where(
-        m.QuizAttempt.user_id == user_id, m.QuizAttempt.reason == "review", m.QuizAttempt.state != "done",
-        m.QuizAttempt.skill_code.like(course + "%")).order_by(m.QuizAttempt.id)).first()
-    if pending is not None:
-        if not pending.review_item_id:
-            return "busy"
-        item, attempt = s.get(m.ReviewItem, pending.review_item_id), pending
-    else:
-        waiting = s.scalar(select(m.UiEvent.id).where(
-            m.UiEvent.user_id == user_id, m.UiEvent.course == course, m.UiEvent.kind == "review_wait",
-            m.UiEvent.ts > at - dt.timedelta(minutes=5)).limit(1))
-        if waiting:
-            return "waiting"
-        due = due_items(s, user_id, at, course)
-        if not due:
-            return "idle"
-        item, attempt = start(s, user_id, due[0].id, at, course)
-        if attempt is None:
-            s.add(m.UiEvent(user_id=user_id, course=course, kind="review_wait", target="", ts=at))
-            return "waiting"
-    if item is None or attempt is None:
-        return "idle"
-    # 出题可能调用模型；期间学生开始说话时，先保留小题，等对话空闲再展示。
-    latest = s.scalar(select(m.ChatMessage.created_at).where(
-        m.ChatMessage.user_id == user_id, m.ChatMessage.course == course,
-        m.ChatMessage.role == "student").order_by(m.ChatMessage.created_at.desc()).limit(1))
-    if latest and latest > at:
-        return "busy"
-    shown = s.scalar(select(m.ChatMessage.id).where(m.ChatMessage.quiz_attempt_id == attempt.id).limit(1))
-    if shown:
-        return "ready"
-    q = s.get(m.QuizItem, attempt.item_id)
-    if q is None:
-        return "waiting"
-    s.add(m.ChatMessage(user_id=user_id, course=course, role="agent", kind="quiz", quiz_attempt_id=attempt.id,
-                       created_at=at, content={"blocks":[{"t":"p","text":lead_for(s, user_id, item, q)}]}))
-    s.flush()
-    return "ready"
-
-
 def lead_for(s: Session, user_id: str, item: m.ReviewItem, q: m.QuizItem) -> str:
     ref = _origin_ref(s, user_id, item)
     if item.origin == "spot_check":
@@ -409,7 +394,7 @@ def lead_for(s: Session, user_id: str, item: m.ReviewItem, q: m.QuizItem) -> str
         reason = {"failed":"有过没通过的提交", "corrected":"修改后通过了"}.get(item.origin, ORIGIN_TEXT.get(item.origin, "卡过"))
         return f"你在「{ref['title']}」（{ref['brief']}）里{reason}。用你自己当时的代码回忆一下："
     if item.reps == 0:
-        return "前几天这里卡过，回忆一下："
+        return "换一段代码，独立判断它能否完成题目要求。"
     return "换个场景，看看还记不记得："
 
 
@@ -457,14 +442,19 @@ def prepare(s: Session, user_id: str, course: str, at: dt.datetime | None = None
         m.UiEvent.ts > at - dt.timedelta(minutes=5)).limit(1))
     if waiting:
         return "waiting"
-    due = due_items(s, user_id, at, course)
+    due = due_items(s, user_id, at, course, candidates=True)
     if not due:
         return "idle"
-    # 按顺序试：某个技能这会儿出不了题（比如没有题库题、大模型也用不了），换下一项，不让一项卡住全部
-    for item in due[:3]:
+    tried = set(s.scalars(select(m.UiEvent.target).where(m.UiEvent.user_id == user_id,
+        m.UiEvent.course == course, m.UiEvent.kind == "review_item_wait", m.UiEvent.ts > at - dt.timedelta(hours=1))))
+    misses = []
+    for item in [r for r in due if str(r.id) not in tried][:3]:
         _item, attempt = start(s, user_id, item.id, at, course)
         if attempt is not None:
+            s.add_all(misses)
             return "ready"
+        misses.append(m.UiEvent(user_id=user_id, course=course, kind="review_item_wait", target=str(item.id), ts=at))
+    s.add_all(misses)
     s.add(m.UiEvent(user_id=user_id, course=course, kind="review_wait", target="", ts=at))
     return "waiting"
 
@@ -474,17 +464,42 @@ def prepare_active(limit: int = 3, at: dt.datetime | None = None) -> int:
     at = at or db.now()
     done = 0
     with db.session_scope() as s:
-        rows = s.execute(select(m.UiEvent.user_id, m.UiEvent.course).where(
+        activity = set(s.execute(select(m.UiEvent.user_id, m.UiEvent.course).where(
             m.UiEvent.kind.in_(("login", "open_review", "open_problem", "open_knowledge")),
-            m.UiEvent.ts > at - dt.timedelta(days=7)).group_by(m.UiEvent.user_id, m.UiEvent.course)).all()
-    for user_id, course in rows:
-        if done >= limit:
+            m.UiEvent.ts > at - dt.timedelta(days=7)).distinct()).tuples())
+        seeded = set(s.execute(select(m.UiEvent.user_id, m.UiEvent.course).where(
+            m.UiEvent.kind == "review_seed", m.UiEvent.ts > at - dt.timedelta(hours=12)).distinct()).tuples())
+        waiting = set(s.execute(select(m.UiEvent.user_id, m.UiEvent.course).where(
+            m.UiEvent.kind == "review_wait", m.UiEvent.ts > at - dt.timedelta(minutes=5)).distinct()).tuples())
+        ready = {(uid, course_of(skill)) for uid, skill in s.execute(select(
+            m.QuizAttempt.user_id, m.QuizAttempt.skill_code).where(m.QuizAttempt.reason == "review",
+            m.QuizAttempt.state != "done").distinct())}
+        queued = {}
+        for uid, skill, trigger in s.execute(select(m.ReviewItem.user_id, m.ReviewItem.skill_code,
+                m.ReviewItem.trigger_at).where(m.ReviewItem.state == ACTIVE, m.ReviewItem.due_at <= at)
+                .order_by(m.ReviewItem.due_at, m.ReviewItem.id)):
+            key = (uid, course_of(skill))
+            if key in activity or (trigger and trigger >= at - dt.timedelta(days=7)):
+                queued[key] = None
+    for key in sorted(activity - seeded):
+        queued.setdefault(key, None)
+    tried = 0
+    for user_id, course in queued:
+        if tried >= limit:
             break
+        key = (user_id, course)
+        if key in ready or key in waiting:
+            continue
+        if key not in seeded:
+            with db.session_scope() as s:
+                seed_missing(s, user_id, course, at)
         with db.session_scope() as s:
-            if _pending(s, user_id, course) is not None or not due_items(s, user_id, at, course):
-                continue
-            if prepare(s, user_id, course, at) == "ready":
-                done += 1
+            if s.get_bind().dialect.name == "postgresql":
+                if not s.scalar(select(func.pg_try_advisory_xact_lock(19574, func.hashtext(user_id + ":" + course)))):
+                    continue
+            result = prepare(s, user_id, course, at)
+            tried += result in ("ready", "waiting")
+            done += result == "ready"
     return done
 
 

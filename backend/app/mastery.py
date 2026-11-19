@@ -153,9 +153,26 @@ def skill_states(s: Session, user_id: str, at: dt.datetime | None = None, decay:
     include_agent（只对 v2）：用不用智能体评估的证据。
     """
     model = model or config.MASTERY_MODEL
+    memo = s.info.get(MEMO) if at is None else None
+    key = ("skill", user_id, decay, model, with_predicted, include_agent)
+    if memo is not None and key in memo:
+        return memo[key]
     if model == "v2":
-        return _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted, include_agent)
-    return _skill_states_v1(s, user_id, at or db.now(), decay)
+        out = _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted, include_agent)
+    else:
+        out = _skill_states_v1(s, user_id, at or db.now(), decay)
+    if memo is not None:
+        memo[key] = out
+    return out
+
+
+MEMO = "mastery_memo"
+
+
+def memoize(s: Session) -> None:
+    """这个会话里，同一个学生“现在”的状态只算一次（教师端只读的页面用：一个页面要反复取每个学生的状态）。
+    会话里写了新证据还要重算的地方不要开。结果只读，不要改里面的对象。"""
+    s.info[MEMO] = {}
 
 
 def _skill_states_v1(s: Session, user_id: str, at: dt.datetime, decay: bool) -> dict[str, SkillState]:
@@ -358,6 +375,17 @@ class KpState:
 def kp_states(s: Session, user_id: str, model: str | None = None, with_predicted: bool = False) -> dict[str, KpState]:
     """粗知识点的档位：下面各技能按证据量加权的平均。"""
     model = model or config.MASTERY_MODEL
+    memo = s.info.get(MEMO)
+    key = ("kp", user_id, model, with_predicted)
+    if memo is not None and key in memo:
+        return memo[key]
+    out = _kp_states(s, user_id, model, with_predicted)
+    if memo is not None:
+        memo[key] = out
+    return out
+
+
+def _kp_states(s: Session, user_id: str, model: str, with_predicted: bool) -> dict[str, KpState]:
     out: dict[str, KpState] = {}
     for st in skill_states(s, user_id, model=model, with_predicted=with_predicted).values():
         kp = out.setdefault(kp_of_skill(st.code), KpState(kp_of_skill(st.code)))

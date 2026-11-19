@@ -4,6 +4,7 @@ import type { Homework, ProblemRow } from "../types";
 import { homeworkSummary, ProblemList } from "./Lists";
 
 interface Props {
+  unread?: { problems: Record<string, number>; homeworks: string[] };
   homeworks: Homework[];
   current: Homework | null;
   problems: ProblemRow[];
@@ -44,10 +45,10 @@ export default function HomeworkNavigator(p: Props) {
           <header className="homework-index-head"><h2>全部作业</h2><span className="note num">{p.homeworks.length} 次</span></header>
           <nav className="homework-index" aria-label="选择作业">
             {p.homeworks.map(hw => (
-              <button type="button" key={hw.key} className="homework-entry" aria-label={hw.title}
+              <button type="button" key={hw.key} className="homework-entry" aria-label={hw.title + (p.unread?.homeworks.includes(hw.key) ? "，有未读提醒" : "")}
                 aria-describedby={`summary-${hw.key}`} onClick={e => { motion(e); lastEntry.current = e.currentTarget; p.onEnter(hw.key); }}>
                 <FileText size={18} aria-hidden="true" />
-                <span className="homework-entry-main"><strong>{hw.title}</strong>
+                <span className="homework-entry-main"><strong>{hw.title}{p.unread?.homeworks.includes(hw.key) && <i className="failure-dot" aria-hidden="true" />}</strong>
                   <span id={`summary-${hw.key}`} className="note">{homeworkSummary(hw)}</span>
                   <span className="bar bar-pass" aria-hidden="true"><span style={{ width: `${hw.total ? hw.passed / hw.total * 100 : 0}%` }} /></span>
                 </span><ChevronRight size={18} aria-hidden="true" />
@@ -66,7 +67,7 @@ export default function HomeworkNavigator(p: Props) {
           {!p.ready && !p.error && <p className="plist-empty" role="status">正在取这次作业的题目…</p>}
           {p.ready && p.problems.length === 0 && <p className="plist-empty">这次作业里还没有题目</p>}
           <div className="problem-list-content" aria-busy={!p.ready} {...(!p.ready ? { inert: "" } : {})}>
-            <ProblemList problems={p.ready ? p.problems : []} currentKey={p.currentKey} onNavigate={p.onNavigate} />
+            <ProblemList unread={p.unread?.problems} problems={p.ready ? p.problems : []} currentKey={p.currentKey} onNavigate={p.onNavigate} />
           </div>
         </section>
       </div>

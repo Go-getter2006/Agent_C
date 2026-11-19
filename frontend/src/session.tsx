@@ -1,7 +1,7 @@
 // 登录状态，以及学生端几个页面共用的“当前选的是哪个作业”。
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, setUnauthorizedHandler } from "./api";
-import { useLoad } from "./lib/hooks";
+import { clearLoadMemo, useLoad } from "./lib/hooks";
 import { clearDrafts, setScope } from "./lib/memory";
 import type { Homework, Me, StatusInfo } from "./types";
 
@@ -19,6 +19,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [checked, setChecked] = useState(false);
   // 本机记住的位置、草稿按账户和课程分开：先换好范围再渲染页面
   const setMe = useCallback((value: Me | null) => {
+    clearLoadMemo();   // 换账户、退出：上一位用户的页面数据不留
     setScope(value);
     setMeRaw(value);
   }, []);
@@ -101,7 +102,7 @@ interface StatusValue {
 const StatusContext = createContext<StatusValue>({ status: null, reload: () => undefined });
 
 export function StatusProvider({ children }: { children: ReactNode }) {
-  const status = useLoad(() => api.status(), [], 60000);
+  const status = useLoad(() => api.status(), [], 15000);
   const value = useMemo(() => ({ status: status.data, reload: status.reload }), [status.data, status.reload]);
   return <StatusContext.Provider value={value}>{children}</StatusContext.Provider>;
 }
