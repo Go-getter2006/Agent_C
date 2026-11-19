@@ -441,7 +441,8 @@ def _rule_review(payload: dict) -> dict:
         if not any(c["kp"] == r["code"] for c in concerns):
             concerns.append({"kp": r["code"], "dimension": "perf", "why": "做题表现还不稳定"})
     dia = payload["dialogue"]
-    summary = f"有数据的知识点 {len(rows)} 个，已掌握 {len(strengths)} 个、待加强 {len(weak)} 个。"
+    names = "、".join(r["name"] for r in weak[:4]) + (" 等" if len(weak) > 4 else "")
+    summary = f"待加强：{names}。" if weak else "练过的知识点里没有待加强的。"
     if dia["total"]:
         summary += f"对话里建构性的提问和解释占 {round((dia['constructive'] or 0) * 100)}%，" \
                    f"索要答案占 {round((dia['answerSeeking'] or 0) * 100)}%。"
@@ -459,10 +460,26 @@ def _rule_review(payload: dict) -> dict:
     return {"summary": summary, "strengths": strengths, "concerns": concerns[:6], "suggestions": suggestions[:3]}
 
 
+def _digest(payload: dict) -> str:
+    """评语该不该重写，只看画像的结论：每个知识点的档位和提示、看出来的错误想法、对话里建构性和索要答案的大致比例
+    （一成一档）。各维度的数值每天都会随遗忘曲线变一点，不算变化——不然每个学生每天都要重写一遍，白调大模型。"""
+    dia = payload.get("dialogue") or {}
+    key = {"kp": sorted([r["code"], r["level"], sorted(r["flags"])] for r in payload["knowledge"]),
+           "misconceptions": sorted(set(payload.get("misconceptions") or [])),
+           "dialogue": [round(dia.get("constructive") or 0, 1), round(dia.get("answerSeeking") or 0, 1)]
+           if dia.get("total") else None}
+    return hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def review_is_current(s: Session, row: m.AgentReview | None, user_id: str, course: str) -> bool:
+    """评语是按当时的画像写的；画像变了（有了新数据，或者算法改了）就过时了，后台会重写。"""
+    return row is None or row.profile_hash == _digest(_profile_payload(s, user_id, course))
+
+
 def agent_review(s: Session, user_id: str, course: str, requested_by: int | None = None,
                  force: bool = False) -> m.AgentReview:
     payload = _profile_payload(s, user_id, course)
-    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    digest = _digest(payload)
     last = s.scalars(select(m.AgentReview).where(m.AgentReview.user_id == user_id, m.AgentReview.course == course)
                      .order_by(m.AgentReview.id.desc())).first()
     if last is not None:
@@ -545,11 +562,17 @@ def pending_reviews(s: Session, limit: int | None = None, now: dt.datetime | Non
     return keys[:limit] if limit else keys
 
 
-def refresh_reviews(limit: int | None = None, now: dt.datetime | None = None) -> int:
-    """后台自动写评语，不用老师去点。返回新写了几份（画像没变的不重写）。"""
+def refresh_reviews(limit: int | None = None, now: dt.datetime | None = None, include_stale: bool = False) -> int:
+    """后台自动写评语，不用老师去点。返回新写了几份（画像没变的不重写）。
+    include_stale（每天夜里）：已经有评语的学生都核对一遍画像，变了就重写——没有新数据、但算法改了的也会更新。"""
     n = 0
     with db.session_scope() as s:
-        for uid, course in pending_reviews(s, limit, now):
+        keys = pending_reviews(s, limit, now)
+        if include_stale:
+            seen = set(keys)
+            keys += [k for k in s.execute(select(m.AgentReview.user_id, m.AgentReview.course).distinct()).all()
+                     if tuple(k) not in seen]
+        for uid, course in keys:
             before = s.scalar(select(m.AgentReview.id).where(m.AgentReview.user_id == uid, m.AgentReview.course == course)
                               .order_by(m.AgentReview.id.desc()))
             try:
@@ -561,12 +584,13 @@ def refresh_reviews(limit: int | None = None, now: dt.datetime | None = None) ->
     return n
 
 
-def review_view(row: m.AgentReview | None) -> dict | None:
+def review_view(row: m.AgentReview | None, stale: bool = False) -> dict | None:
+    """stale：画像变了、评语还没重写（页面上的数以页面为准）。"""
     if row is None:
         return None
     c = row.content or {}
     name = lambda code: KNOWLEDGE_POINTS.get(code, code)  # noqa: E731
-    return {"summary": c.get("summary", ""), "source": row.source, "time": row.created_at.isoformat(),
+    return {"summary": c.get("summary", ""), "source": row.source, "time": row.created_at.isoformat(), "stale": stale,
             "strengths": [{"code": x, "name": name(x)} for x in c.get("strengths", [])],
             "concerns": [{"kp": x["kp"], "name": name(x["kp"]), "dimension": DIM_NAMES.get(x["dimension"], ""),
                           "why": x["why"]} for x in c.get("concerns", [])],

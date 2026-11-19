@@ -17,8 +17,8 @@
 4. 有时限：下载链接 7 天后失效，可以随时作废；文件不落盘，下载时按申请时定下的范围现生成。
 5. 限量：一次最多 500 个学号、时间段最长 366 天、每人每天最多 20 次申请。
 6. 分课程：只导出申请时登录的那门课的记录（C 语言和数据结构分开登录）。
-7. 去标识（研究用，可选）：学号换成化名（用服务器密钥算的 HMAC，同一台服务器上同一个学生每次导出都一样，
-   几份文件可以按化名对上），不给姓名、提交编号；原文里的学号、姓名去掉。指标的定义和版本见 docs/研究数据与指标.md。
+7. 一律带学号和姓名，不做化名：老师要拿学号和期末考试系统的成绩比对（比对由老师自己做）。
+   研究用的几类（求助回合、卡点、理解评估）和小题的独立作答字段带指标版本，定义见 docs/研究数据与指标.md。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import crypto, db
+from . import db
 from . import models as m
 from .taxonomy import JUDGEMENTS, KNOWLEDGE_POINTS, course_of, error_name, kp_of_skill, skill_name
 
@@ -73,14 +73,6 @@ class RequestError(ValueError):
     """申请不合格，message 直接给教师看。"""
 
 
-def pseudonym(user_id: str) -> str:
-    """去标识导出用的化名：同一台服务器上同一个学生每次都一样，没有服务器密钥推不回学号。"""
-    import hmac
-
-    digest = hmac.new(crypto._derive("research-pseudonym"), user_id.encode("utf-8"), "sha256").hexdigest()
-    return "S" + digest[:10]
-
-
 def parse_ids(text: str) -> list[str]:
     return list(dict.fromkeys(x for x in re.split(r"[\s,，;；、]+", text or "") if x))
 
@@ -113,8 +105,8 @@ def _problem_title(s: Session, cache: dict, server_id: int | None, problem_id: i
 
 
 def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt.datetime, kinds: list[str],
-            include_text: bool, course: str | None = None, deidentify: bool = False) -> list[Row]:
-    """按申请的范围把日志收齐，按时间排好。course：只要这门课的。deidentify：学号换成化名、去掉姓名和提交编号。"""
+            include_text: bool, course: str | None = None) -> list[Row]:
+    """按申请的范围把日志收齐，按时间排好。course：只要这门课的。"""
     if not user_ids:
         return []
     names = dict(s.execute(select(m.Student.user_id, m.Student.name).where(m.Student.user_id.in_(user_ids))).all())
@@ -320,14 +312,6 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                 data={"event": e.kind, "target": e.target})
 
     rows.sort(key=lambda r: (r.time, r.user_id))
-    if deidentify:
-        from .llm import strip_identity
-
-        for r in rows:
-            if r.text:
-                r.text = strip_identity(r.text, r.user_id, r.name)
-            r.user_id, r.name, r.submission_id = pseudonym(r.user_id), "", None
-            r.data = {k: v for k, v in r.data.items() if k != "submission"}
     return rows
 
 
@@ -352,7 +336,7 @@ def allowed_students(s: Session, user: m.User) -> set[str] | None:
 
 def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_from: dt.datetime,
            date_to: dt.datetime, kinds: list[str], include_text: bool, fmt: str, purpose: str,
-           course: str = "C", deidentify: bool = False) -> m.LogRequest:
+           course: str = "C") -> m.LogRequest:
     now = db.now()
     kinds = [k for k in dict.fromkeys(kinds) if k in KINDS]
     if not kinds:
@@ -392,7 +376,7 @@ def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_f
     req = m.LogRequest(
         requester_id=user.id, requester_name=user.display_name or user.login_name, requested_ids=requested, course=course,
         granted_ids=granted, denied_ids=denied, class_keys=list(class_ids), date_from=date_from,
-        date_to=min(date_to, now), kinds=kinds, include_text=bool(include_text), deidentified=bool(deidentify), fmt=fmt,
+        date_to=min(date_to, now), kinds=kinds, include_text=bool(include_text), fmt=fmt,
         purpose=purpose.strip()[:200], token=secrets.token_urlsafe(24), status="ready", created_at=now,
         expires_at=now + dt.timedelta(days=TTL_DAYS))
     req.rows = len(collect(s, granted, req.date_from, req.date_to, kinds, include_text, course))
@@ -422,14 +406,9 @@ def versions() -> dict:
 
 def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:
     """按申请时定下的范围现生成文件。返回 (内容, MIME 类型, 文件名)。"""
-    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text, req.course,
-                   deidentify=req.deidentified)
+    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text, req.course)
     stamp = req.created_at.astimezone(db.BEIJING).strftime("%Y%m%d-%H%M")
     cols = [c for c in COLUMNS if c[0] != "text" or req.include_text]
-    if req.deidentified:
-        cols = [("user_id", "化名") if k == "user_id" else (k, label) for k, label in cols
-                if k not in ("name", "submission_id")]
-    prefix = "研究数据" if req.deidentified else "学生日志"
 
     def value(r: Row, key: str):
         v = getattr(r, key)
@@ -443,18 +422,17 @@ def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:
         payload = {
             "request": {"id": req.id, "requester": req.requester_name, "createdAt": req.created_at.isoformat(),
                         "from": req.date_from.isoformat(), "to": req.date_to.isoformat(), "kinds": req.kinds,
-                        "students": [pseudonym(u) for u in req.granted_ids] if req.deidentified else req.granted_ids,
-                        "purpose": req.purpose, "deidentified": req.deidentified, "versions": versions()},
+                        "students": req.granted_ids, "purpose": req.purpose, "versions": versions()},
             "rows": [{**{k: value(r, k) for k, _ in cols}, "data": r.data} for r in rows],
         }
         return (json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8"), "application/json",
-                f"{prefix}-{stamp}.json")
+                f"学生日志-{stamp}.json")
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([label for _k, label in cols])
     for r in rows:
         w.writerow([value(r, k) for k, _ in cols])
-    return ("﻿" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8", f"{prefix}-{stamp}.csv"
+    return ("﻿" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8", f"学生日志-{stamp}.csv"
 
 
 def view(req: m.LogRequest, at: dt.datetime | None = None) -> dict:
@@ -462,7 +440,6 @@ def view(req: m.LogRequest, at: dt.datetime | None = None) -> dict:
         "id": req.id, "createdAt": req.created_at.isoformat(), "requester": req.requester_name,
         "from": req.date_from.isoformat(), "to": req.date_to.isoformat(), "kinds": req.kinds,
         "kindNames": [KINDS.get(k, k) for k in req.kinds], "includeText": req.include_text, "format": req.fmt,
-        "deidentified": req.deidentified,
         "purpose": req.purpose, "granted": len(req.granted_ids), "denied": req.denied_ids, "rows": req.rows,
         "status": state_of(req, at), "expiresAt": req.expires_at.isoformat(), "downloads": req.downloads,
         "token": req.token if state_of(req, at) == "ready" else None,

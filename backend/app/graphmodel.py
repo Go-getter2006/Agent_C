@@ -165,7 +165,7 @@ def nightly(user_ids: list[str] | None = None) -> dict:
     with db.session_scope() as s:
         weights = profile.refit(s)
         links = cross.auto_links(s)   # 跨课程的联系：智能体补充、用新记下的预测检验、按检验结果采用或不用
-    reviews = profile.refresh_reviews()   # 有了新数据的学生，自动写评语
+    reviews = profile.refresh_reviews(include_stale=True)   # 有了新数据、或画像变了的学生，自动重写评语
     return {"students": len(ids), "predictions": n_pred, "assessed": assessed, "weights": weights, "links": links,
             "reviews": reviews}
 

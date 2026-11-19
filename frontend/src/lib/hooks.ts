@@ -30,25 +30,28 @@ interface Loaded<T> {
   setData: (value: T) => void;
 }
 
-/** 上一次取到的数据（按 memoKey），只在内存里、换账户或退出就清掉。切回一个页面先显示它，同时在后台取新的。 */
-const memo = new Map<string, unknown>();
+/** 上一次取到的数据（按 memoKey），只在内存里、换账户或退出就清掉。切回一个页面先显示它；
+ *  取的时候数据的版本（fresh）和现在一样就不再请求，不一样才在后台取新的。 */
+const memo = new Map<string, { value: unknown; fresh?: string }>();
 const MEMO_MAX = 40;
 
 export function clearLoadMemo() {
   memo.clear();
 }
 
-function remember(key: string, value: unknown) {
+function remember(key: string, value: unknown, fresh?: string) {
   memo.delete(key);
-  memo.set(key, value);
+  memo.set(key, { value, fresh });
   while (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value as string);
 }
 
 /** 取数据。deps 变了重新取；pollMs 设了就在页面可见时定时刷新（刷新失败不清掉已有的数据）。
  *  keep：deps 变了不先清空，新数据到了再换（切换题目、作业时不闪）。
- *  memoKey：切回来时先显示上一次的数据（每组 deps 一个键），新数据到了再换。 */
-export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, keep = false, memoKey?: string): Loaded<T> {
-  const [data, setData] = useState<T | null>(() => (memoKey && memo.has(memoKey) ? (memo.get(memoKey) as T) : null));
+ *  memoKey：切回来时先显示上一次的数据（每组 deps 一个键），新数据到了再换。
+ *  fresh：数据的版本（教师端是 useClasses().tick）；上一次就是在这个版本取的，切回来不再请求。 */
+export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, keep = false, memoKey?: string,
+  fresh?: string): Loaded<T> {
+  const [data, setData] = useState<T | null>(() => (memoKey && memo.has(memoKey) ? (memo.get(memoKey)!.value as T) : null));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [stale, setStale] = useState(false);
@@ -56,6 +59,8 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
   fnRef.current = fn;
   const keyRef = useRef(memoKey);
   keyRef.current = memoKey;
+  const freshRef = useRef(fresh);
+  freshRef.current = fresh;
   const seq = useRef(0);
 
   const run = useCallback((silent: boolean) => {
@@ -64,7 +69,7 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
     fnRef.current()
       .then((value) => {
         if (mine !== seq.current) return;
-        if (keyRef.current) remember(keyRef.current, value);
+        if (keyRef.current) remember(keyRef.current, value, freshRef.current);
         setData(value);
         setStale(false);
         setError(null);
@@ -80,8 +85,13 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
 
   useEffect(() => {
     setError(null);
-    if (memoKey && memo.has(memoKey)) {
-      setData(memo.get(memoKey) as T);   // 先显示上一次的，后台取新的
+    const hit = memoKey ? memo.get(memoKey) : undefined;
+    if (hit && fresh !== undefined && hit.fresh === fresh) {
+      setData(hit.value as T);   // 上一次就是这个版本的数据：不用再取
+      setStale(false);
+      setLoading(false);
+    } else if (hit) {
+      setData(hit.value as T);   // 先显示上一次的，后台取新的
       setStale(true);
       run(true);
     } else {

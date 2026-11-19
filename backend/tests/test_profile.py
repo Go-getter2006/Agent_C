@@ -225,5 +225,30 @@ def test_teacher_profile_and_agent_review(demo):
                 assert again.id == row.id                 # 画像没变：用上一次的，不重写
         finally:
             llm.set_backend(None)
-        g = c.get(f"/api/teacher/classes/c{demo['server_id']}-31/graph").json()
-        assert g["fusion"]["weights"][0]["dim"] == "bias" and "agreement" in g and "dialogue" in g
+        key = f"c{demo['server_id']}-31"
+        g = c.get(f"/api/teacher/classes/{key}/graph").json()
+        assert g["fusion"]["weights"][0]["dim"] == "bias"
+        # 一致率在研究 · 理解评估，对话行为和表现在研究 · 求助效果
+        assert "agreement" in c.get(f"/api/teacher/classes/{key}/rating").json()["summary"]
+        assert "dialogue" in c.get(f"/api/teacher/classes/{key}/help").json()
+
+
+def test_review_rewrite_only_when_conclusions_change():
+    """评语只在结论变了才重写（省掉大模型调用）：各维度的数值随遗忘每天变一点不算；
+    档位、提示、看出来的错误想法、对话的大致比例变了才算。"""
+    import copy
+
+    base = {"knowledge": [{"code": "C06.03", "name": "最值、求和、统计", "level": "基本掌握", "perf": 0.61,
+                           "retention": 0.80, "flags": ["fading"]}],
+            "dialogue": {"total": 7, "constructive": 0.29, "answerSeeking": 0.0}, "misconceptions": ["max 的初值用 0"]}
+    drift = copy.deepcopy(base)
+    drift["knowledge"][0].update(perf=0.58, retention=0.71)
+    drift["dialogue"]["constructive"] = 0.31
+    assert profile._digest(base) == profile._digest(drift)
+    for change in (lambda p: p["knowledge"][0].update(level="待加强"),
+                   lambda p: p["knowledge"][0]["flags"].append("explain_gap"),
+                   lambda p: p["misconceptions"].append("下标从 1 开始"),
+                   lambda p: p["dialogue"].update(answerSeeking=0.4)):
+        other = copy.deepcopy(base)
+        change(other)
+        assert profile._digest(other) != profile._digest(base)
