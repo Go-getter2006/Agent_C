@@ -22,8 +22,6 @@
   .kg-chapters .btn[aria-pressed="true"] .note { color: inherit; }
   .msg-body { font-size: 16px; line-height: 1.75; }
   .overview-stats .stat { min-height: 112px; }
-  .overview-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--ink-3); font-size: 13px; }
-  .overview-distribution { max-height: 360px; overflow-y: auto; scrollbar-gutter: stable; }
   .overview-desktop .hw-list { max-height: 350px; overflow-y: auto; scrollbar-gutter: stable; }
   .overview-desktop .attn-list { max-height: 370px; overflow-y: auto; }
 }

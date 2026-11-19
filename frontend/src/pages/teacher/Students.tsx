@@ -16,18 +16,19 @@ interface StudentRow {
 }
 type SortKey = keyof StudentRow;
 
+// 先看掌握和进度，再看卡在哪，最后是活跃程度
 const COLUMNS: { key: SortKey; label: string; num: boolean; title?: string }[] = [
   { key: "name", label: "学生", num: false },
   { key: "score", label: "掌握分", num: true, title: "练过的知识点的掌握程度平均，0~100。做题（一次做对、交几次改对、还没过）和会话里智能体评的理解都算在里面" },
   { key: "passed", label: "已通过", num: true },
-  { key: "submissions", label: "提交", num: true },
   { key: "avgToPass", label: "平均几次改对", num: true },
   { key: "weak", label: "待加强", num: true, title: "待加强的知识点个数" },
   { key: "stuck", label: "卡点", num: true },
   { key: "rounds", label: "求助回合", num: true },
-  { key: "orderPct", label: "提交早晚", num: true, title: "每道题第一次提交在班里的先后，换成百分位后取平均：越小越早。Qu 等（2019）发现它和成绩明显相关" },
-  { key: "activeDays", label: "活跃天数", num: true },
   { key: "lastActive", label: "最近提交", num: false },
+  { key: "submissions", label: "提交", num: true },
+  { key: "activeDays", label: "活跃天数", num: true },
+  { key: "orderPct", label: "提交早晚", num: true, title: "每道题第一次提交在班里的先后，换成百分位后取平均：越小越早。Qu 等（2019）发现它和成绩明显相关" },
 ];
 
 export default function Students({ cls }: { cls: ClassInfo }) {
@@ -58,7 +59,7 @@ export default function Students({ cls }: { cls: ClassInfo }) {
           <span className="sr-only">按姓名或学号找</span>
           <input className="field" value={q} onChange={(e) => setQ(e.target.value)} placeholder="按姓名或学号找" />
         </label>
-        <span className="note">{rows.length} 人 · 这个班布置过 {total} 道题 · 点表头排序</span>
+        <span className="note">{rows.length} 人 · 这个班布置过 {total} 道题</span>
       </div>
       <div className="table-scroll">
         <table className="table">
@@ -97,14 +98,14 @@ export default function Students({ cls }: { cls: ClassInfo }) {
                     <span className="bar bar-pass" aria-hidden="true"><span style={{ width: `${total ? (100 * r.passed) / total : 0}%` }} /></span>
                   </span>
                 </td>
-                <td className="num">{r.submissions}</td>
                 <td className="num">{r.avgToPass === null ? "—" : `${r.avgToPass} 次`}</td>
                 <td className="num">{r.weak ? <span className="pill pill-fail">{r.weak}</span> : <span className="muted">0</span>}</td>
                 <td className="num">{r.stuck}{r.stubborn > 0 && <span className="pill pill-warn" style={{ marginLeft: 6 }}>顽固 {r.stubborn}</span>}</td>
                 <td className="num">{r.rounds}</td>
-                <td className="num">{r.orderPct === null ? "—" : r.orderPct}{r.copies > 0 && <span className="pill pill-warn" style={{ marginLeft: 6 }} title="通过的代码和更早的同学雷同"><Copy aria-hidden="true" />{r.copies}</span>}</td>
-                <td className="num">{r.activeDays}</td>
                 <td className="nowrap muted">{r.lastActive ? shortTime(r.lastActive) : "还没提交"}</td>
+                <td className="num">{r.submissions}</td>
+                <td className="num">{r.activeDays}</td>
+                <td className="num">{r.orderPct === null ? "—" : r.orderPct}{r.copies > 0 && <span className="pill pill-warn" style={{ marginLeft: 6 }} title="通过的代码和更早的同学雷同"><Copy aria-hidden="true" />{r.copies}</span>}</td>
               </tr>
             ))}
           </tbody>

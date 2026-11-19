@@ -1,13 +1,14 @@
-// 知识图谱页：上面一排筛选，中间是图（也可以切成表），点一个知识点在右边看详情。
+// 知识图谱：哪些知识点没学好，谁卡在这里。上面一排筛选，中间是图（也可以切成表，表能按待加强、卡住、没来问排），
+// 点一个知识点在右边看详情：全班、卡在这里的学生、没来问的、每个学生、小题三维、技能、常见错误、练习题、前置和后续。
 import { useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, BookOpen, CircleAlert, Link2, Network, Search, Table2, X } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUpDown, BookOpen, CircleAlert, Link2, Network, Search, Table2, X } from "lucide-react";
 import { get } from "../../api";
 import { StackedBar } from "../../components/charts";
 import KnowledgeGraph, { hasData, type KMEdge, type KMNode, type KMTopic } from "../../components/KnowledgeGraph";
 import { Card, LEVELS, Loading, Problem, Segmented, levelClass } from "../../components/ui";
 import { useEscape, useLayout, useLoad } from "../../lib/hooks";
-import { Code, ScoreBadge, type ClassInfo } from "./common";
+import { Code, RESOLUTION, ScoreBadge, type ClassInfo } from "./common";
 
 interface MapData {
   class: { key: string; name: string; course: "C" | "D" };
@@ -20,8 +21,15 @@ interface MapData {
   students: { userId: string; name: string }[];
 }
 
+interface StuckStudent {
+  userId: string; name: string; times: number; rounds: number; stubborn: boolean; skills: string[];
+  lastTime: string; lastProblem: string; resolution: string; passed: boolean | null; triesAfter: number | null;
+}
+interface SilentStudent { userId: string; name: string; problems: { title: string; problemId: number; fails: number }[] }
+
 interface KpDetail {
   code: string; name: string; course: string; topicName: string; foundation: boolean;
+  stuck: { students: StuckStudent[]; silent: SilentStudent[]; silentFails: number };
   skills: { code: string; name: string; kp: string; dist: number[] }[];
   weak: { userId: string; name: string; level: string; p: number; predicted: boolean }[];
   summary: string;   // 全班一句话
@@ -69,29 +77,130 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
             {node.student.text && <p className="kg-panel-text">{node.student.text}</p>}
           </section>
         )}
-        {hasData(node) ? (
-            <section>
-              <h3>{foundation ? "在 C 语言里的掌握程度" : "全班分布"}</h3>
+        <section>
+          <h3>{foundation ? "在 C 语言里的掌握程度" : "全班"}</h3>
+          {hasData(node) ? (
+            <>
               <StackedBar counts={node.dist} colors={LEVEL_COLORS} names={LEVELS} total={total} />
               <div className="kg-dist-legend">
                 {LEVELS.map((l, i) => (
                   <span key={l}><i className="swatch" style={{ background: LEVEL_COLORS[i] }} />{l}<b className="num">{node.dist[i]}</b></span>
                 ))}
               </div>
-              <p className="note">{node.withEvidence} 人有证据{node.mean !== null ? ` · 全班平均估计 ${node.mean.toFixed(2)}` : ""}</p>
+              {d?.summary && <p className="kg-panel-text">{d.summary}</p>}
               {foundation && <p className="note">来自学生在 C 语言课上的练习，这里只看掌握程度，不列答题记录。</p>}
-            </section>
-        ) : node.course === "D" ? (
-          <section>
-            <h3>准备度</h3>
+            </>
+          ) : node.course === "D" && !foundation ? (
             <p className="note">还没有人有证据。全班平均准备度 {node.readiness === null ? "没有数据" : node.readiness.toFixed(2)}，是按 C 语言里的前置知识推算的。</p>
-          </section>
-        ) : <p className="note">{foundation ? "学生在 C 语言里还没有这方面的证据。" : "这个班的作业还没涉及这个知识点。"}</p>}
+          ) : <p className="note">{foundation ? "学生在 C 语言里还没有这方面的证据。" : "这个班的作业还没涉及这个知识点。"}</p>}
+        </section>
 
         {detail.loading && !d && <Loading lines={4} />}
-        {detail.error && <Problem message={detail.error} onRetry={detail.reload} />}
+        {detail.error && !d && <Problem message={detail.error} onRetry={detail.reload} />}
         {d && (
           <>
+            {(d.stuck.students.length > 0 || d.stuck.silent.length > 0) && (
+              <section>
+                <h3>卡在这里</h3>
+                {d.stuck.students.length > 0 && (
+                  <ul className="kg-people">
+                    {d.stuck.students.map((w) => (
+                      <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
+                        <div className="kg-people-top">
+                          <Link to={`/teacher/students/${w.userId}?tab=help`} className="link">{w.name}</Link>
+                          <span className="note num">卡住 {w.rounds} 次</span>
+                          {w.stubborn && <span className="pill pill-warn">顽固</span>}
+                          {w.passed === true ? <span className="pill pill-pass">后来通过</span> : w.passed === false ? <span className="pill pill-fail">还没通过</span> : null}
+                        </div>
+                        <p className="kg-people-text">
+                          最近一次{w.lastProblem ? `在「${w.lastProblem}」` : "没绑定题"}，{RESOLUTION[w.resolution] ?? w.resolution}；{w.skills.join("、")}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {d.stuck.silent.length > 0 && (
+                  <>
+                    <h4 className="kg-subhead">没来问（一道题没过的提交 ≥ {d.stuck.silentFails} 次，没求助）</h4>
+                    <ul className="kg-people">
+                      {d.stuck.silent.map((w) => (
+                        <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
+                          <div className="kg-people-top"><Link to={`/teacher/students/${w.userId}?tab=subs`} className="link">{w.name}</Link></div>
+                          <p className="kg-people-text">{w.problems.map((p) => `「${p.title || p.problemId}」没过 ${p.fails} 次`).join("、")}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </section>
+            )}
+            {d.students.length > 0 && (
+              <section>
+                <h3>每个学生</h3>
+                <ul className="kg-people">
+                  {d.students.map((w) => (
+                    <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
+                      <div className="kg-people-top">
+                        <Link to={`/teacher/students/${w.userId}`} className="link">{w.name}</Link>
+                        <span className={`lvpill ${levelClass(w.level)}`}><i />{w.predicted ? "推算" : w.level}</span>
+                        {w.score !== null ? <ScoreBadge score={w.score} /> : w.p !== null && <span className="note num">{w.p.toFixed(2)}</span>}
+                      </div>
+                      {w.text && <p className="kg-people-text">{w.text}</p>}
+                      {d.studentDims?.[w.userId] && (
+                        <p className="kg-people-text num">
+                          小题：判断 {frac(d.studentDims[w.userId].judge)} · 定位 {frac(d.studentDims[w.userId].locate)} · 修改 {frac(d.studentDims[w.userId].edit)}
+                          {" "}<Link to={`/teacher/students/${w.userId}?tab=quiz`} className="link">作答依据</Link>
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {d.diagnosis && d.diagnosis.shown > 0 && (
+              <section>
+                <h3>小题：判断、定位、修改</h3>
+                <dl className="kg-dims">
+                  <div><dt>判断</dt><dd className="num">{frac(d.diagnosis.judge)}</dd></div>
+                  <div><dt>定位</dt><dd className="num">{frac(d.diagnosis.locate)}</dd></div>
+                  <div><dt>修改</dt><dd className="num">{frac(d.diagnosis.edit)}</dd></div>
+                </dl>
+                <p className="note">全班首次独立作答；定位、修改的分母只算实际进入这一步的次数</p>
+              </section>
+            )}
+            {(hasData(node) || foundation) && (
+              <section>
+                <h3>技能</h3>
+                <ul className="kg-skills">
+                  {d.skills.map((s) => (
+                    <li key={s.code}>
+                      <span>{s.name}</span>
+                      <StackedBar counts={s.dist} colors={LEVEL_COLORS} names={LEVELS} thin />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {d.errors.length > 0 && (
+              <section>
+                <h3>常见的错误</h3>
+                <ul className="kg-errors">
+                  {d.errors.map((e) => (
+                    <li key={e.code}><span><CircleAlert size={13} aria-hidden="true" />{e.name}</span><span className="num">{e.count} 次</span></li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {d.problems.length > 0 && (
+              <section>
+                <h3>练这个知识点的题</h3>
+                <ul className="kg-errors">
+                  {d.problems.map((p) => (
+                    <li key={p.problemId}><span><BookOpen size={13} aria-hidden="true" />{p.title} <Code>{p.problemId}</Code></span>{p.primary && <span className="pill">主要</span>}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
             {(d.prereqs.length > 0 || d.next.length > 0) && (
               <section>
                 <h3>前置知识和后续知识</h3>
@@ -109,79 +218,6 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                 </div>
               </section>
             )}
-            {d.summary && (
-              <section>
-                <h3>全班</h3>
-                <p className="kg-panel-text">{d.summary}</p>
-              </section>
-            )}
-            {d.diagnosis && d.diagnosis.shown > 0 && (
-              <section>
-                <h3>小题：判断、定位、修改</h3>
-                <dl className="kg-dims">
-                  <div><dt>判断</dt><dd className="num">{frac(d.diagnosis.judge)}</dd></div>
-                  <div><dt>定位</dt><dd className="num">{frac(d.diagnosis.locate)}</dd></div>
-                  <div><dt>修改</dt><dd className="num">{frac(d.diagnosis.edit)}</dd></div>
-                </dl>
-                <p className="note">全班首次独立作答；定位、修改的分母只算实际进入这一步的次数</p>
-              </section>
-            )}
-            {d.students.length > 0 && (
-              <section>
-                <h3>每个学生</h3>
-                <ul className="kg-people">
-                  {d.students.map((w) => (
-                    <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
-                      <div className="kg-people-top">
-                        <Link to={`/teacher/students/${w.userId}`} className="link">{w.name}</Link>
-                        <span className={`lvpill ${levelClass(w.level)}`}><i />{w.predicted ? "推算" : w.level}</span>
-                        {w.score !== null ? <ScoreBadge score={w.score} /> : w.p !== null && <span className="note num">{w.p.toFixed(2)}</span>}
-                      </div>
-                      {w.text && <p className="kg-people-text">{w.text}</p>}
-                      {d.studentDims?.[w.userId] && (
-                        <p className="kg-people-text num">
-                          判断 {frac(d.studentDims[w.userId].judge)} · 定位 {frac(d.studentDims[w.userId].locate)} · 修改 {frac(d.studentDims[w.userId].edit)}
-                          {" "}<Link to={`/teacher/students/${w.userId}`} className="link">查看作答依据</Link>
-                        </p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            {(hasData(node) || foundation) && (
-              <section>
-                <h3>技能</h3>
-                <ul className="kg-skills">
-                  {d.skills.map((s) => (
-                    <li key={s.code}>
-                      <span>{s.name} <Code>{s.code}</Code></span>
-                      <StackedBar counts={s.dist} colors={LEVEL_COLORS} names={LEVELS} thin />
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            {d.errors.length > 0 && (
-              <section>
-                <h3>相关的错误</h3>
-                <ul className="kg-errors">
-                  {d.errors.map((e) => (
-                    <li key={e.code}><span><CircleAlert size={13} aria-hidden="true" />{e.name} <Code>{e.code}</Code></span><span className="num">{e.count} 次</span></li>
-                  ))}
-                </ul>
-              </section>
-            )}
-            {d.problems.length > 0 && (
-              <section>
-                <h3>练这个知识点的题</h3>
-                <ul className="kg-errors">
-                  {d.problems.map((p) => (
-                    <li key={p.problemId}><span><BookOpen size={13} aria-hidden="true" />{p.title} <Code>{p.problemId}</Code></span>{p.primary && <span className="pill">主要</span>}</li>
-                  ))}
-                </ul>
-              </section>
-            )}
           </>
         )}
       </div>
@@ -195,7 +231,16 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   const student = params.get("student") ?? "";
   const data = useLoad(() => get<MapData>(`/api/teacher/classes/${cls.key}/knowledge-map${student ? `?student=${student}` : ""}`), [cls.key, student], 120000, false, `t:map:${cls.key}:${student ?? ""}`);
   const [scope, setScope] = useState<"home" | "all">("home");
-  const [view, setView] = useState<"graph" | "table">("graph");
+  const view: "graph" | "table" = params.get("view") === "table" ? "table" : "graph";
+  const sort = (["weak", "stuck", "silent"] as const).find((x) => x === params.get("sort")) ?? "topic";
+  const [onlyCovered, setOnlyCovered] = useState(true);
+  const setParam = (key: string, value: string) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  };
+  const setView = (v: "graph" | "table") => setParam("view", v === "table" ? "table" : "");
   const [showCross, setShowCross] = useState(true);
   const [selected, setSelected] = useState<string | null>(params.get("kp"));
   const [search, setSearch] = useState("");
@@ -220,12 +265,15 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
   }, [d, nodes]);
   const cross = shownEdges.filter((e) => e.cross).length;
 
-  const setStudent = (id: string) => {
-    const next = new URLSearchParams(params);
-    if (id) next.set("student", id);
-    else next.delete("student");
-    setParams(next, { replace: true });
-  };
+  const setStudent = (id: string) => setParam("student", id);
+  // 表：默认只看作业涉及的知识点；可以按待加强、卡住、没来问的人数排
+  const anyCovered = nodes.some((n) => n.covered);
+  const rows = useMemo(() => {
+    const list = nodes.filter((n) => (!topic || n.topic === topic)
+      && (!onlyCovered || !anyCovered || n.covered || (n.stuck ?? 0) + (n.silent ?? 0) > 0));
+    const key = (n: KMNode) => (sort === "weak" ? n.dist[2] : sort === "stuck" ? n.stuck ?? 0 : sort === "silent" ? n.silent ?? 0 : 0);
+    return sort === "topic" ? list : [...list].sort((a, b) => key(b) - key(a) || a.code.localeCompare(b.code));
+  }, [nodes, onlyCovered, anyCovered, sort, topic]);
 
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在画知识图谱" lines={6} /></div>;
@@ -287,15 +335,15 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
           </>
         ) : (
           <>
-            <span>每个知识点底下的条是全班的分布：</span>
+            <span>{view === "graph" ? "每个知识点底下的条是全班的分布：" : "全班的分布："}</span>
             {LEVELS.map((l) => <span key={l}><i className={`swatch sw-${levelClass(l).slice(3)}`} />{l}</span>)}
-            <span><b className="kg-badge-sample num">2</b>待加强的人数</span>
-            <span><i className="swatch kg-sw-uncovered" />作业还没涉及</span>
+            {view === "graph" && <span><b className="kg-badge-sample num">2</b>待加强的人数</span>}
+            {view === "graph" && <span><i className="swatch kg-sw-uncovered" />作业还没涉及</span>}
           </>
         )}
-        {multi && scope === "all" && <span><i className="kg-line kg-line-cross" />跨课程的前置关系</span>}
-        <span><i className="kg-line kg-line-in" />前置</span>
-        <span><i className="kg-line kg-line-out" />后续</span>
+        {view === "graph" && multi && scope === "all" && <span><i className="kg-line kg-line-cross" />跨课程的前置关系</span>}
+        {view === "graph" && <span><i className="kg-line kg-line-in" />前置</span>}
+        {view === "graph" && <span><i className="kg-line kg-line-out" />后续</span>}
         <span className="kg-counts note num">{nodes.length} 个知识点 · {shownEdges.length} 条前置{cross > 0 ? `，其中 ${cross} 条跨课程` : ""}{view === "graph" && shape.hidden > 0 ? `（${shape.hidden} 条能由别的路径推出来，图上没画）` : ""} · 图：{d.status}</span>
       </div>
 
@@ -312,25 +360,57 @@ export default function KnowledgeMap({ cls }: { cls: ClassInfo }) {
         </div>
       ) : (
         <Card bodyClass="" className="table-card">
+          <div className="table-tools">
+            {anyCovered && (
+              <label className="check">
+                <input type="checkbox" checked={onlyCovered} onChange={(e) => setOnlyCovered(e.target.checked)} />
+                只看作业涉及的
+              </label>
+            )}
+            <span className="note">{rows.length} 个知识点</span>
+          </div>
           <div className="table-scroll">
             <table className="table">
               <thead>
                 <tr>
                   <th scope="col">知识点</th><th scope="col">章</th>
-                  {student ? <th scope="col">{studentName}</th> : LEVELS.map((l) => <th key={l} scope="col" className="num">{l}</th>)}
-                  <th scope="col" className="num">{student ? "估计" : "平均估计 / 准备度"}</th>
+                  {student ? (
+                    <><th scope="col">{studentName}</th><th scope="col" className="num">掌握分</th></>
+                  ) : (
+                    <>
+                      <th scope="col">全班</th>
+                      {([["weak", "待加强"], ["stuck", "卡住过"], ["silent", "没来问"]] as const).map(([k, label]) => (
+                        <th key={k} scope="col" className="num" aria-sort={sort === k ? "descending" : undefined}>
+                          <button type="button" onClick={() => setParam("sort", sort === k ? "" : k)}>
+                            {label}{sort === k ? <ArrowDown aria-hidden="true" /> : <ArrowUpDown aria-hidden="true" className="sort-idle" />}
+                          </button>
+                        </th>
+                      ))}
+                      <th scope="col" className="num">平均掌握分</th>
+                    </>
+                  )}
                   <th scope="col">前置</th>
                 </tr>
               </thead>
               <tbody>
-                {nodes.map((n) => (
+                {rows.map((n) => (
                   <tr key={n.code}>
-                    <td><button type="button" className="link" onClick={() => { setView("graph"); setSelected(n.code); }}>{n.name}</button> <Code>{n.code}</Code></td>
+                    <td><button type="button" className="link" onClick={() => { setView("graph"); setSelected(n.code); }}>{n.name}</button></td>
                     <td className="muted nowrap">{n.topicName}</td>
                     {student ? (
-                      <td>{n.student ? <span className={`lvpill ${levelClass(n.student.level)}`}><i />{n.student.predicted ? "推算" : n.student.level}</span> : "—"}</td>
-                    ) : n.dist.map((v, i) => <td key={i} className="num">{hasData(n) ? v : ""}</td>)}
-                    <td className="num">{student ? (n.student ? n.student.p.toFixed(2) : "—") : !hasData(n) && n.course === "D" ? (n.readiness?.toFixed(2) ?? "—") : (n.mean?.toFixed(2) ?? "—")}</td>
+                      <>
+                        <td>{n.student ? <span className={`lvpill ${levelClass(n.student.level)}`}><i />{n.student.predicted ? "推算" : n.student.level}</span> : "—"}</td>
+                        <td className="num">{n.student?.score != null ? <ScoreBadge score={n.student.score} /> : "—"}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="kg-table-dist">{hasData(n) ? <StackedBar counts={n.dist} colors={LEVEL_COLORS} names={LEVELS} thin /> : <span className="muted">{n.course === "D" && n.readiness !== null ? `准备度 ${n.readiness.toFixed(2)}` : "—"}</span>}</td>
+                        <td className="num">{n.dist[2] ? <span className="pill pill-fail">{n.dist[2]}</span> : <span className="muted">0</span>}</td>
+                        <td className="num">{n.stuck ? <span className="pill pill-warn">{n.stuck}</span> : <span className="muted">0</span>}</td>
+                        <td className="num">{n.silent ? <span className="pill">{n.silent}</span> : <span className="muted">0</span>}</td>
+                        <td className="num">{n.score !== null ? <ScoreBadge score={n.score} /> : "—"}</td>
+                      </>
+                    )}
                     <td className="muted">{d.edges.filter((e) => e.to === n.code).map((e) => d.nodes.find((x) => x.code === e.from)?.name).join("、")}</td>
                   </tr>
                 ))}

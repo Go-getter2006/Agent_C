@@ -2723,13 +2723,6 @@
   .dims-table th, .dims-table td { padding: var(--sp-8) var(--sp-4); }
 }
 
-/* 卡点按知识点（teacher/Stuck.tsx） */
-.stuck-detail { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: var(--sp-16); align-items: start; }
-.stuck-silent { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-10); }
-.stuck-silent li { display: flex; flex-direction: column; gap: var(--sp-2); }
-.stuck-defs { margin-top: var(--sp-12); }
-.stuck-detail .who, .stuck-silent .who { white-space: nowrap; }
-@media (max-width: 1080px) { .stuck-detail { grid-template-columns: minmax(0, 1fr); } }
 
 /* 老师盲评（teacher/Rating.tsx） */
 .rate { display: flex; flex-direction: column; gap: var(--sp-16); max-width: 860px; }
@@ -2751,3 +2744,37 @@
 .rate-num { font-size: var(--fs-20); font-weight: 600; color: var(--brand); }
 .rate-unsure { margin-top: var(--sp-12); }
 @media (max-width: 720px) { .rate-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* 页签（学生明细等） */
+.tabs { display: flex; gap: var(--sp-2); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { position: relative; display: inline-flex; align-items: center; gap: var(--sp-6); padding: var(--sp-10) var(--sp-12);
+  border: 0; background: none; font: inherit; font-size: var(--fs-15); color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.tabs button:hover { color: var(--ink); }
+.tabs button[aria-selected="true"] { color: var(--ink); font-weight: 600; }
+.tabs button[aria-selected="true"]::after { content: ""; position: absolute; left: var(--sp-10); right: var(--sp-10); bottom: -1px;
+  height: 2px; border-radius: 2px; background: var(--brand); }
+.tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: var(--r-sm); }
+.tab-count { font-size: var(--fs-12); font-weight: 500; color: var(--ink-3); background: var(--surface-3); border-radius: var(--r-pill); padding: 0 var(--sp-6); }
+.tab-note { margin: 0; }
+
+/* 研究页里的分节标题 */
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-4) var(--sp-12); margin: var(--sp-16) 0 0;
+  font-family: var(--font-display); font-weight: 400; font-synthesis: none; font-size: 21px; color: var(--ink); }
+.sec-head span { font-family: var(--font-ui); font-size: var(--fs-13); color: var(--ink-3); }
+.stack > .seg { align-self: flex-start; }
+.sec-narrow { max-width: 760px; }
+
+/* 总览：要讲的知识点 */
+.focus-list { margin: 0; padding: 0; list-style: none; }
+.focus-list li { display: flex; flex-direction: column; gap: var(--sp-4); padding: var(--sp-12) 0; border-top: 1px solid var(--line); }
+.focus-list li:first-child { border-top: 0; padding-top: 0; }
+.focus-top { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-6) var(--sp-12); }
+.focus-name { font-weight: 600; color: var(--ink); text-decoration: none; }
+.focus-name:hover { color: var(--brand); text-decoration: underline; }
+.focus-counts { display: inline-flex; flex-wrap: wrap; gap: var(--sp-6); }
+.overview-foot { margin: 0; text-align: right; }
+
+/* 知识图谱：表里的全班分布、详情里的小标题 */
+.kg-table-dist { min-width: 160px; }
+.kg-subhead { margin: var(--sp-12) 0 var(--sp-4); font-size: var(--fs-13); font-weight: 600; color: var(--ink-2); }

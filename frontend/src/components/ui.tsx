@@ -267,6 +267,22 @@ export function Facts({ items, label }: { items: { label: string; value: ReactNo
   );
 }
 
+/** 页签：一页里互斥的几块内容。选中的那个有下划线；count 是旁边的小数字（0 不显示）。 */
+export function Tabs<T extends string>({ value, options, onChange, label }: {
+  value: T; options: { value: T; label: ReactNode; count?: number }[]; onChange: (v: T) => void; label: string;
+}) {
+  return (
+    <div className="tabs" role="tablist" aria-label={label}>
+      {options.map((o) => (
+        <button key={o.value} type="button" role="tab" id={`tab-${o.value}`} aria-selected={value === o.value}
+          aria-controls={`panel-${o.value}`} onClick={() => onChange(o.value)}>
+          {o.label}{o.count ? <span className="tab-count num">{o.count}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** 分段按钮：几个互斥的选项。 */
 export function Segmented<T extends string>({ value, options, onChange, label }: {
   value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void; label: string;

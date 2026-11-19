@@ -56,8 +56,14 @@ def test_class_overview_and_students(client, demo):
     assert [(c["name"], c["students"]) for c in classes] == [("C 语言程序设计 01 班", 12), ("C 语言程序设计 02 班", 1)]
     key = f"c{sid}-31"
     ov = client.get(f"/api/teacher/classes/{key}/overview").json()
-    assert ov["class"]["students"] == 12 and ov["levels"] == ["已掌握", "基本掌握", "待加强", "还没练到"]
-    assert all(sum(k["counts"]) == 12 for k in ov["knowledge"]) and len(ov["knowledge"]) > 15
+    assert ov["class"]["students"] == 12 and "knowledge" not in ov and "overconfident" not in ov
+    # 要讲的知识点：待加强、卡住过、没来问的人多的排前面，带最常见的错误；全部知识点在知识图谱里看
+    focus = ov["focus"]
+    assert 0 < len(focus) <= 6 and {"code", "name", "weak", "stuck", "silent", "error"} == set(focus[0])
+    load = [f["weak"] + f["stuck"] + f["silent"] for f in focus]
+    assert load == sorted(load, reverse=True) and all(x > 0 for x in load)
+    top = next(f for f in focus if f["code"] == "C06.03")   # 林晓等人在“最值、求和、统计”上待加强、卡住过
+    assert top["weak"] >= 1 and top["stuck"] >= 1 and top["error"]["name"]
     assert {"code", "name", "students", "count"} == set(ov["errors"][0])
     assert ov["errors"][0]["count"] >= ov["errors"][-1]["count"]
     assert [h["title"] for h in ov["homeworks"]] == ["上机练习：一维数组", "上机练习：循环结构", "上机练习：选择结构"]
@@ -72,6 +78,13 @@ def test_student_detail_has_internal_fields_for_teacher(client):
     login(client, "demo-teacher")
     d = client.get(f"/api/teacher/students/{UID}").json()
     assert d["student"]["name"] == "林晓" and d["student"]["class"]["name"].endswith("01 班")
+    # 概况的几个数和学生列表一致
+    rows = client.get(f"/api/teacher/classes/{d['student']['class']['key']}/students").json()
+    me = next(r for r in rows["students"] if r["userId"] == UID)
+    f = d["facts"]
+    assert (f["score"], f["passed"], f["total"], f["avgToPass"], f["weak"]) == (
+        me["score"], me["passed"], rows["total"], me["avgToPass"], me["weak"])
+    assert f["stuck"] == len(d["stuck"]) and f["lastActive"]
     skill = next(x for x in d["skills"] if x["code"] == "C06.03.02")
     # 演示情节中反复出现最值初始化错误，v2 与学生端一致判为待加强。
     assert skill["level"] == "待加强" and 0 < skill["p"] < 1 and skill["graph"] is not None
@@ -101,15 +114,23 @@ def test_stuck_list_and_graph_page(client, demo):
         workflow.handle(s, UID, (sid, 406), action="hint")
     login(client, "demo-teacher")
     key = f"c{sid}-31"
-    stuck = client.get(f"/api/teacher/classes/{key}/stuck").json()
-    row = next(r for r in stuck["rows"] if r["code"] == "C06.03")   # 按知识点汇总
+    # 研究 · 求助效果：按知识点的比例，不列学生
+    help_ = client.get(f"/api/teacher/classes/{key}/help").json()
+    row = next(r for r in help_["rows"] if r["code"] == "C06.03")   # 按知识点汇总
     assert (row["name"], row["episodes"], row["repeat"]) == ("最值、求和、统计", 2, 1)
     assert row["skills"][0]["code"] == "C06.03.02" and row["skills"][0]["episodes"] == 2
-    me = row["studentRows"][0]
+    assert row["passed"]["d"] >= 1 and help_["version"] == "stuck-kp-1"
+    assert all(set(r) >= {"recall", "passed", "transfer", "silent"} for r in help_["rows"])
+    assert not any("studentRows" in r for r in help_["rows"])
+    assert help_["totals"]["stuck"] >= 1 and {"students", "constructive", "answerSeeking"} == set(help_["dialogue"])
+    # 上课用：谁卡在这里，在知识图谱的知识点详情里
+    node = client.get(f"/api/teacher/classes/{key}/knowledge-map/C06.03").json()
+    me = node["stuck"]["students"][0]
     assert (me["userId"], me["name"], me["times"], me["rounds"], me["lastProblem"]) == (UID, "林晓", 2, 2, "成绩最高分")
     assert me["skills"][0].startswith("最值的初值设定")
-    assert row["passed"]["d"] >= 1 and stuck["version"] == "stuck-kp-1"
-    assert all(set(r) >= {"recall", "passed", "transfer", "silent", "silentRows"} for r in stuck["rows"])
+    nodes = {n["code"]: n for n in client.get(f"/api/teacher/classes/{key}/knowledge-map").json()["nodes"]}
+    assert nodes["C06.03"]["stuck"] >= 1 and "silent" in nodes["C06.03"]
+    assert client.get(f"/api/teacher/classes/{key}/stuck").status_code == 404   # 旧接口不再有
     g = client.get(f"/api/teacher/classes/{key}/graph").json()
     assert g["trial"] is True and g["prereqStatus"] == "初稿，未审定"
     assert g["data"]["students"] == 12 and g["data"]["evidence"] > 100 and g["data"]["predictions"] > 50
@@ -580,3 +601,22 @@ def test_old_session_tokens_need_login_again(client):
     assert client.get("/api/auth/me").status_code == 401
     assert crypto.verify_session(crypto.sign_session(5, "D")) == (5, "D")
     assert crypto.verify_session(crypto.sign_session(5, "C")[:-1] + "x") is None
+
+
+def test_stale_review_is_marked_and_rewritten_nightly(client, demo):
+    """评语按当时的画像写；画像变了（有新数据或算法改了）页面上标出来，每天夜里核对一遍、变了就重写。"""
+    from app import profile
+
+    login(client, "demo-teacher")
+    with db.session_scope() as s:
+        profile.agent_review(s, UID, "C", force=True)   # 按现在的画像写一份
+    review = client.get(f"/api/teacher/students/{UID}").json()["agentReview"]
+    assert review["stale"] is False and "个，已掌握" not in review["summary"]   # 不重复页面上已经有的个数
+    with db.session_scope() as s:   # 模拟算法改了、画像跟着变了，但这个学生没有新数据
+        row = s.scalars(select(m.AgentReview).where(m.AgentReview.user_id == UID)
+                        .order_by(m.AgentReview.id.desc())).first()
+        row.profile_hash = "画像变了以前的"
+        assert (UID, "C") not in profile.pending_reviews(s)   # 只看新数据的话，不会重写
+    assert client.get(f"/api/teacher/students/{UID}").json()["agentReview"]["stale"] is True
+    assert profile.refresh_reviews(include_stale=True) >= 1         # 夜里核对：变了就重写
+    assert client.get(f"/api/teacher/students/{UID}").json()["agentReview"]["stale"] is False

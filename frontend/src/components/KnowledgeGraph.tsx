@@ -22,6 +22,8 @@ export interface KMNode {
   readiness: number | null;
   score: number | null; // 全班练过的同学的平均掌握分（0~100）
   foundation?: boolean; // 数据结构的班里带上的 C 语言知识点
+  stuck?: number;   // 对话里卡住过的人
+  silent?: number;  // 一道题反复没过、没来问的人
   student?: { level: string; p: number; predicted: boolean; score: number | null; text: string };
 }
 

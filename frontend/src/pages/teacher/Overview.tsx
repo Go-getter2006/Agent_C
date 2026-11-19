@@ -1,12 +1,14 @@
-// 班级总览：几个数、两张趋势图、需要留意的学生、常见错误、知识点分布、作业完成情况。
+// 班级总览：这周班里怎么样，先关注谁、课上讲什么。
+// 三个数；需要留意的学生、作业完成情况；要讲的知识点、最常见的错误；两张趋势图。
+// 全部知识点在知识图谱里看（这里只列要讲的几个），每个学生在学生明细里看。
 import { Link } from "react-router-dom";
-import { Activity, ArrowRight, CircleAlert, CircleCheck, Copy, Hourglass, Send, Target, Users, Waypoints } from "lucide-react";
+import { Activity, ArrowRight, CircleAlert, CircleCheck, Copy, Hourglass, Send, Target, Users } from "lucide-react";
 import { get } from "../../api";
-import { BarList, ColumnChart, LineChart, StackedBar } from "../../components/charts";
-import { Avatar, Card, Empty, LevelLegend, Loading, Problem, Stat } from "../../components/ui";
+import { BarList, ColumnChart, LineChart } from "../../components/charts";
+import { Avatar, Card, Empty, Loading, Problem, Stat } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { deadline } from "../../lib/time";
-import { Code, type ClassInfo, type SkillRef } from "./common";
+import { Code, type ClassInfo } from "./common";
 
 interface Overview {
   class: { key: string; name: string; students: number; activeThisWeek: number };
@@ -18,24 +20,18 @@ interface Overview {
   };
   trend: { label: string; start: string; submissions: number; active: number; passed: number; avgToPass: number | null; rounds: number }[];
   attention: { userId: string; name: string; reasons: string[] }[];
-  levels: string[];
-  knowledge: { code: string; name: string; topic: string; counts: number[] }[];
+  focus: { code: string; name: string; weak: number; stuck: number; silent: number; error: { code: string; name: string; count: number } | null }[];
   errors: { code: string; name: string; students: number; count: number }[];
-  overconfident: (SkillRef & { n: number; wrong: number })[];
   homeworks: { title: string; contestId: number; problems: number; allPassed: number; started: number; endTime: string | null; ended: boolean }[];
 }
-
-const LEVEL_COLORS = ["var(--lv-mastered)", "var(--lv-basic)", "var(--lv-weak)", "var(--lv-none)"];
 
 export default function ClassOverview({ cls }: { cls: ClassInfo }) {
   const data = useLoad(() => get<Overview>(`/api/teacher/classes/${cls.key}/overview`), [cls.key], 60000, false, `t:overview:${cls.key}`);
   const d = data.data;
-  if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
+  if (data.error && !d) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在汇总全班的情况" lines={5} /></div>;
   const k = d.kpis;
   const total = d.class.students || 1;
-  const covered = d.knowledge;
-  let topic = "";
 
   return (
     <div className="stack overview-desktop">
@@ -47,16 +43,14 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
           foot={k.suspicious ? <span className="warn-text"><Copy size={13} aria-hidden="true" />{k.suspicious} 次通过和同学代码雷同</span> : undefined} />
       </div>
 
-      <div className="overview-status"><Link className="link" to="/teacher/stuck">本周卡点 {k.stuckThisWeek} 次<ArrowRight size={13} /></Link><span>正在复习 {k.review.active} 项 · {k.review.due} 项到期 · {k.review.graduated} 项已巩固</span></div>
-
       <div className="grid-main">
-        <Card title="需要留意的学生" sub="按透明的规则列出，每人附上理由；不是预测模型"
+        <Card title="需要留意的学生" sub="按写明的规则列出，每人附理由"
           action={<Link to="/teacher/students" className="btn btn-sm">全部学生<ArrowRight size={14} aria-hidden="true" /></Link>}>
           {d.attention.length === 0 ? (
-            <Empty icon={CircleCheck} title="目前没有需要特别留意的学生">规则：反复卡住、三个以上知识点待加强、一周没交题、通过一道题要交的次数明显比全班多等。</Empty>
+            <Empty icon={CircleCheck} title="目前没有需要特别留意的学生">规则：反复卡在同一个知识点、三个以上知识点待加强、一周没交题、通过一道题要交的次数明显比全班多等。</Empty>
           ) : (
             <ul className="attn-list">
-              {d.attention.slice(0, 5).map((a) => (
+              {d.attention.slice(0, 6).map((a) => (
                 <li key={a.userId}>
                   <Avatar name={a.name} />
                   <div className="attn-main">
@@ -66,6 +60,51 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
                     </span>
                   </div>
                   <Link to={`/teacher/students/${a.userId}`} className="btn btn-sm btn-ghost" aria-label={`看${a.name}的明细`}><ArrowRight size={15} /></Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+        <Card title="作业完成情况">
+          {d.homeworks.length === 0 ? <Empty title="这个班还没有作业" /> : (
+            <ul className="hw-list">
+              {d.homeworks.map((h) => (
+                <li key={h.contestId}>
+                  <div className="hw-top">
+                    <strong>{h.title}</strong>
+                    <span className="note">{h.problems} 题 · {deadline(h.endTime, h.ended)}</span>
+                  </div>
+                  <span className="bar bar-pass" role="img" aria-label={`${d.class.students} 人里 ${h.allPassed} 人全部通过`}>
+                    <span style={{ width: `${(100 * h.allPassed) / total}%` }} />
+                  </span>
+                  <span className="hw-facts-row note">
+                    <span><CircleCheck size={13} aria-hidden="true" />全部通过 {h.allPassed} 人</span>
+                    <span><Activity size={13} aria-hidden="true" />开始做 {h.started} 人</span>
+                    <span><Hourglass size={13} aria-hidden="true" />还没动 {Math.max(0, d.class.students - h.started)} 人</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <div className="grid-main">
+        <Card title="要讲的知识点" sub="待加强、卡住过、没来问的人多的排前面"
+          action={<Link to="/teacher/map?view=table" className="btn btn-sm">全部知识点<ArrowRight size={14} aria-hidden="true" /></Link>}>
+          {d.focus.length === 0 ? <Empty icon={CircleCheck} title="目前没有特别要讲的知识点" /> : (
+            <ul className="focus-list">
+              {d.focus.map((f) => (
+                <li key={f.code}>
+                  <div className="focus-top">
+                    <Link to={`/teacher/map?kp=${f.code}`} className="focus-name">{f.name}</Link>
+                    <span className="focus-counts">
+                      {f.weak > 0 && <span className="pill pill-fail">待加强 {f.weak} 人</span>}
+                      {f.stuck > 0 && <span className="pill pill-warn">卡住过 {f.stuck} 人</span>}
+                      {f.silent > 0 && <span className="pill">没来问 {f.silent} 人</span>}
+                    </span>
+                  </div>
+                  {f.error && <span className="note">最常见的错：{f.error.name}（{f.error.count} 次）</span>}
                 </li>
               ))}
             </ul>
@@ -81,65 +120,16 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
       </div>
 
       <div className="grid-2">
-        <Card title="作业完成情况">
-          <ul className="hw-list">
-            {d.homeworks.map((h) => (
-              <li key={h.contestId}>
-                <div className="hw-top">
-                  <strong>{h.title}</strong>
-                  <span className="note">{h.problems} 题 · {deadline(h.endTime, h.ended)}</span>
-                </div>
-                <span className="bar bar-pass" role="img" aria-label={`${d.class.students} 人里 ${h.allPassed} 人全部通过`}>
-                  <span style={{ width: `${(100 * h.allPassed) / total}%` }} />
-                </span>
-                <span className="hw-facts-row note">
-                  <span><CircleCheck size={13} aria-hidden="true" />全部通过 {h.allPassed} 人</span>
-                  <span><Activity size={13} aria-hidden="true" />开始做 {h.started} 人</span>
-                  <span><Hourglass size={13} aria-hidden="true" />还没动 {Math.max(0, d.class.students - h.started)} 人</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-        <Card title="自以为会的技能" sub="小题里选了“很有把握”却答错的；数据少的时候只作参考">
-          {d.overconfident.length === 0 ? <Empty icon={CircleCheck} title="目前没有" /> : (
-            <BarList color="var(--series-2)" rows={d.overconfident.map((o) => ({
-              key: o.code, label: <>{o.name} <Code>{o.code}</Code></>, value: o.wrong, sub: `很有把握的作答 ${o.n} 次，其中答错 ${o.wrong} 次`,
-            }))} />
-          )}
-        </Card>
-      </div>
-      <div className="grid-2">
         <Card title="每周提交" sub="全班在 XDOJ 上的提交次数，最近八周">
           <ColumnChart label="最近八周全班每周的提交次数" labels={d.trend.map((w) => w.label)}
             series={[{ name: "提交次数", color: "var(--series-1)" }]} values={[d.trend.map((w) => w.submissions)]} unit=" 次" emphasizeLast />
         </Card>
-        <Card title="平均几次改对" sub="每周通过的题，平均交到第几次才通过。用于了解修改过程，不能单凭次数判断掌握情况">
+        <Card title="平均几次改对" sub="每周通过的题平均交到第几次才通过；只说明修改过程，不能单凭次数判断掌握">
           <LineChart label="最近八周通过的题平均交几次" labels={d.trend.map((w) => w.label)} min={0} format={(v) => v.toFixed(1)} unit=" 次"
             series={[{ name: "平均几次改对", color: "var(--series-1)", values: d.trend.map((w) => w.avgToPass) }]} />
         </Card>
       </div>
-
-      <Card title="知识点掌握分布" sub="这个班布置过的题涉及到的知识点；每一条是全班的人数分布"
-        action={<Link to="/teacher/map" className="btn btn-sm"><Waypoints size={15} aria-hidden="true" />在知识图谱里看</Link>}>
-        <LevelLegend levels={d.levels} />
-        <div className="dist-table overview-distribution" role="table" aria-label="知识点掌握分布">
-          {covered.map((kp) => {
-            const head = kp.topic !== topic ? ((topic = kp.topic), <div key={`t-${kp.topic}`} className="dist-topic" role="row"><span role="rowheader">{kp.topic}</span></div>) : null;
-            return [
-              head,
-              <div key={kp.code} className="dist-row" role="row">
-                <span className="dist-name" role="cell">{kp.name} <Code>{kp.code}</Code></span>
-                <span className="dist-bar" role="cell"><StackedBar counts={kp.counts} colors={LEVEL_COLORS} names={d.levels} total={total} /></span>
-                <span className="dist-nums num" role="cell" aria-label={d.levels.map((l, i) => `${l} ${kp.counts[i]} 人`).join("，")}>
-                  {kp.counts.map((n, i) => <span key={i} className={i === 2 && n > 0 ? "dist-weak" : undefined}>{n}</span>)}
-                </span>
-              </div>,
-            ];
-          })}
-        </div>
-      </Card>
-
+      <p className="note overview-foot">正在复习 {k.review.active} 项 · {k.review.due} 项到期 · {k.review.graduated} 项已巩固</p>
     </div>
   );
 }

@@ -225,5 +225,9 @@ def test_teacher_profile_and_agent_review(demo):
                 assert again.id == row.id                 # 画像没变：用上一次的，不重写
         finally:
             llm.set_backend(None)
-        g = c.get(f"/api/teacher/classes/c{demo['server_id']}-31/graph").json()
-        assert g["fusion"]["weights"][0]["dim"] == "bias" and "agreement" in g and "dialogue" in g
+        key = f"c{demo['server_id']}-31"
+        g = c.get(f"/api/teacher/classes/{key}/graph").json()
+        assert g["fusion"]["weights"][0]["dim"] == "bias"
+        # 一致率在研究 · 理解评估，对话行为和表现在研究 · 求助效果
+        assert "agreement" in c.get(f"/api/teacher/classes/{key}/rating").json()["summary"]
+        assert "dialogue" in c.get(f"/api/teacher/classes/{key}/help").json()
