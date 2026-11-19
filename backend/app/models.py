@@ -465,6 +465,11 @@ class LlmCall(Base):
 
 
 # ============================================================ 对话
+# 通过后的回顾（chat/summary.py）：学生回答“当时卡住的关键是什么”，单独一个回合，回完就以这个原因结束。
+# 它进“理解”评估和盲评，但不是求助：求助回合的统计、“没来问”都不算它。
+REFLECT_END = "回顾"
+
+
 class ChatRound(Base):
     __tablename__ = "chat_rounds"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)

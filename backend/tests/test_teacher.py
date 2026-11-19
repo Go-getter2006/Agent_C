@@ -126,6 +126,11 @@ def test_stuck_list_and_graph_page(client, demo):
     assert all(set(r) >= {"recall", "passed", "transfer", "silent"} for r in help_["rows"])
     assert not any("studentRows" in r for r in help_["rows"])
     assert help_["totals"]["stuck"] >= 1 and {"students", "constructive", "answerSeeking"} == set(help_["dialogue"])
+    # 每次帮助之后（app/helpeffect.py）：按帮助级别，最后一行是全部，比例都有分子分母
+    nxt = help_["helpNext"]
+    assert nxt["version"] == "help-next-1" and nxt["rows"] and nxt["rows"][-1]["level"] == "all"
+    assert all(set(r) >= {"n", "resubmitted", "nextPass", "errorGone", "passed", "medianMinutes", "medianTries"}
+               for r in nxt["rows"])
     # 上课用：谁卡在这里，在知识图谱的知识点详情里
     node = client.get(f"/api/teacher/classes/{key}/knowledge-map/C06.03").json()
     me = node["stuck"]["students"][0]
@@ -413,7 +418,7 @@ def test_research_export_keeps_student_ids(client, demo):
     卡点、求助回合、理解评估、独立作答的字段和指标版本都在。"""
     login(client, "demo-teacher")
     body = {"ids": UID, "dateFrom": "2026-06-01", "dateTo": "2027-05-31", "format": "json",
-            "kinds": ["submission", "ask", "quiz", "review", "round", "stuck", "assess"], "purpose": "论文数据分析",
+            "kinds": ["submission", "ask", "quiz", "review", "round", "stuck", "help", "assess"], "purpose": "论文数据分析",
             "deidentify": True}   # 以前的“去标识”参数：现在不认，照样带学号
     req = client.post("/api/teacher/logs", json=body).json()["request"]
     assert "deidentified" not in req
@@ -430,7 +435,9 @@ def test_research_export_keeps_student_ids(client, demo):
     quiz = next(r for r in js["rows"] if r["kind"] in ("小题", "复习"))["data"]
     assert {"protocol", "judgedHasBug", "firstLines", "locateHit", "firstFixPass", "firstFixClean", "hints",
             "sampleRuns", "events"} <= set(quiz)
-    assert js["request"]["versions"]["stuck"] == "stuck-kp-1"
+    assert js["request"]["versions"]["stuck"] == "stuck-kp-1" and js["request"]["versions"]["helpNext"] == "help-next-1"
+    helped = next(r for r in js["rows"] if r["kind"].startswith("帮助之后"))["data"]
+    assert {"level", "helpsBefore", "nextSubmission", "minutes", "nextPass", "errorGone", "passed", "triesToPass"} <= set(helped)
     again = client.post("/api/teacher/logs", json={**body, "format": "csv"}).json()["request"]
     text = client.get(f"/api/teacher/logs/{again['id']}/download", params={"token": again["token"]}).content.decode("utf-8-sig")
     assert text.splitlines()[0].startswith("学号,姓名,时间,类型,交互") and UID in text and "林晓" in text

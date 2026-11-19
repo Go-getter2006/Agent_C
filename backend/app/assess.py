@@ -72,6 +72,17 @@ class Material:
         self.stuck = any(st.intent == "STUCK" for st in self.steps)
         self.help = HELP_ORDER.get(rnd.max_help_level, -1)
         self.passed = rnd.end_reason == "通过" or self._passed_after(s)
+        # 通过后的回顾（chat/summary.py）：题已经过了；“给到的最多帮助”取这道题通过之前的求助回合
+        self.reflect = rnd.end_reason == m.REFLECT_END
+        if self.reflect:
+            self.passed = True
+            ac = s.get(m.Submission, (rnd.server_id, rnd.submission_id)) if rnd.submission_id else None
+            before = s.scalars(select(m.ChatRound.max_help_level).where(
+                m.ChatRound.user_id == rnd.user_id, m.ChatRound.server_id == rnd.server_id,
+                m.ChatRound.problem_id == rnd.problem_id, m.ChatRound.id != rnd.id,
+                m.ChatRound.end_reason != m.REFLECT_END,
+                m.ChatRound.started_at <= (ac.submit_time if ac and ac.submit_time else rnd.started_at))).all()
+            self.help = max([HELP_ORDER.get(x, -1) for x in before], default=-1)
         self.recalled = s.scalar(select(m.StuckPoint.id).where(
             m.StuckPoint.round_id == rnd.id, m.StuckPoint.resolution == "recalled")) is not None
 
@@ -125,6 +136,7 @@ def dialogue(mat: Material, skill: str, root_error: str) -> tuple[list[str], lis
         if text.strip():
             lines.append(("学生" if msg.role == "student" else "助手", text))
     facts = [f"这次评估的技能：{skill_name(skill)}（属于“{KNOWLEDGE_POINTS.get(kp_of_skill(skill), '')}”）",
+             "这是题目通过以后的回顾：助手问他当时卡住的关键是什么，下面是他的回答" if mat.reflect else "",
              f"程序诊断的错误：{error_name(root_error)}" if root_error else "",
              f"这道题后来{'通过了' if mat.passed else '还没有通过'}",
              f"助手给到的最多帮助：{ {-1: '没有', 0: '反问', 1: '指出位置', 2: '讲原理', 3: '给了示例代码'}.get(mat.help, '没有') }"]

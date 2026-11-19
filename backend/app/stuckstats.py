@@ -134,7 +134,8 @@ def compute(s: Session, user_ids: list[str], course: str, problems: list[tuple[i
 
     if problems:
         asked = set(s.execute(select(m.ChatRound.user_id, m.ChatRound.server_id, m.ChatRound.problem_id).where(
-            m.ChatRound.user_id.in_(user_ids), m.ChatRound.problem_id.is_not(None))).all())
+            m.ChatRound.user_id.in_(user_ids), m.ChatRound.problem_id.is_not(None),
+            m.ChatRound.end_reason != m.REFLECT_END)).all())   # 通过后的回顾不算“来问过”
         for uid in user_ids:
             for server_id, problem_id in problems:
                 rows = subs.get((uid, server_id, problem_id), [])

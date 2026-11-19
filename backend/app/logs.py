@@ -47,6 +47,7 @@ KINDS: dict[str, str] = {
     "view": "看代码、看差异、复制代码",
     "round": "求助回合",
     "stuck": "卡点",
+    "help": "帮助之后（每次帮助后的下一次提交）",
     "assess": "理解评估",
 }
 MAX_IDS = 500
@@ -242,7 +243,8 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             n_student = sum(1 for _ in s.scalars(select(m.ChatMessage.id).where(
                 m.ChatMessage.round_id == r.id, m.ChatMessage.role == "student", m.ChatMessage.kind == "text")).all())
             minutes = round(((r.ended_at or r.last_message_at) - r.started_at).total_seconds() / 60, 1)
-            add(user_id=r.user_id, time=r.started_at, kind="round", action="求助回合", course=r.course,
+            add(user_id=r.user_id, time=r.started_at, kind="round",
+                action="通过后的回顾" if r.end_reason == m.REFLECT_END else "求助回合", course=r.course,
                 problem_id=r.problem_id, problem=_problem_title(s, titles, r.server_id, r.problem_id),
                 submission_id=r.submission_id,
                 detail=f"{skill_name(r.skill_code) if r.skill_code else '没定技能'}，学生发了 {n_student} 条，"
@@ -251,7 +253,8 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                       "error": r.error_code, "maxHelp": r.max_help_level, "helpCount": r.help_count,
                       "askedBack": r.asked_back, "failedReplies": r.failed_replies, "located": r.located,
                       "studentMessages": n_student, "endReason": r.end_reason, "status": r.status,
-                      "minutes": minutes, "bound": r.problem_id is not None})
+                      "minutes": minutes, "bound": r.problem_id is not None,
+                      "reflection": r.end_reason == m.REFLECT_END})
 
     if "stuck" in kinds and course is not None:
         from . import stuckstats
@@ -270,6 +273,22 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                           "error": sp.error_code, "nth": sp.nth, "stubborn": sp.stubborn, "resolution": sp.resolution,
                           "passed": e.passed, "triesAfter": e.tries_after,
                           "passedAt": e.passed_at.isoformat() if e.passed_at else None})
+
+    if "help" in kinds:
+        from . import helpeffect
+
+        for e in helpeffect.episodes(s, user_ids, course):
+            at = helpeffect.happened_at(e)
+            if not date_from <= at <= date_to:
+                continue
+            outcome = ("还没再交" if e.next_sub is None else "下一次通过" if e.next_pass
+                       else "下一次还没过" if e.next_pass is False else "下一次还在评测")
+            add(user_id=e.step.user_id, time=at, kind="help", action="帮助之后", course=e.step.course_id or course,
+                problem_id=e.step.problem_id, problem=_problem_title(s, titles, e.step.server_id, e.step.problem_id),
+                submission_id=e.next_sub.submission_id if e.next_sub else None,
+                detail=f"{helpeffect.LEVEL_NAMES.get(e.level, e.level)}，{outcome}"
+                       + ("" if e.error_gone is None else ("，讨论的错误没了" if e.error_gone else "，讨论的错误还在")),
+                data=helpeffect.export_row(e))
 
     if "assess" in kinds:
         q = select(m.AgentAssessment).where(m.AgentAssessment.user_id.in_(user_ids),
@@ -398,9 +417,10 @@ COLUMNS = [("user_id", "学号"), ("name", "姓名"), ("time", "时间"), ("kind
 
 def versions() -> dict:
     """导出里各指标的版本（定义改了版本号就变，docs/研究数据与指标.md）。"""
-    from . import config, diagnosis, rating, stuckstats
+    from . import config, diagnosis, helpeffect, rating, stuckstats
 
-    return {"stuck": stuckstats.VERSION, "rating": rating.VERSION, "prompt": config.PROMPT_VERSION,
+    return {"stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION, "rating": rating.VERSION,
+            "prompt": config.PROMPT_VERSION,
             "diagnosis": diagnosis.VERSION, "quizProtocol": 2,
             "graph": config.GRAPH_VERSION,
             "reviewSchedule": "evidence-priority-1", "mastery": config.MASTERY_VERSION}
