@@ -123,7 +123,7 @@ def decode_bytes(data: bytes | None, encoding: str = "") -> tuple[str | None, bo
 
 def first_diff_line(a: str, b: str) -> int | None:
     """两段文字第一处不同在第几行（1 起）；完全相同返回 None。"""
-    la, lb = a.splitlines(), b.splitlines()
+    la, lb = a.splitlines(keepends=True), b.splitlines(keepends=True)
     for i in range(max(len(la), len(lb))):
         if i >= len(la) or i >= len(lb) or la[i] != lb[i]:
             return i + 1

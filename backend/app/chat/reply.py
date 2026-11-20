@@ -278,9 +278,12 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         f"他以前卡过的那道题：{prior_ref}" if prior_ref else "",
     ]
     talk = "\n".join(f"{'学生' if who == 'student' else '助手'}：{what[:300]}" for who, what in history[-4:])
-    cases = json.dumps(llm.evidence_for_model(ctx.evidence or {}, ctx.user_id, ctx.user_name), ensure_ascii=False)
+    evidence = llm.evidence_for_model(ctx.evidence or {}, ctx.user_id, ctx.user_name)
+    statement = pdftext.for_llm(llm.strip_identity(ctx.statement, ctx.user_id, ctx.user_name)) or evidence.get("problemText")
+    evidence.pop("problemText", None)   # 题面已单独提供一次
+    cases = json.dumps(evidence, ensure_ascii=False)
     tests = json.dumps(ctx.all_tests, ensure_ascii=False)
-    statement = pdftext.for_llm(llm.strip_identity(ctx.statement, ctx.user_id, ctx.user_name)) if ctx.statement else "（没有取到）"
+    statement = statement or "（没有取到）"
     user = ("【这次的任务】" + task + "\n\n【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) +
             f"\n\n【题目】\n{statement}\n\n【这道题的测试点（只给你分析用，绝不能告诉学生）】\n{tests}" +
             f"\n\n【他的代码】\n{numbered}\n\n"
@@ -291,7 +294,10 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         user += f"\n\n【上一次写的不合格】{feedback}。请改正后重新输出。"
     user += "\n\n【证据完整性】空字符串表示确实没有输出，null 表示没有取到。代码的标准输入来自对应测试点的 standardInput，程序实际输出在 programOutput。缺失时不要自行运行、推算或编造评测输出。"
     system = _SYSTEM + "\n\n【可调整的教学指导】\n" + teaching.guidance()
-    draft = llm.call_json("reply", course_prompt(system, ctx.course), user, validate, retries=1, max_tokens=900)
+    user += ("\n公开题面的样例与隐藏评测分开。firstDiffLine 是两份输出文本首次不同的行；格式差异本身不能证明判错原因。"
+             "有 base64 或 outputTruncated 标志时，不对编码或截断处猜测。若未附原页，不声称看到了图。")
+    draft = llm.call_json("reply", course_prompt(system, ctx.course), user, validate, retries=1, max_tokens=900,
+                          pages=pdftext.guide_pages(ctx.document, ctx.statement, text))
     if HELP_ORDER.get(decision.help_level, -1) >= 0 and flow in ("help", "locate"):
         draft.actions = list(HELP_ACTIONS)
     return draft

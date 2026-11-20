@@ -22,7 +22,7 @@ CASES = json.loads((Path(__file__).resolve().parent / "fixtures/statement_sectio
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
 def test_pdf_sample_boundaries_match_frontend(case):
-    assert [body for _, body in samples(case["text"])] == [tuple(body.split()) for body in case["samples"]]
+    assert [body for _, body in samples(case["text"])] == case["samples"]
 
 
 def test_tidy_cannot_swap_or_change_spaced_pdf_samples():
