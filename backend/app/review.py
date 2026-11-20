@@ -263,6 +263,31 @@ def _weak(st: mastery.SkillState | None) -> bool:
     return st is not None and st.events > 0 and (st.level == LEVEL_WEAK or st.score < config.MASTERY_V2["weak_below"])
 
 
+def priority(r: m.ReviewItem, st: mastery.SkillState | None) -> tuple:
+    """复习项的排序依据（越小越先出）：已经开始的先做；抽查而且不薄弱的放后面；
+    薄弱 3 分、改对后又犯或反复改 2 分、要确认是不是独立做的 1 分，分高的先；再按掌握分低的先、到期早的先。
+    决策记录（decisions.py）记的就是这几项。"""
+    weak = _weak(st)
+    repeat = r.origin in ("recurrence", "repeated_fix")
+    verify = r.origin == "verify"
+    importance = 3 * weak + 2 * repeat + verify
+    return (r.attempt_id is None, r.origin == "spot_check" and not weak, -importance,
+            st.score if st is not None else 0.5, available_at(r), r.id)
+
+
+def candidate_view(r: m.ReviewItem, st: mastery.SkillState | None, at: dt.datetime) -> dict:
+    """决策记录里的一个候选：排序依据和当时的掌握状态（研究用，学生端看不到）。"""
+    started, spot, neg, score, avail, _id = priority(r, st)
+    return {"reviewItem": r.id, "skill": r.skill_code, "kp": kp_of_skill(r.skill_code), "origin": r.origin,
+            "weak": _weak(st), "importance": -neg, "spotCheckNotWeak": spot, "score": round(score, 4),
+            "level": st.level if st is not None else None, "p": round(st.p, 4) if st is not None else None,
+            "halfLife": r.half_life, "reps": r.reps, "lapses": r.lapses, "streak": r.streak,
+            "dueAt": r.due_at.isoformat() if r.due_at else None, "availableAt": avail.isoformat(),
+            "overdueDays": round((at - avail).total_seconds() / 86400, 2),
+            "lastSuccessAt": r.last_success_at.isoformat() if r.last_success_at else None,
+            "triggerAt": r.trigger_at.isoformat() if r.trigger_at else None}
+
+
 def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None,
               *, candidates: bool = False) -> list[m.ReviewItem]:
     """今天可以做的：到期的、今天还没做过这个技能的，按掌握证据和复习原因排优先级，最多 daily_limit 个。"""
@@ -276,16 +301,7 @@ def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: s
             and (r.attempt_id is not None or (r.skill_code not in skills_today and available_at(r) <= at))]
     states = mastery.skill_states(s, user_id, at=at, model="v2") if any(r.attempt_id is None for r in rows) else {}
 
-    def priority(r):
-        st = states.get(r.skill_code)
-        weak = _weak(st)
-        repeat = r.origin in ("recurrence", "repeated_fix")
-        verify = r.origin == "verify"
-        importance = 3 * weak + 2 * repeat + verify
-        return (r.attempt_id is None, r.origin == "spot_check" and not weak, -importance,
-                st.score if st is not None else 0.5, available_at(r), r.id)
-
-    rows.sort(key=priority)
+    rows.sort(key=lambda r: priority(r, states.get(r.skill_code)))
     pending = [r for r in rows if r.attempt_id is not None]
     available = [r for r in rows if r.attempt_id is None]
     return pending + (available if candidates and room else available[:room])
@@ -364,12 +380,14 @@ def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None,
         return item, attempt
     if item.id not in {d.id for d in due_items(s, user_id, at, course, candidates=True)}:
         return item, None
+    trace: dict = {}
     q = quizgen.generate(s, user_id, item.skill_code, "review",
                          origin=(item.origin_server_id, item.origin_problem_id) if item.origin_problem_id else None,
-                         review_item=item)
+                         review_item=item, trace=trace)
     if q is None:
         return item, None
     attempt = quiz.new_attempt(s, user_id, q, "review", at, review_item_id=item.id)
+    _record_plan(s, user_id, course or course_of(item.skill_code), at, item, attempt, q, trace)
     if item.trigger_at is not None:
         attempt.events = [{**attempt.events[0], "triggerAt": item.trigger_at.isoformat(),
                            "triggerReason": item.origin, "submissionId": item.trigger_submission_id,
@@ -377,6 +395,30 @@ def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None,
                            "phase": "delayed"}]
     item.attempt_id = attempt.id
     return item, attempt
+
+
+def _record_plan(s: Session, user_id: str, course: str, at: dt.datetime, item: m.ReviewItem,
+                 attempt: m.QuizAttempt, q: m.QuizItem, trace: dict) -> None:
+    """决策记录：出正确还是有错的代码（最近正确代码占比在中间时随机，记下概率）、出什么题型、哪个出题器出的。
+    chosen 记的是计划；实际给的是什么、和计划对不对得上另记（itemHasBug、planMet）。"""
+    from . import decisions
+
+    plan = trace.get("plan")
+    if plan is None:
+        return
+    p_bug = plan.p_bug
+    decisions.record(
+        s, user_id, course, "quiz_plan",
+        [{"hasBug": True, "p": round(p_bug, 4)}, {"hasBug": False, "p": round(1 - p_bug, 4)}],
+        "has_bug" if plan.has_bug else "no_bug", p_bug if plan.has_bug else 1 - p_bug,
+        context={"bugRule": plan.bug_rule, "correctRatio": plan.correct_ratio, "window": plan.window,
+                 "quizType": plan.quiz_type, "level": plan.level, "overconfident": plan.overconfident,
+                 "lapse": item.last_outcome in ("wrong", "lapse"), "notes": plan.notes,
+                 "tried": trace.get("tried", []), "madeBy": trace.get("madeBy"), "source": q.source,
+                 "itemCode": q.code, "plannedHasBug": plan.has_bug, "itemHasBug": q.has_bug,
+                 # 出题器满足不了计划时会退而求其次（比如题库里这个技能没有有错的代码）：分析随机分配时要去掉这些
+                 "planMet": plan.has_bug == q.has_bug, "skill": item.skill_code},
+        ref={"reviewItem": item.id, "attempt": attempt.id, "quizItem": q.id}, ts=at)
 
 
 def seed_missing(s: Session, user_id: str, course: str, at: dt.datetime, limit: int = 8) -> int:
@@ -519,15 +561,35 @@ def prepare(s: Session, user_id: str, course: str, at: dt.datetime | None = None
     tried = set(s.scalars(select(m.UiEvent.target).where(m.UiEvent.user_id == user_id,
         m.UiEvent.course == course, m.UiEvent.kind == "review_item_wait", m.UiEvent.ts > at - dt.timedelta(hours=1))))
     misses = []
+    chosen: tuple[m.ReviewItem, m.QuizAttempt] | None = None
     for item in [r for r in due if str(r.id) not in tried][:3]:
         _item, attempt = start(s, user_id, item.id, at, course)
         if attempt is not None:
-            s.add_all(misses)
-            return "ready"
+            chosen = (item, attempt)
+            break
         misses.append(m.UiEvent(user_id=user_id, course=course, kind="review_item_wait", target=str(item.id), ts=at))
     s.add_all(misses)
+    _record_pick(s, user_id, course, at, due, tried, [int(x.target) for x in misses], chosen)
+    if chosen is not None:
+        return "ready"
     s.add(m.UiEvent(user_id=user_id, course=course, kind="review_wait", target="", ts=at))
     return "waiting"
+
+
+def _record_pick(s: Session, user_id: str, course: str, at: dt.datetime, due: list[m.ReviewItem], tried: set[str],
+                 missed: list[int], chosen: tuple[m.ReviewItem, m.QuizAttempt] | None) -> None:
+    """决策记录：这次备题时到期的复习项（按排序）、各自的依据，选了哪个（固定排序，概率 1）。"""
+    from . import decisions
+
+    states = mastery.skill_states(s, user_id, at=at, model="v2")
+    cands = [{**candidate_view(r, states.get(r.skill_code), at), "rank": i + 1,
+              "skippedRecently": str(r.id) in tried} for i, r in enumerate(due)]
+    item, attempt = chosen if chosen is not None else (None, None)
+    decisions.record(s, user_id, course, "review_pick", cands, f"review:{item.id}" if item else "none", 1.0,
+                     context={"missed": missed, "dailyLimit": cfg()["daily_limit"],
+                              "chosenRank": next((c["rank"] for c in cands if item and c["reviewItem"] == item.id), None)},
+                     ref={"reviewItem": item.id if item else None, "attempt": attempt.id if attempt else None,
+                          "quizItem": attempt.item_id if attempt else None}, ts=at)
 
 
 def prepare_active(limit: int = 3, at: dt.datetime | None = None) -> int:

@@ -62,6 +62,11 @@ class Plan:
     prefer_own: bool = True
     overconfident: bool = False
     notes: list[str] = field(default_factory=list)
+    # 决策记录（decisions.py）：正误怎么定的、按规则出“有错的代码”的概率、最近正确代码的占比
+    bug_rule: str = ""
+    p_bug: float = 0.5
+    correct_ratio: float | None = None
+    window: int = 0
 
 
 def _student_errors(s: Session, user_id: str, skill: str) -> list[str]:
@@ -94,15 +99,16 @@ def make_plan(s: Session, user_id: str, skill: str, reason: str, origin: tuple[i
     ratio = (sum(1 for r in recent if not r[0]) / len(recent)) if recent else (low + high) / 2
     notes = []
     if ratio < low:
-        has_bug = False
+        has_bug, bug_rule, p_bug = False, "ratio_low", 0.0
         notes.append(f"最近的小题里正确代码只占 {ratio:.0%}，这道出正确的")
     elif ratio >= high:
-        has_bug = True
+        has_bug, bug_rule, p_bug = True, "ratio_high", 1.0
         notes.append(f"最近的小题里正确代码已占 {ratio:.0%}，这道出有错的")
     elif overconfident and reason != "review":
-        has_bug = True
+        has_bug, bug_rule, p_bug = True, "overconfident", 1.0
         notes.append("他常常很有把握却答错，这道出有错的帮他校准")
     else:
+        bug_rule, p_bug = "random", 1 - (low + high) / 2
         has_bug = rng.random() >= (low + high) / 2
     lapse = review_item is not None and review_item.last_outcome in ("wrong", "lapse")
     quiz_type = "JUDGE" if (level in (LEVEL_WEAK, LEVEL_NONE) or lapse) else "FIX"
@@ -116,7 +122,8 @@ def make_plan(s: Session, user_id: str, skill: str, reason: str, origin: tuple[i
         prefer_own = reason != "review"
     return Plan(user_id=user_id, skill=skill, reason=reason, quiz_type=quiz_type, has_bug=has_bug, level=level,
                 errors=_student_errors(s, user_id, skill), origin=origin, prefer_own=prefer_own,
-                overconfident=overconfident, notes=notes)
+                overconfident=overconfident, notes=notes, bug_rule=bug_rule, p_bug=p_bug,
+                correct_ratio=round(ratio, 4) if recent else None, window=len(recent))
 
 
 # ============================================================ 自造检查数据
@@ -765,10 +772,14 @@ def from_bank(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | None:
 
 # ============================================================ 入口
 def generate(s: Session, user_id: str, skill: str, reason: str, origin: tuple[int, int] | None = None,
-             review_item: m.ReviewItem | None = None, rng: random.Random | None = None) -> m.QuizItem | None:
-    """给这个学生出一道检验 skill 的小题。出不了返回 None。"""
+             review_item: m.ReviewItem | None = None, rng: random.Random | None = None,
+             trace: dict | None = None) -> m.QuizItem | None:
+    """给这个学生出一道检验 skill 的小题。出不了返回 None。
+    trace：传一个 dict 进来，填上这次的出题计划和试了哪些出题器（决策记录用）。"""
     rng = rng or quiz._rng
     plan = make_plan(s, user_id, skill, reason, origin, review_item, rng)
+    if trace is not None:
+        trace.update(plan=plan, tried=[])
     order: list[Callable] = []
     if plan.prefer_own:
         order.append(from_own_code)
@@ -783,6 +794,10 @@ def generate(s: Session, user_id: str, skill: str, reason: str, origin: tuple[in
 
             logging.getLogger("quizgen").exception("出题器 %s 出错", gen.__name__)
             item = None
+        if trace is not None:
+            trace["tried"].append(gen.__name__)
         if item is not None:
+            if trace is not None:
+                trace["madeBy"] = gen.__name__
             return item
     return None

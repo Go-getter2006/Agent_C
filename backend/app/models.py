@@ -911,6 +911,24 @@ class CrossLink(Base):
     __table_args__ = (UniqueConstraint("c_skill", "d_skill", name="uq_cross_link"),)
 
 
+class DecisionLog(Base):
+    """系统替学生做的决定（研究用，app/decisions.py）：复习先出哪个技能、出正确还是有错的代码、提交没过时发不发主动消息。
+    记下当时的候选和各自的依据、规则版本、选了哪个、选中的概率、结果在哪。学生端任何接口都不返回这张表。"""
+
+    __tablename__ = "decision_logs"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
+    course: Mapped[str] = mapped_column(String(8), default="C")
+    kind: Mapped[str] = mapped_column(String(16), index=True)        # review_pick / quiz_plan / notice
+    ts: Mapped[Dt] = _ts()
+    rule: Mapped[str] = mapped_column(String(32), default="")        # 按哪条规则、哪一版定的
+    candidates: Mapped[list] = mapped_column(JSON, default=list)     # 当时的候选，每个带依据和分数
+    chosen: Mapped[str] = mapped_column(String(64), default="")      # 选了哪个
+    probability: Mapped[float] = mapped_column(Float, default=1.0)   # 按规则，选中它的概率（固定排序是 1）
+    context: Mapped[dict] = mapped_column(JSON, default=dict)        # 模型版本和别的依据
+    ref: Mapped[dict] = mapped_column(JSON, default=dict)            # 结果在哪：复习项、作答、小题、消息、提交的编号
+
+
 class HumanRating(Base):
     """不再使用（盲评不做了，2026-11-20）；表留着，免得再写迁移。原来是：老师盲评“理解”：看和大模型同样的材料（不显示学生是谁、不显示大模型和规则的等级），按同一个 0~3 量规评。
     用来算老师和大模型（原始、约束后）、规则的一致率（app/rating.py）。level 为空：老师看不出来。"""

@@ -91,6 +91,21 @@ def _grid_text(s: Session, sub: m.Submission) -> str:
     return f"{len(cells)} 组过 {ok} 组"
 
 
+def _log_notice(s: Session, sub: m.Submission, chosen: str, now: dt.datetime, feats: dict | None = None,
+                msg: m.ChatMessage | None = None) -> None:
+    """决策记录（decisions.py）：这次没过的提交发没发主动消息、发的哪种、为什么。"""
+    from .. import decisions
+
+    feats = feats or {}
+    cands = [{"option": "recurrence", "applies": bool(feats.get("recurrence"))},
+             {"option": "stuck", "applies": bool(feats.get("stuck"))},
+             {"option": "failure", "applies": chosen.startswith(("send", "update"))}]
+    decisions.record(s, sub.user_id, _course(s, sub.server_id), "notice", cands, chosen, 1.0,
+                     context={**feats, "recentMinutes": cfg()["recent_minutes"], "stuckAttempts": cfg()["stuck_attempts"]},
+                     ref={"submission": sub.submission_id, "server": sub.server_id, "problem": sub.problem_id,
+                          "message": msg.id if msg is not None else None}, ts=now)
+
+
 def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> m.ChatMessage | None:
     """一次没通过的提交标完错误之后调用。该说就在这道题的对话里发一条，返回这条消息。"""
     now = now or db.now()
@@ -105,11 +120,14 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
                         m.ChatMessage.failure_submission_id == sub.submission_id))
     if existing is not None and (existing.notice_read_at is not None or
             (existing.content or {}).get("proactive", {}).get("kind") != "failure"):
+        _log_notice(s, sub, "skip:already_noticed", now)
         return None
     label = _primary(s, sub)
     if existing is not None and label is None:
+        _log_notice(s, sub, "skip:waiting_label", now)
         return None
     if not catalog.is_visible(s, sub.user_id, sub.server_id, sub.problem_id):
+        _log_notice(s, sub, "skip:not_visible", now)
         return None
     subs = catalog.user_submissions(s, sub.user_id, sub.server_id, sub.problem_id)
     upto = [x for x in subs if x.submission_id <= sub.submission_id]
@@ -146,12 +164,19 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
     if not kind:
         kind = "failure"
         blocks.append({"t": "p", "text": f"你的第 {attempt} 次提交没有通过。你原本期待程序在哪一步得到什么结果？"})
+    feats = {"attemptNo": attempt, "kind": kind, "recurrence": recur is not None, "stuck": kind == "stuck",
+             "error": label.error_code if label is not None else "",
+             "labelConfidence": round(label.confidence, 3) if label is not None else None,
+             "minutesSinceSubmit": round((now - sub.submit_time).total_seconds() / 60, 1) if sub.submit_time else None}
     content = {"blocks": blocks, "actions": list(HELP_ACTIONS),
                "proactive": {"kind": kind, "submission": sub.submission_id}}
     if existing is not None:
         if kind != "failure":
             s.execute(update(m.ChatMessage).where(m.ChatMessage.id == existing.id,
                       m.ChatMessage.notice_read_at.is_(None)).values(content=content))
+            _log_notice(s, sub, f"update:{kind}", now, feats, existing)
+        else:
+            _log_notice(s, sub, "skip:already_sent", now, feats, existing)
         return None
     msg = m.ChatMessage(user_id=sub.user_id, failure_submission_id=sub.submission_id,
                         server_id=sub.server_id, problem_id=sub.problem_id,
@@ -159,5 +184,6 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
                         content=content)
     s.add(msg)
     s.flush()
+    _log_notice(s, sub, f"send:{kind}", now, feats, msg)
     log.debug("作业提醒已写入（%s）", kind)
     return msg

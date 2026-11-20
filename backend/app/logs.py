@@ -48,6 +48,7 @@ KINDS: dict[str, str] = {
     "round": "求助回合",
     "stuck": "卡点",
     "help": "帮助之后（每次帮助后的下一次提交）",
+    "decision": "系统的决定（复习先出哪个、出正确还是有错的代码、发不发主动消息）",
     "assess": "理解评估",
 }
 MAX_IDS = 500
@@ -290,6 +291,20 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                        + ("" if e.error_gone is None else ("，讨论的错误没了" if e.error_gone else "，讨论的错误还在")),
                 data=helpeffect.export_row(e))
 
+    if "decision" in kinds:
+        q = select(m.DecisionLog).where(m.DecisionLog.user_id.in_(user_ids), m.DecisionLog.ts >= date_from,
+                                        m.DecisionLog.ts <= date_to)
+        if course is not None:
+            q = q.where(m.DecisionLog.course == course)
+        names = {"review_pick": "复习先出哪个", "quiz_plan": "出什么样的小题", "notice": "发不发主动消息"}
+        for d in s.scalars(q.order_by(m.DecisionLog.id)).all():
+            ref = d.ref or {}
+            add(user_id=d.user_id, time=d.ts, kind="decision", action=names.get(d.kind, d.kind), course=d.course,
+                problem_id=ref.get("problem"), submission_id=ref.get("submission"),
+                detail=f"{names.get(d.kind, d.kind)}：{d.chosen}（候选 {len(d.candidates or [])} 个，概率 {d.probability:g}）",
+                data={"decision": d.id, "kind": d.kind, "rule": d.rule, "chosen": d.chosen, "probability": d.probability,
+                      "candidates": d.candidates, "context": d.context, "ref": ref})
+
     if "assess" in kinds:
         q = select(m.AgentAssessment).where(m.AgentAssessment.user_id.in_(user_ids),
                                             m.AgentAssessment.created_at >= date_from,
@@ -415,9 +430,9 @@ COLUMNS = [("user_id", "学号"), ("name", "姓名"), ("time", "时间"), ("kind
 
 def versions() -> dict:
     """导出里各指标的版本（定义改了版本号就变，docs/研究数据与指标.md）。"""
-    from . import config, diagnosis, helpeffect, stuckstats
+    from . import config, decisions, diagnosis, helpeffect, stuckstats
 
-    return {"stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION,
+    return {"stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION, "decisions": decisions.VERSION,
             "prompt": config.PROMPT_VERSION,
             "diagnosis": diagnosis.VERSION, "quizProtocol": 2,
             "graph": config.GRAPH_VERSION,
