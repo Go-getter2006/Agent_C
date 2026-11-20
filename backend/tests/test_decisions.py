@@ -102,3 +102,35 @@ def test_decisions_are_exported_but_not_shown_to_students(demo):
         c.post("/api/auth/login", json={"loginName": UID, "password": "test-pass"})
         for path in ("/api/review", "/api/progress", "/api/homework"):
             assert "quiz-plan-1" not in c.get(path).text and "evidence-priority" not in c.get(path).text
+
+
+@pytest.mark.skipif(shutil.which("gcc") is None, reason="没有 gcc")
+def test_student_can_request_a_review_now(demo, monkeypatch):
+    """复习安排里点“去复习”：不等到期、不受每天两道的限制，马上出一道；决策记录记成学生自己选的；一天有上限。"""
+    from app import config
+
+    with TestClient(create_app()) as c:
+        c.post("/api/auth/login", json={"loginName": UID, "password": "test-pass"})
+        page = c.get("/api/review").json()
+        items = page["due"] + page["upcoming"]
+        assert items
+        pick = items[-1]["id"]
+        r = c.post(f"/api/review/{pick}/request")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["itemId"] == pick and body["quiz"]["state"] == "judge" and body["lead"]
+        again = c.post(f"/api/review/{pick}/request").json()          # 已经备好的：同一道
+        assert again["quiz"]["attemptId"] == body["quiz"]["attemptId"]
+        with db.session_scope() as s:
+            rows = s.scalars(select(m.DecisionLog).where(m.DecisionLog.rule == "student-pick",
+                                                         m.DecisionLog.chosen == f"review:{pick}")).all()
+            assert len(rows) == 1                                           # 点了两次（“继续”）只记一次
+            row = rows[0]
+            assert row.chosen == f"review:{pick}" and row.context["by"] == "student"
+            assert row.ref["attempt"] == body["quiz"]["attemptId"]
+        monkeypatch.setitem(config.REVIEW, "self_daily_cap", 0)
+        other = next((x["id"] for x in items if x["id"] != pick), None)
+        if other is not None:
+            blocked = c.post(f"/api/review/{other}/request")
+            assert blocked.status_code == 409 and "明天" in blocked.json()["error"]
+        assert c.post("/api/review/99999999/request").status_code == 409

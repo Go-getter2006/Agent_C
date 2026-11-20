@@ -36,7 +36,7 @@ interface KpDetail {
   // 小题首次独立作答的判断、定位、修改（全班、每个学生）；颜色仍表示原来的掌握档位
   diagnosis: { judge: Ratio; locate: Ratio; edit: Ratio; shown: number; why: Why } | null;
   studentDims: Record<string, { judge: Ratio; locate: Ratio; edit: Ratio; shown: number; why: Why }>;
-  students: { userId: string; name: string; level: string; p: number | null; score: number | null; predicted: boolean; text: string }[];
+  students: { userId: string; name: string; level: string; p: number | null; score: number | null; predicted: boolean; text: string; why?: string }[];
   errors: { code: string; name: string; count: number }[];
   problems: { problemId: number; title: string; brief: string; primary: boolean }[];
   prereqs: { code: string; name: string; course: string; cross: boolean }[];
@@ -148,6 +148,7 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                         <span className={`lvpill ${levelClass(w.level)}`}><i />{w.predicted ? "推算" : w.level}</span>
                         {w.score !== null ? <ScoreBadge score={w.score} /> : w.p !== null && <span className="note num">{w.p.toFixed(2)}</span>}
                       </div>
+                      {w.why && <p className="kg-people-why">分数不低但还不是已掌握：{w.why}</p>}
                       {w.text && <p className="kg-people-text">{w.text}</p>}
                       {d.studentDims?.[w.userId] && (
                         <p className="kg-people-text num">

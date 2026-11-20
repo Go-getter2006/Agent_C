@@ -202,3 +202,42 @@ def test_reflection_without_llm_uses_a_template(demo):
         sub2, now2 = sub, now + dt.timedelta(minutes=3)
         q = workflow.handle(s, UID, (sub2.server_id, sub2.problem_id), "为什么要用 int 而不是 long？", now=now2)
         assert s.get(m.ChatRound, q[0].round_id).end_reason != m.REFLECT_END
+
+
+def test_question_about_a_passed_problem_is_answered_from_its_history(demo):
+    """已经通过的题回头问“为什么改这么多次”：按每一次提交的结果和改动回答，不再只说“已经通过了”。"""
+    with db.session_scope() as s:
+        sub, now = _reflect_setup(s)
+        later = now + dt.timedelta(minutes=10)
+        workflow.handle(s, UID, (sub.server_id, sub.problem_id), "好的", now=later)   # 先把回顾答掉
+        for k in range(2):
+            out = workflow.handle(s, UID, (sub.server_id, sub.problem_id), "我这个题为什么改这么多次",
+                                  now=later + dt.timedelta(minutes=k + 1))
+            reply = workflow.message_text(out[1])
+            assert "已经通过了。还有哪里" not in reply
+            assert "一共交了" in reply and "第 1 次" in reply
+            step = s.scalars(select(m.ChatStep).where(m.ChatStep.message_id == out[0].id)).one()
+            assert step.reply["flow"] == "retro" and step.check_result["ok"]
+
+
+def test_retro_reply_uses_the_model_with_facts_only(demo):
+    from app.chat import retro
+
+    seen = []
+
+    def backend(messages, json_mode, max_tokens, temperature):
+        seen.append(messages[1]["content"])
+        return json.dumps({"reply": "前两次卡在分支漏了，第三次修好分支又把公式写错了，最后改对第 17 行就过了。"},
+                          ensure_ascii=False), 50, 20
+
+    with db.session_scope() as s:
+        sub = _fixed_problem(s)
+        hist = retro.history(s, UID, sub.server_id, sub.problem_id)
+        assert len(hist) >= 2 and hist[-1]["passed"] or any(h["passed"] for h in hist)
+    llm.set_backend(backend)
+    try:
+        said, source = retro.reply(hist, "为什么改这么多次", [], "C")
+    finally:
+        llm.set_backend(None)
+    assert source == "llm" and "第 17 行" in said
+    assert "【每一次提交】" in seen[0] and "为什么改这么多次" in seen[0]

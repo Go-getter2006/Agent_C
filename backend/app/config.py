@@ -122,7 +122,10 @@ LABELER_VERSION = "2026-11-20a"   # 次技能只列题目专门要求的
 PROMPT_VERSION = "2026-11-18d"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
 WORKFLOW_VERSION = "2026-11-18a"
-MASTERY_VERSION = "2026-11-20"   # 2026-11-20：次技能分“有测试点专门考”和“顺带用到”，见 MASTERY 里的说明
+# 2026-11-20：次技能分“有测试点专门考”和“顺带用到”，见 MASTERY 里的说明（SECONDARY_SPLIT_VERSION）
+# 2026-11-20b：顺带用到的通过不改变“最近一次是不是独立做对”，知识点按最近一条直接证据定档
+MASTERY_VERSION = "2026-11-20b"
+SECONDARY_SPLIT_VERSION = "2026-11-20"   # 这一版以前记下的通过证据，次技能一律按 1.0 记的（mastery.reweigh_passes 只重算这些）
 GRAPH_VERSION = "graph-2026-11-19b"
 
 # ---------------------------------------------------------------- 学情（附件一第 8 节）
@@ -221,6 +224,8 @@ REVIEW = {
     "graduate_streak": 3,
     "graduate_half_life": 20.0,
     "daily_limit": 2,
+    # 学生在复习安排里自己点“去复习”：不受每天两道的限制、不用等到期，但一天最多这么多道（出题可能调用大模型）
+    "self_daily_cap": 10,
 }
 
 # ---------------------------------------------------------------- 对话（附件一第 5 节）

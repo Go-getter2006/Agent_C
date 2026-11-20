@@ -10,6 +10,7 @@ import type { HelpAction, Message, QuizView } from "../types";
 import { useSession, useStudentCache } from "../session";
 import CourseScene from "./CourseScene";
 import Attempt from "./Attempt";
+import FlowChart from "./FlowChart";
 import Quiz from "./Quiz";
 import { CodeBlock, Inline, Loading, Problem } from "./ui";
 
@@ -274,6 +275,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
             )}
             {list.map((m, i) => (
               <MessageItem key={m.id} message={m} layout={layout} disabled={busy}
+                live={i === list.length - 1 && !shown} onSend={(value) => void send({ text: value })}
                 daySep={i === 0 ? (sameDay(m.time, new Date().toISOString()) ? null : dayLabel(m.time)) : sameDay(m.time, list[i - 1].time) ? null : dayLabel(m.time)}
                 onAction={(action) => void send({ action })} onQuiz={(q) => updateQuiz(m.id, q)}
                 onCopy={() => void api.event("copy_code", threadKey)} />
@@ -351,12 +353,14 @@ interface ItemProps {
   layout: Layout;
   disabled: boolean;
   daySep: string | null;
+  live: boolean;                 // 最新一条（流程图只有这一条能选）
   onAction: (action: HelpAction) => void;
+  onSend: (text: string) => void;
   onQuiz: (quiz: QuizView) => void;
   onCopy: () => void;
 }
 
-function MessageItem({ message, layout, disabled, daySep, onAction, onQuiz, onCopy }: ItemProps) {
+function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend, onQuiz, onCopy }: ItemProps) {
   const mine = message.role === "student";
   if (mine) {
     const text = message.blocks.filter((b) => b.t === "p").map((b) => (b as { text: string }).text).join("\n");
@@ -368,7 +372,8 @@ function MessageItem({ message, layout, disabled, daySep, onAction, onQuiz, onCo
           <div className="msg-body">
             <div className={code ? "bubble bubble-code" : "bubble"}>
               {code ? text : message.blocks.map((b, i) =>
-                b.t === "p" ? <p key={i}><Inline text={b.text} /></p> : <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} copyable={false} />,
+                b.t === "p" ? <p key={i}><Inline text={b.text} /></p>
+                  : b.t === "code" ? <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} copyable={false} /> : null,
               )}
             </div>
           </div>
@@ -386,6 +391,9 @@ function MessageItem({ message, layout, disabled, daySep, onAction, onQuiz, onCo
           {message.blocks.map((b, i) =>
             b.t === "p" ? (
               <p key={i}><Inline text={b.text} /></p>
+            ) : b.t === "flow" ? (
+              <FlowChart key={i} steps={b.steps} pick={b.pick} current={b.current} done={b.done}
+                live={live} disabled={disabled} onSend={onSend} />
             ) : (
               <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} onCopy={onCopy} />
             ),

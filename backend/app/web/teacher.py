@@ -624,7 +624,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     kp2 = mastery.kp_states(s, user_id, model="v2", with_predicted=True)
     recs = kpdesc.records(s, [user_id], course, problem_set).get(user_id, {})
     kps = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "level": kp.level, "p": round(kp.p, 2),
-            "score": score(kp.score), "text": kpdesc.describe(recs.get(code), teacher=True),
+            "score": score(kp.score), "text": kpdesc.describe(recs.get(code), teacher=True), "why": kp.why,
             "v1": round(kp1[code].p, 2) if code in kp1 else None, "v1Level": kp1[code].level if code in kp1 else None}
            for code, kp in sorted(kp2.items()) if not kp.predicted and in_course(code, course)]
     # 数据结构：还没有证据的知识点，按 C 语言里的先修推出来的准备度；C 语言这边没有这一块
@@ -997,7 +997,7 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
         st = kps.get(kp)
         row = {"userId": p.user_id, "name": p.name, "level": st.level if st else "还没练到",
                "p": round(st.p, 2) if st else None, "score": score(st.score) if st and not st.predicted else None,
-               "predicted": bool(st and st.predicted),
+               "predicted": bool(st and st.predicted), "why": "" if other or st is None else st.why,
                # 数据结构的班看 C 语言的知识点：只有档位和估计，不说答题记录
                "text": "" if other else kpdesc.describe(recs.get(p.user_id, {}).get(kp), teacher=True)}
         everyone.append(row)

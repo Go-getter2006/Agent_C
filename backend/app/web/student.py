@@ -470,6 +470,12 @@ def read_notices(key: str, body: ReadNotices, user: m.User = Depends(student), s
     s.execute(update(m.ChatMessage).where(*workflow.thread_filter(user.student_id, thread, user.course),
               m.ChatMessage.id.in_(body.ids), m.ChatMessage.failure_submission_id.is_not(None),
               m.ChatMessage.notice_read_at.is_(None)).values(notice_read_at=db.now()))
+    newest = s.scalar(select(func.max(m.ChatMessage.id)).where(*workflow.thread_filter(user.student_id, thread, user.course),
+                      m.ChatMessage.id.in_(body.ids), m.ChatMessage.failure_submission_id.is_not(None)))
+    if newest is not None:   # 看到了这道题最新的提醒：更早的提醒也算看过（没往上翻到的旧提醒不再一直挂着红点）
+        s.execute(update(m.ChatMessage).where(*workflow.thread_filter(user.student_id, thread, user.course),
+                  m.ChatMessage.id < newest, m.ChatMessage.failure_submission_id.is_not(None),
+                  m.ChatMessage.notice_read_at.is_(None)).values(notice_read_at=db.now()))
     return {"ok": True}
 
 
@@ -691,6 +697,18 @@ def review_attempt(attempt_id: int, user: m.User = Depends(student), s: Session 
     a = _finished_review(s, user, attempt_id)
     return {"attemptId": a.id, "title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), "复习题"),
             "time": (a.finished_at or a.created_at).isoformat(), "quiz": quiz.view(s, a)}
+
+
+@router.post("/review/{item_id}/request")
+def review_request(item_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    """复习安排里点了“去复习”：马上给这一项出一道题（不等到期、不受每天两道的限制，一天有上限）。"""
+    try:
+        item, attempt = review.request_now(s, user.student_id, item_id, user.course)
+    except review.RequestError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    s.add(m.UiEvent(user_id=user.student_id, kind="review_start", target=str(item_id), course=user.course))
+    q = s.get(m.QuizItem, attempt.item_id)
+    return {"itemId": item.id, "lead": review.lead_for(s, user.student_id, item, q), "quiz": quiz.view(s, attempt)}
 
 
 @router.post("/review/{item_id}/start")

@@ -160,6 +160,46 @@ def _reflect_round(s: Session, user_id: str, thread: tuple[int, int], now: dt.da
     return rnd
 
 
+def _plan_next(s: Session, ctx: context.Ctx, state: dict, pick: list[int] | None, analysis: Analysis,
+               said: str, course: str) -> tuple[dict, str, str]:
+    """流程图往下走一步：(新的状态, 话, 帮助级别)。
+    选了卡在哪几步：从第一步开始讲；回答了这一步：答上了换下一步，没答上讲具体一点，两次没答上讲清楚再往下走。"""
+    from . import plan as plan_mod
+
+    steps = state["steps"]
+    tests = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)
+    st = {**state, "picking": False, "done": list(state.get("done", []))}
+    if pick is not None:
+        st.update(queue=pick, current=pick[0], tries=0)
+        said_text, _src = plan_mod.guide(steps, pick[0], 0, said, ctx.statement, course, tests)
+        return st, said_text, "H1"
+    cur, tries = st["current"], int(st.get("tries", 0))
+    ok = analysis.answer_correct is True or analysis.understood
+    if not ok and tries < 1:
+        st["tries"] = tries + 1
+        said_text, _src = plan_mod.guide(steps, cur, tries + 1, said, ctx.statement, course, tests)
+        return st, said_text, "H1"
+    parts = []
+    level = "H1"
+    if not ok:   # 第二次还没答上：把这一步讲清楚，再往下走
+        explained, _src = plan_mod.guide(steps, cur, 2, said, ctx.statement, course, tests)
+        parts.append(explained)
+        level = "H2"
+    else:
+        parts.append("对，这一步就是这样。")
+    st["done"] = sorted(set(st["done"]) | {cur})
+    queue = [i for i in st.get("queue", []) if i != cur and i not in st["done"]]
+    st["queue"] = queue
+    if queue:
+        st.update(current=queue[0], tries=0)
+        nxt, _src = plan_mod.guide(steps, queue[0], 0, "", ctx.statement, course, tests)
+        parts.append(nxt)
+    else:
+        st.update(current=None, tries=0, ended=True)
+        parts.append("这几步你都想清楚了。按流程图的顺序把代码写出来，在 XDOJ 上交一次；没过的话我们再一起看。")
+    return st, "\n".join(parts), level
+
+
 # ------------------------------------------------------------ 卡住时怎么办（5.6）
 def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool | None,
                 now: dt.datetime) -> tuple[str, str, m.StuckPoint | None, m.StuckPoint | None]:
@@ -205,7 +245,8 @@ def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool 
 # ------------------------------------------------------------ 生成与校验
 def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history: list[tuple[str, str]],
              prior: m.StuckPoint | None, prior_ref: str, kind: str,
-             visible_titles: dict[str, str], reflect=None) -> tuple[validate.Draft, str, dict, int]:
+             visible_titles: dict[str, str], reflect=None, retro_hist=None,
+             plan_text: str | None = None) -> tuple[validate.Draft, str, dict, int]:
     testcases = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)   # 全部测试点都不能出现在回复里
 
     def run_check(d: validate.Draft) -> list[str]:
@@ -213,6 +254,22 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
             d, help_level=decision.help_level, reveal_level=decision.reveal_level, kind=kind, source=ctx.source,
             testcases=testcases, reference=ctx.reference, current_title=ctx.problem.title if ctx.problem else "",
             visible_titles=visible_titles)
+
+    if flow in ("plan", "plan_step") and plan_text is not None:   # 解题流程图（chat/plan.py），话已经生成并核对过
+        draft = validate.Draft(before=plan_text)
+        problems = run_check(draft)
+        return draft, ("llm" if llm.available() else "template"), {"ok": not problems, "problems": problems}, 0
+
+    if flow == "retro":   # 已经通过的题回头问：按每一次提交回答（chat/retro.py）
+        from . import retro
+
+        said, source = retro.reply(retro_hist or [], text, testcases, ctx.course)
+        draft = validate.Draft(before=said)
+        problems = run_check(draft)
+        if problems and source == "llm":
+            draft, source = validate.Draft(before=retro.template(retro_hist or [])), "template"
+            problems = run_check(draft)
+        return draft, source, {"ok": not problems, "problems": problems}, 0
 
     if flow == "reflect":   # 通过后的回顾：接着他说的回一两句（chat/summary.py）
         from . import summary
@@ -300,6 +357,19 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     else:
         rnd = _round_for(s, user_id, key, now, course)
     awaiting = awaiting or rnd.recall_stage in ("asked", "blanked")  # 让他回忆时也在等他回答
+    # 解题流程图（chat/plan.py）：上一条带着的状态；他贴了代码、之后又交过，就不接着走流程图了
+    plan_state = None
+    if thread is not None and not knowledge and not pasted and reflect_on is None and not action:
+        from . import plan as plan_mod
+
+        plan_state = plan_mod.active(last_agent)
+        if plan_state is not None and s.scalar(select(m.Submission.submission_id).where(
+                m.Submission.server_id == thread[0], m.Submission.problem_id == thread[1],
+                m.Submission.user_id == user_id, m.Submission.submit_time > last_agent.created_at)) is not None:
+            plan_state = None
+    plan_guiding = plan_state is not None and plan_state.get("current") is not None
+    if plan_guiding:
+        awaiting = True   # 他在回答“这一步你打算怎么做”
     if not awaiting and not action and rnd.help_count > 0 and _PUSHBACK.search(prose or text):
         awaiting = True
     blocks = [{"t": "p", "text": p} for p in prose.split("\n") if p.strip()]
@@ -338,10 +408,14 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             for code in [ctx.plabel.primary_skill, *(ctx.plabel.secondary_skills or [])]:
                 if code in SKILLS:
                     options.append((code, SKILLS[code][0]))
-        analysis = analyze(prose or text, bool(pasted), awaiting, last_agent_text,
-                           ctx.fill(hint.why) if awaiting and reflect_on is None else "", options,
+        direction = ctx.fill(hint.why) if awaiting and reflect_on is None else ""
+        if plan_guiding:
+            step = plan_state["steps"][plan_state["current"]]
+            direction = (step.get("how") or step["title"]) + (f"（关键知识点：{step['kp']}）" if step.get("kp") else "")
+        analysis = analyze(prose or text, bool(pasted), awaiting, last_agent_text, direction, options,
                            bound=ctx.problem is not None, course=course)
-        if analysis.intent == "REPLY" and awaiting and analysis.answer_correct is None and not analysis.understood:
+        if analysis.intent == "REPLY" and awaiting and analysis.answer_correct is None and not analysis.understood \
+                and not plan_guiding:
             analysis.answer_correct = bool(hints.answered(text, hint))  # 判不了按没答对处理：多帮一点比错夸要稳妥
         if reflect_on is not None:
             # 回顾没有“标准答案”，不记答对答错；说了有内容的话就是在解释自己的想法（进理解评估）
@@ -368,17 +442,36 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     flow = decision.kind
     if reflect_on is not None:
         decision, flow = Decision("R00", "NA", "甲", "reflect"), "reflect"
+    plan_step = None   # (新的流程图状态, 话)
+    if reflect_on is None and thread is not None and not knowledge and not pasted and not action:
+        from . import plan as plan_mod
+
+        n_steps = len(plan_state["steps"]) if plan_state else 0
+        pick = plan_mod.picked(prose, n_steps) if plan_state is not None and plan_state.get("picking") else None
+        if pick is not None or plan_guiding:
+            plan_step = _plan_next(s, ctx, plan_state, pick, analysis, prose, course)
+            decision = Decision("R00", plan_step[2], "甲", "plan_step")
+            flow = "plan_step"
+        elif ctx.problem is not None and ctx.submission is None and plan_mod.wants_plan(prose, analysis.intent):
+            steps = plan_mod.steps_for(s, ctx.problem.server_id, ctx.problem.problem_id, ctx.statement, ctx.plabel,
+                                       course, list(ctx.all_tests))
+            state = {"version": plan_mod.VERSION, "steps": steps, "picking": True, "current": None,
+                     "queue": [], "done": [], "tries": 0}
+            plan_step = (state, "这道题可以分成下面几步。你卡在哪一步？可以选一步或几步，都不会也没关系，我们从头一步一步来。",
+                         "H0")
+            decision, flow = Decision("R00", "H0", "甲", "plan"), "plan"
     prior: m.StuckPoint | None = None
     stuck_point: m.StuckPoint | None = None
-    if in_recall and ctx.root_skill and reflect_on is None:
+    if in_recall and ctx.root_skill and reflect_on is None and plan_step is None:
         decision = Decision("R07", "H3", "乙", "stuck")
         flow = "stuck"
-    if ctx.problem is not None and flow not in ("other", "concept", "task", "ack", "reflect"):
+    if ctx.problem is not None and flow not in ("other", "concept", "task", "ack", "reflect", "plan", "plan_step"):
         if ctx.submission is not None and ctx.submission.detail_status != "done" and not ctx.source:
             decision, flow = Decision("R00", "NA", "甲", "pending"), "pending"
         elif ctx.submission is not None and ctx.submission.judgement == "AC" and not pasted \
                 and flow not in ("affirm",):
-            decision, flow = Decision("R00", "NA", "甲", "passed"), "passed"
+            # 已经通过的题回头问：按这道题每一次提交的结果和改动回答（chat/retro.py），不再只说“已经通过了”
+            decision, flow = Decision("R00", "NA", "甲", "retro"), "retro"
     if flow == "stuck":
         if not ctx.root_skill:
             decision, flow = Decision(decision.rule_id, "H3", "乙", "help"), "example"
@@ -406,14 +499,25 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         if info is not None:
             visible_titles[info.title] = info.brief
     history = [(x.role, message_text(x)) for x in thread_messages(s, user_id, thread, course, topic)[-6:] if x.kind == "text"]
+    retro_hist = None
+    if flow == "retro" and ctx.problem is not None:
+        from . import retro
+
+        retro_hist = retro.history(s, user_id, ctx.problem.server_id, ctx.problem.problem_id)
     draft, source, check_result, retries = _produce(ctx, decision, flow, text, history, prior, prior_ref,
-                                                    decision.kind, visible_titles, reflect)
+                                                    decision.kind, visible_titles, reflect, retro_hist,
+                                                    plan_step[1] if plan_step else None)
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
         stuck_point.given_code, stuck_point.key_line = draft.code, draft.key_line or 1
     actions = list(draft.actions)
     if flow in ("help", "locate") and not actions:
         actions = list(reply.HELP_ACTIONS)
     content = {"blocks": reply.to_blocks(draft, ctx), "actions": actions}
+    if plan_step is not None:   # 流程图跟着消息走：学生看到的块，和接着引导要用的状态（学生端看不到）
+        from . import plan as plan_mod
+
+        content["blocks"].append(plan_mod.block(plan_step[0]))
+        content["plan"] = plan_step[0]
     agent_msg = m.ChatMessage(user_id=user_id, round_id=rnd.id, server_id=thread[0] if thread else None,
                               problem_id=thread[1] if thread else None, topic_id=topic, course=course, role="agent",
                               kind="text", content=content, created_at=now + dt.timedelta(milliseconds=1))

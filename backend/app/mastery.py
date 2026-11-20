@@ -63,6 +63,9 @@ class SkillState:
     predicted: bool = False          # v2：没有证据，完全由先修推出来的
     unresolved_submissions: int = 0  # 尚无改正证据的已标注失败提交数
     recurred: bool = False           # v2：在别的题上改对过，现在又在新的题上错、还没改对（改对过又犯）
+    # 最近一条“直接”证据：顺带用到的次技能的通过（problem_skills）不算正面也不算反面，不改变它们
+    last_direct_ts: dt.datetime | None = None
+    last_kind: str = ""              # independent 独立做对 / helped 靠提示或示例才过 / failed 没过 / copied 疑似雷同
 
     @property
     def p(self) -> float:
@@ -195,8 +198,25 @@ def _skill_states_v1(s: Session, user_id: str, at: dt.datetime, decay: bool) -> 
         st.events += 1
         # “最近一次是独立成功”：权重为 0 的记录（给了示例代码后通过）也算一次事件
         st.last_ts = r.ts
-        st.last_independent_success = bool(r.success and r.independent)
+        if not incidental(r):
+            st.last_direct_ts = r.ts
+            st.last_independent_success = bool(r.success and r.independent)
     return out
+
+
+def incidental(r: m.SkillEvidence) -> bool:
+    """顺带用到的次技能的通过（problem_skills 记成不算独立成功的那种）：不算正面也不算反面，
+    不改变“最近一次是不是独立做对”。以前每道题都会顺带用到的技能（算术运算、输出），做题多的同学最近一条
+    证据几乎总是这种，结果分数很高却到不了“已掌握”。"""
+    return bool(r.success and not r.independent and r.event_type in ("pass_first_try", "pass_self_fixed"))
+
+
+def kind_of(r: m.SkillEvidence, weak_passes: set[str], fixed: bool) -> str:
+    if fixed or (r.success and r.independent and r.source_key not in weak_passes):
+        return "independent"
+    if r.success and r.source_key in weak_passes:
+        return "copied"
+    return "helped" if r.success else "failed"
 
 
 # ------------------------------------------------------------ v2
@@ -342,8 +362,10 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
             if r.reliability is not None and r.reliability < 1.0:
                 st.discounted += 1
             st.last_ts = r.ts
-            st.last_independent_success = bool((r.success and r.independent and r.source_key not in weak_passes)
-                                               or fixed_by is not None)
+            if not incidental(r):
+                st.last_direct_ts = r.ts
+                st.last_kind = kind_of(r, weak_passes, fixed_by is not None)
+                st.last_independent_success = st.last_kind == "independent"
         out[code] = st
 
     # 图先验：按先修顺序走一遍，先修（有证据或能推出来的）的均值决定起点
@@ -383,6 +405,20 @@ class KpState:
     lower: float = 0.0
     predicted: bool = False
     score: float | None = None   # 教师端的掌握分（0~1），见 SkillState.score；推出来的没有
+    last_kind: str = ""          # 这个知识点上最近一条直接证据是哪种（SkillState.last_kind）
+
+    @property
+    def why(self) -> str:
+        """分数显示成绿色（和教师端分数徽章一样，四舍五入后 75 以上）、却不是“已掌握”时，说为什么（老师看的）。"""
+        if self.level != LEVEL_BASIC or self.score is None or round(self.score * 100) < 75:
+            return ""
+        if self.last_kind == "failed":
+            return "最近一次在这里没过"
+        if self.last_kind == "helped":
+            return "最近一次靠提示或示例才过"
+        if self.last_kind == "copied":
+            return "最近一次通过和同学代码雷同"
+        return "做得还不够多，还不能确定"
 
 
 def kp_states(s: Session, user_id: str, model: str | None = None, with_predicted: bool = False) -> dict[str, KpState]:
@@ -417,7 +453,11 @@ def _kp_states(s: Session, user_id: str, model: str, with_predicted: bool) -> di
             kp.level, kp.predicted = LEVEL_NONE, True
             kp.lower = kp.p
             continue
-        latest = max(real, key=lambda x: x.last_ts or dt.datetime.min.replace(tzinfo=db.UTC))
+        # 按最近一条直接证据定（顺带用到的次技能的通过不算）
+        oldest = dt.datetime.min.replace(tzinfo=db.UTC)
+        direct = [x for x in real if x.last_direct_ts is not None] or real   # 只有顺带用到的技能不参与
+        latest = max(direct, key=lambda x: x.last_direct_ts or x.last_ts or oldest)
+        kp.last_kind = latest.last_kind
         if model == "v2":
             kp.lower = (sum((x.s + x.f) * x.interval[0] for x in real) / total) if total > 0 else min(x.interval[0] for x in real)
             kp.level = level_v2(kp.p, kp.lower, sum(x.events for x in real), kp.raw, latest.last_independent_success,
@@ -457,8 +497,9 @@ def reweigh_passes(s: Session, limit: int = 500) -> int:
     返回改了几条。主技能的只改版本号；标注已经换过、这个技能不在当前标注里的，分量不动。"""
     from .labeling.labeler import current_problem_label
 
+    # 只重算次技能还按 1.0 记的那些（版本号都是日期，按字符串比先后）；之后改版本号不会重复乘
     rows = s.scalars(select(m.SkillEvidence).where(
-        m.SkillEvidence.event_type.like("pass%"), m.SkillEvidence.algo_version != config.MASTERY_VERSION)
+        m.SkillEvidence.event_type.like("pass%"), m.SkillEvidence.algo_version < config.SECONDARY_SPLIT_VERSION)
         .order_by(m.SkillEvidence.id).limit(limit)).all()
     labels: dict[tuple[int, int], tuple[m.ProblemLabel | None, set[str]]] = {}
     for r in rows:

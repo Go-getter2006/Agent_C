@@ -19,7 +19,7 @@ interface Detail {
   assignmentMastery: { score: number | null; quality: number | null; coveredTopics: number; scoredTopics: number; totalTopics: number; coveredProblems: number; totalProblems: number };
   student: { userId: string; name: string; class: { key: string; name: string } };
   facts: { score: number | null; passed: number; total: number; avgToPass: number | null; weak: number; stuck: number; lastActive: string | null };
-  knowledge: { code: string; name: string; level: string; p: number; score: number; text: string; v1: number | null; v1Level: string | null }[];
+  knowledge: { code: string; name: string; level: string; p: number; score: number; text: string; why?: string; v1: number | null; v1Level: string | null }[];
   skills: (SkillRef & {
     p: number | null; level: string; v1: number | null; v1Level: string | null; yes: number; no: number; v2: number | null; v2Level: string; v2Interval: [number, number] | null;
     halfLife: number | null; discounted: number; graph: number | null; bigGap: boolean;
@@ -130,7 +130,7 @@ function OverviewTab({ d }: { d: Detail }) {
                     <td className="nowrap"><span className="cell-title">{k.name}</span></td>
                     <td><LevelPill level={k.level} /></td>
                     <td className="num"><ScoreBadge score={k.score} /></td>
-                    <td className="kp-text">{k.text}</td>
+                    <td className="kp-text">{k.why && <span className="kg-people-why">{k.why}。</span>}{k.text}</td>
                     <td>{(flags[k.code] ?? []).map((x) => <span key={x.code} className="pill pill-warn flag-pill">{x.text}</span>)}</td>
                   </tr>
                 ))}

@@ -1,7 +1,15 @@
 import { useLayoutEffect, useRef, type MouseEvent } from "react";
-import { ArrowLeft, ChevronRight, FileText } from "lucide-react";
+import { ArrowLeft, ChevronRight } from "lucide-react";
+import { deadline } from "../lib/time";
 import type { Homework, ProblemRow } from "../types";
 import { homeworkSummary, ProblemList } from "./Lists";
+
+/** 完成比例的颜色，和掌握分一样：四分之三以上绿、一半以上蓝、不到一半红，还没做灰。 */
+function tone(hw: Homework): string {
+  if (!hw.total || !hw.passed) return "none";
+  const r = hw.passed / hw.total;
+  return r >= 0.75 ? "mastered" : r >= 0.5 ? "basic" : "weak";
+}
 
 interface Props {
   unread?: { problems: Record<string, number>; homeworks: string[] };
@@ -47,10 +55,17 @@ export default function HomeworkNavigator(p: Props) {
             {p.homeworks.map(hw => (
               <button type="button" key={hw.key} className="homework-entry" aria-label={hw.title + (p.unread?.homeworks.includes(hw.key) ? "，有未读提醒" : "")}
                 aria-describedby={`summary-${hw.key}`} onClick={e => { motion(e); lastEntry.current = e.currentTarget; p.onEnter(hw.key); }}>
-                <FileText size={18} aria-hidden="true" />
-                <span className="homework-entry-main"><strong>{hw.title}{p.unread?.homeworks.includes(hw.key) && <i className="failure-dot" aria-hidden="true" />}</strong>
-                  <span id={`summary-${hw.key}`} className="note">{homeworkSummary(hw)}</span>
-                  <span className="bar bar-pass" aria-hidden="true"><span style={{ width: `${hw.total ? hw.passed / hw.total * 100 : 0}%` }} /></span>
+                <span className={`homework-entry-main hw-${tone(hw)}`}>
+                  <span className="homework-entry-top">
+                    <strong title={hw.title}>{hw.title}</strong>
+                    {p.unread?.homeworks.includes(hw.key) && <i className="failure-dot" aria-hidden="true" />}
+                    <b className="num homework-count">{hw.passed}/{hw.total}</b>
+                  </span>
+                  <span className="homework-entry-bottom">
+                    <span className="homework-bar" aria-hidden="true"><span style={{ width: `${hw.total ? hw.passed / hw.total * 100 : 0}%` }} /></span>
+                    <span className="note">{deadline(hw.endTime, hw.ended)}</span>
+                  </span>
+                  <span id={`summary-${hw.key}`} className="sr-only">{homeworkSummary(hw)}</span>
                 </span><ChevronRight size={18} aria-hidden="true" />
               </button>
             ))}

@@ -21,13 +21,14 @@ from . import models as m
 
 VERSION = "decision-1"
 RULES = {"review_pick": "evidence-priority-1", "quiz_plan": "quiz-plan-1", "notice": "notice-1"}
+# 学生自己在复习安排里点了“去复习”：不是系统选的，rule 记成 student-pick
 
 
 def record(s: Session, user_id: str, course: str, kind: str, candidates: list[dict], chosen: str,
            probability: float = 1.0, context: dict | None = None, ref: dict | None = None,
-           ts: dt.datetime | None = None) -> m.DecisionLog:
+           ts: dt.datetime | None = None, rule: str | None = None) -> m.DecisionLog:
     row = m.DecisionLog(
-        user_id=user_id, course=course or "C", kind=kind, ts=ts or db.now(), rule=RULES.get(kind, ""),
+        user_id=user_id, course=course or "C", kind=kind, ts=ts or db.now(), rule=rule or RULES.get(kind, ""),
         candidates=candidates, chosen=str(chosen)[:64], probability=round(float(probability), 4),
         context={**(context or {}), "versions": {"decisions": VERSION, "mastery": config.MASTERY_VERSION,
                                                  "prompt": config.PROMPT_VERSION}},
