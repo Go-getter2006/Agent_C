@@ -118,11 +118,11 @@ SYNC = {
 # ---------------------------------------------------------------- 版本号
 TAXONOMY_VERSION = "0.1"      # 知识点表、技能表
 ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
-LABELER_VERSION = "2026-11-16a"
+LABELER_VERSION = "2026-11-20a"   # 次技能只列题目专门要求的
 PROMPT_VERSION = "2026-11-18d"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
 WORKFLOW_VERSION = "2026-11-18a"
-MASTERY_VERSION = "2026-11-19b"
+MASTERY_VERSION = "2026-11-20"   # 2026-11-20：次技能分“有测试点专门考”和“顺带用到”，见 MASTERY 里的说明
 GRAPH_VERSION = "graph-2026-11-19b"
 
 # ---------------------------------------------------------------- 学情（附件一第 8 节）
@@ -151,9 +151,14 @@ MASTERY = {
     "level_mastered_from": 0.8,
     "mastered_min_evidence": 3.0,
     "min_evidence": 1.0,
-    # 一道题的证据记到它的主技能和次技能上。次技能按这个比例折算；1.0 表示和主技能一样算。
-    # 文档没有规定，这是暂定值，见 docs/问题清单.md。
-    "secondary_skill_factor": 1.0,
+    # 一道题通过时，证据记到它的主技能（全额）和次技能上（mastery.problem_skills）。
+    # 次技能分两种（2026-11-20 起）：有测试点专门考它的（标注时每个测试点标了主要考哪个技能），按 0.6 算、照常算独立成功；
+    # 只是顺带用到的（几乎每道题都要读一个整数、输出一个整数），按 0.2 算、不算独立成功——
+    # 以前一律按 1.0、还算独立成功，输出格式、读入这类技能每过一道题就涨，半衰期也跟着变长，并不说明真会了。
+    # 没通过的提交只记到标出来的那个错误技能上（record_failed_submission），不受这两项影响。
+    # 这两个数是暂定的保守值，学期末在统一模型里当参数估计（docs/研究数据与指标.md）。
+    "secondary_tested_factor": 0.6,
+    "secondary_incidental_factor": 0.2,
     # 没通过的提交（只在 v2 用）：记到这次错误所属的技能上（程序或大模型标注的主错误，置信度 ≥ 0.5）。
     # 同一道题上同一个技能，第一次没过记 0.5，第二次 0.25，再往后不记：交得多不该被无限扣分。
     "w_submit_failed": (0.5, 0.25),

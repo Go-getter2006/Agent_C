@@ -9,8 +9,9 @@ type R = { n: number; d: number } | null;
 export interface DiagnosisRow {
   code: string;
   name: string;
-  judge: R; judgeBug: R; judgeOk: R; locate: R; edit: R;
-  counts: { shown: number; locateEntered: number; editEntered: number; afterHelp: number; skipped: number; open: number; legacy: number };
+  judge: R; judgeBug: R; judgeOk: R; locate: R; edit: R; editClean: R;
+  why: Partial<Record<"judgeBug" | "judgeOk" | "locate" | "edit", string>>;
+  counts: { shown: number; locateEntered: number; editEntered: number; afterHelp: number; skipped: number; open: number; legacy: number; missed: number };
   latest: {
     title: string; time: string; legacy: boolean; hints: number; sampleRuns: number; order: string[];
     steps: { label: string; value: string; note: string }[];
@@ -18,7 +19,11 @@ export interface DiagnosisRow {
   } | null;
 }
 
-const frac = (r: R) => (r ? `${r.n}/${r.d}` : "尚无记录");
+const frac = (r: R) => (r ? `${r.n}/${r.d}` : "—");
+/** 有数写几比几；没有数时写为什么（还没进到这一步），不写“尚无记录”。 */
+function Cell({ r, why }: { r: R; why?: string }) {
+  return r ? <span className="num">{r.n}/{r.d}</span> : <span className="dims-why">{why ?? "—"}</span>;
+}
 const ORDER: Record<string, string> = { judge: "判断", locate: "选行", sample: "运行公开样例", hint: "看提示", submit: "提交修改", feedback: "反馈" };
 
 export function DiagnosisCard({ rows }: { rows: DiagnosisRow[] }) {
@@ -40,8 +45,8 @@ export function DiagnosisCard({ rows }: { rows: DiagnosisRow[] }) {
                   <tr key={r.code} className={r.code === picked ? "picked" : undefined}>
                     <th scope="row"><button type="button" aria-pressed={r.code === picked} onClick={() => setPicked(r.code)}>{r.name}</button></th>
                     <td className="num">{frac(r.judge)}</td>
-                    <td className="num">{frac(r.locate)}</td>
-                    <td className="num">{frac(r.edit)}</td>
+                    <td><Cell r={r.locate} why={r.why.locate} /></td>
+                    <td><Cell r={r.edit} why={r.why.edit} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -50,10 +55,11 @@ export function DiagnosisCard({ rows }: { rows: DiagnosisRow[] }) {
           {cur && (
             <div className="diag-split-note">
               <h3>{cur.name} · 判断拆分</h3>
-              <p>错题识别 {frac(cur.judgeBug)}　正确代码识别 {frac(cur.judgeOk)}</p>
+              <p>错题识别 <Cell r={cur.judgeBug} why={cur.why.judgeBug} />　正确代码识别 <Cell r={cur.judgeOk} why={cur.why.judgeOk} /></p>
+              {cur.edit && <p>修改里没运行公开样例就交的：<Cell r={cur.editClean} why="都先运行过样例" /></p>}
               <p className="note">
                 学生看过 {cur.counts.shown} 道 · 进入定位 {cur.counts.locateEntered} 次 · 进入修改 {cur.counts.editEntered} 次 ·
-                提示或运行后才改对 {cur.counts.afterHelp} 次 · 跳过 {cur.counts.skipped} · 没做完 {cur.counts.open}
+                没看出有错 {cur.counts.missed} 次 · 提示或重试后才改对 {cur.counts.afterHelp} 次 · 跳过 {cur.counts.skipped} · 没做完 {cur.counts.open}
                 {cur.counts.legacy ? ` · 旧版记录 ${cur.counts.legacy} 次（未测定位）` : ""}
               </p>
             </div>

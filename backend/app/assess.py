@@ -127,7 +127,7 @@ confidence 是你对这个判断有多大把握（0 到 1）；不要输出学�
 
 
 def dialogue(mat: Material, skill: str, root_error: str) -> tuple[list[str], list[tuple[str, str]]]:
-    """评估用的材料：已知情况、对话（最后 16 条，去掉学号姓名）。老师盲评看的也是这一份（app/rating.py）。"""
+    """评估用的材料：已知情况、对话（最后 16 条，去掉学号姓名）。"""
     lines = []
     for msg in mat.messages:
         if msg.kind != "text":
@@ -438,6 +438,28 @@ def pair_stats(pairs: list[tuple[int, int]]) -> dict:
     weighted = (po_w - pe_w) / (1 - pe_w) if pe_w < 1 else None
     return {"n": n, "exact": round(exact, 2), "kappa": round(kappa, 2) if kappa is not None else None,
             "within1": round(within1, 2), "weighted": round(weighted, 2) if weighted is not None else None}
+
+
+def overview(s: Session, rows: list[m.AgentAssessment]) -> dict:
+    """研究 · 理解评估：和规则的一致率；大模型原始等级按事实下调了多少、因为什么；各档、各种材料各有多少。"""
+    llm_rows = [r for r in rows if r.source == "llm"]
+    reflect = set()
+    round_ids = [r.round_id for r in rows if r.round_id is not None]
+    if round_ids:
+        reflect = set(s.scalars(select(m.ChatRound.id).where(m.ChatRound.id.in_(round_ids),
+                                                            m.ChatRound.end_reason == m.REFLECT_END)).all())
+    reasons: dict[str, int] = {}
+    for r in llm_rows:
+        if r.adjusted:
+            reasons[r.adjusted] = reasons.get(r.adjusted, 0) + 1
+    levels = {str(k): sum(1 for r in rows if r.level == k) for k in (0, 1, 2, 3)}
+    basis = {"chat": sum(1 for r in rows if r.basis == "chat" and r.round_id not in reflect),
+             "reflect": sum(1 for r in rows if r.round_id in reflect),
+             "code": sum(1 for r in rows if r.basis == "code")}
+    return {"agreement": agreement(rows), "total": len(rows), "llm": len(llm_rows),
+            "rule": sum(1 for r in rows if r.source == "rule"), "unsure": sum(1 for r in rows if r.level is None),
+            "adjusted": {"n": sum(reasons.values()), "d": len(llm_rows), "reasons": reasons},
+            "levels": levels, "basis": basis}
 
 
 def agreement(rows: list[m.AgentAssessment]) -> dict:

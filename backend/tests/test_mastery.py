@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import datetime as dt
 
+from sqlalchemy import select
+
 from app import config, db, mastery
 from app import models as m
 from app.taxonomy import LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_WEAK
@@ -85,7 +87,9 @@ def test_levels_and_adjustments(database):
             mastery.record_pass(s, UID, lab, f"p:{i}", now, 0, "NA")
         st = mastery.skill_states(s, UID, decay=False, model="v1")
         assert st["C04.01.01"].level == LEVEL_MASTERED
-        assert st["C04.02.01"].s == 8 * config.MASTERY["secondary_skill_factor"]  # 次技能按配置的比例折算
+        # 次技能只是顺带用到（没有测试点专门考它）：按小分量折算，也不算独立成功，到不了“已掌握”
+        assert abs(st["C04.02.01"].s - 8 * config.MASTERY["secondary_incidental_factor"]) < 1e-9
+        assert not st["C04.02.01"].last_independent_success
         mastery.record_pass(s, UID, lab, "p:h3", now + dt.timedelta(seconds=1), 3, "H3")
         assert mastery.skill_states(s, UID, decay=False, model="v1")["C04.01.01"].level == LEVEL_BASIC, "最近一次不是独立成功"
 
@@ -178,3 +182,36 @@ def test_v2_graph_prior_and_ds_readiness(database):
         assert weak["D02.02.01"].p < 0.45 < 0.55 < strong["D02.02.01"].p
         assert weak["D02.02.01"].level == strong["D02.02.01"].level == "还没练到"   # 推出来的不定档
         assert "D02.02.01" not in mastery.skill_states(s, "weak", model="v2")      # 默认不带推出来的
+
+
+def test_secondary_skills_tested_or_incidental(database):
+    """次技能分两种：有测试点专门考它的（0.6，照常算独立成功）；只是顺带用到的（0.2，不算独立成功）。
+    以前的版本记下的证据，后台按现在的规则重算；主技能不动；只重算一次。"""
+    now = db.now()
+    with db.session_scope() as s:
+        lab = m.ProblemLabel(server_id=1, problem_id=77, version=1, is_current=True, primary_skill="C06.03.02",
+                             secondary_skills=["C01.02.03", "C01.02.01"])
+        s.add(lab)
+        s.flush()
+        s.add(m.TestcaseLabel(problem_label_id=lab.id, server_id=1, testcase_id=5, skill_code="C01.02.03",
+                              situation="两位小数", is_ordinary=False))   # 有测试点专门考“控制小数位数”
+        s.flush()
+        assert mastery.tested_secondary(s, lab) == {"C01.02.03"}
+        mastery.record_pass(s, UID, lab, "pass:1:9001", now, 0, "NA")
+        rows = {r.skill_code: r for r in s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.source_key == "pass:1:9001"))}
+        assert (rows["C06.03.02"].weight, rows["C06.03.02"].independent) == (1.0, True)
+        assert (rows["C01.02.03"].weight, rows["C01.02.03"].independent) == (0.6, True)
+        assert (rows["C01.02.01"].weight, rows["C01.02.01"].independent) == (0.2, False)
+
+        # 以前的版本：次技能一律 1.0、算独立成功。后台重算
+        s.add(m.Submission(server_id=1, submission_id=9002, user_id=UID, problem_id=77, judgement="AC", submit_time=now))
+        for code in ("C06.03.02", "C01.02.03", "C01.02.01"):
+            s.add(m.SkillEvidence(user_id=UID, skill_code=code, event_type="pass_first_try", success=True, weight=1.0,
+                                  independent=True, ts=now, source_key="pass:1:9002", algo_version="2026-11-19b"))
+        s.flush()
+        assert mastery.reweigh_passes(s) == 3
+        old = {r.skill_code: r for r in s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.source_key == "pass:1:9002"))}
+        assert (old["C06.03.02"].weight, old["C06.03.02"].independent) == (1.0, True)
+        assert (old["C01.02.03"].weight, old["C01.02.03"].independent) == (0.6, True)
+        assert (old["C01.02.01"].weight, old["C01.02.01"].independent) == (0.2, False)
+        assert mastery.reweigh_passes(s) == 0                                   # 只重算一次

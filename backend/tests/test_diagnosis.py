@@ -120,3 +120,38 @@ def test_teacher_pages_show_dimensions_and_student_sees_mastery(demo):
         key = (cls.get("classes") or cls)[0]["key"]
         node = c.get(f"/api/teacher/classes/{key}/knowledge-map/C06.03").json()
         assert set(node["diagnosis"]) >= {"judge", "locate", "edit", "shown"} and isinstance(node["studentDims"], dict)
+
+
+def test_sample_run_before_the_first_draft_still_counts_as_a_fix(database):
+    """dims-2：先运行公开样例再交的第一稿也算修改（运行样例是自己测，不是帮助）；没运行就交的另列；
+    看了提示才交的第一稿不算。没有数的格子说清楚为什么。"""
+    with db.session_scope() as s:
+        bug = item(s, True)
+        ev = lambda *kinds: [{"kind": k} for k in kinds]   # noqa: E731
+        attempt(s, bug, judged_has_bug=True, judge_correct=True, first_lines=[3], locate_hit=True, tries=1,
+                first_fix_pass=True, first_fix_clean=False, sample_runs=1, outcome="right",
+                events=ev("viewed", "judge", "locate", "sample", "submit", "feedback"))
+        attempt(s, bug, judged_has_bug=True, judge_correct=True, first_lines=[3], locate_hit=True, tries=1,
+                first_fix_pass=True, first_fix_clean=True, outcome="right",
+                events=ev("viewed", "judge", "locate", "submit", "feedback"))
+        attempt(s, bug, judged_has_bug=True, judge_correct=True, first_lines=[3], locate_hit=True, tries=2,
+                first_fix_pass=False, first_fix_clean=False, hints=1, outcome="right_second",
+                events=ev("viewed", "judge", "locate", "hint", "submit", "submit", "feedback"))
+        d = diagnosis.by_student(s, [UID], "C")[UID]["C06.03"]
+        assert (d.edit.n, d.edit.d) == (2, 2) and (d.edit_clean.n, d.edit_clean.d) == (1, 1) and d.after_help == 1
+        why = diagnosis.why_empty(d)
+        assert why == {"judgeOk": "还没做过本来正确的代码"}
+
+
+def test_empty_cells_say_why(database):
+    with db.session_scope() as s:
+        ok, bug = item(s, False), item(s, True)
+        attempt(s, ok, judged_has_bug=False, judge_correct=True, events=[{"kind": "viewed"}])
+        d = diagnosis.by_student(s, [UID], "C")[UID]["C06.03"]
+        assert diagnosis.why_empty(d)["locate"] == "还没做过有错的代码"
+        attempt(s, bug, judged_has_bug=False, judge_correct=False, events=[{"kind": "viewed"}])
+        d = diagnosis.by_student(s, [UID], "C")[UID]["C06.03"]
+        why = diagnosis.why_empty(d)
+        assert why["locate"] == why["edit"] == "没看出有错，没进入定位" and d.missed == 1
+        row = diagnosis.teacher_rows(s, {"C06.03": d})[0]
+        assert row["why"]["locate"] and row["editClean"] is None

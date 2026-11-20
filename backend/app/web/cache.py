@@ -26,7 +26,7 @@ _store: OrderedDict[tuple, tuple[float, tuple, Any]] = OrderedDict()
 _VERSION_COLUMNS = (
     m.SkillEvidence.id, m.Submission.submission_id, m.Submission.fetched_at, m.Judge.judge_id,
     m.StuckPoint.id, m.QuizAttempt.id, m.QuizAttempt.finished_at, m.ChatMessage.id, m.ChatRound.last_message_at,
-    m.AgentAssessment.id, m.HumanRating.created_at, m.GraphPosterior.updated_at, m.ModelWeights.updated_at,
+    m.AgentAssessment.id, m.GraphPosterior.updated_at, m.ModelWeights.updated_at,
     m.PredictionLog.id,
     m.CrossLink.reviewed_at, m.CrossLink.checked_at, m.Enrollment.id, m.ProblemLabel.id, m.ReviewItem.id,
 )

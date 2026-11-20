@@ -231,8 +231,11 @@ def test_pass_closes_round_and_queues_review(demo):
         rnd = s.scalars(select(m.ChatRound).where(m.ChatRound.problem_id == 406, m.ChatRound.user_id == UID)).one()
         assert (rnd.status, rnd.end_reason, rnd.quiz_triggered) == ("closed", "通过", False)
         ev = s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.source_key == f"pass:{sid}:{new_id}")).all()
-        assert {e.event_type for e in ev} == {"pass_after_h2"} and {e.weight for e in ev} == {0.2}
+        assert {e.event_type for e in ev} == {"pass_after_h2"}
         assert {e.skill_code for e in ev} == {"C06.03.02", "C06.02.01", "C06.03.03", "C05.04.03"}
+        weights = {e.skill_code: round(e.weight, 4) for e in ev}
+        assert weights.pop("C06.03.02") == 0.2                                   # 主技能全额
+        assert set(weights.values()) <= {round(0.2 * 0.6, 4), round(0.2 * 0.2, 4)}   # 次技能：专门考的 / 顺带用到的
         msgs = workflow.thread_messages(s, UID, (sid, 406))
         assert all(msg.kind != "quiz" for msg in msgs)
         ri = s.scalar(select(m.ReviewItem).where(m.ReviewItem.user_id == UID, m.ReviewItem.skill_code == "C06.03.02"))
