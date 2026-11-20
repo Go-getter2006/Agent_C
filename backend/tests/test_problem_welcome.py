@@ -72,3 +72,27 @@ def test_pending_to_failed_and_old_backfill(ctx, clock, backfill):
     with db.session_scope() as s:
         notices = s.scalars(select(m.ChatMessage).where(m.ChatMessage.failure_submission_id == row.submission_id)).all()
         assert len(notices) == (0 if backfill else 1)
+
+
+def test_reading_the_newest_notice_clears_older_ones(ctx, clock, monkeypatch):
+    """看到了一道题最新的提醒，更早的、没往上翻到的提醒也算看过：作业和题目上的红点不再一直挂着。"""
+    monkeypatch.setattr("app.config.AUTH_MODE", "dev")
+    sid = ctx.server_id
+    sync_meta.sync_metadata(ctx)
+    with db.session_scope() as s:
+        for no in (990101, 990102):
+            row = endpoints.SubmissionRow(no, UID, "", 406, 501, 31, clock.now(), "C", "答案错误", 0)
+            sync_submissions._store_submission(s, ctx, row, False)
+            clock.advance(60)
+        older, newer = (s.scalar(select(m.ChatMessage.id).where(m.ChatMessage.failure_submission_id == no))
+                        for no in (990101, 990102))
+    key = f"p{sid}-406"
+    with TestClient(create_app()) as client:
+        client.post("/api/auth/login", json={"loginName": UID, "password": "test-pass"})
+        assert client.get("/api/status").json()["unread"]["problems"][key] == newer
+        client.post(f"/api/threads/p{sid}-407/read", json={"ids": [newer]})   # 别的题的对话里报的不算
+        assert client.get("/api/status").json()["unread"]["problems"][key] == newer
+        client.post(f"/api/threads/{key}/read", json={"ids": [newer]})
+        assert key not in client.get("/api/status").json()["unread"]["problems"]
+    with db.session_scope() as s:
+        assert s.get(m.ChatMessage, older).notice_read_at is not None

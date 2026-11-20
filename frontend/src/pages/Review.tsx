@@ -3,6 +3,7 @@
 // - 右边是一段对话：智能体先说为什么复习这里，接着是这道小题（在对话里独立作答），做完给反馈，
 //   之后可以在下面就这道题提问。反馈之前输入框不能用（不提前给对错、错误行和改法）。
 // - 中途离开，回来还是同一道、同一步；做完了点“下一题”接着做；题还在准备：说一声，好了自己出现（不用点）。
+// - 复习安排里每一项都能点“去复习”：新开一段对话，智能体先说“正在出题”，题好了就在对话里作答（不等到期）。
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowUp, CalendarClock, CircleCheck, List } from "lucide-react";
@@ -17,25 +18,74 @@ import { dayLabel, futureDay } from "../lib/time";
 import { useStatus } from "../session";
 import type { QuizView, ReviewAttemptRow, ReviewItemView, ReviewPage, ReviewTurn } from "../types";
 
-function Plan({ items }: { items: ReviewItemView[] }) {
+function Plan({ items, onGo }: { items: ReviewItemView[]; onGo: (id: number) => void }) {
   return (
     <ul className="review-list">
       {items.map((item) => (
         <li key={item.id}>
           <span className="review-date">{item.dueNow ? "今天" : futureDay(item.due)}</span>
           <div className="review-row-main"><strong>{item.title}</strong><span className="note">{item.why}</span></div>
-          <span className="note">{item.memory.text}</span>
+          <button type="button" className="btn btn-sm review-go" onClick={() => onGo(item.id)}>
+            {item.pending ? "继续" : "去复习"}
+          </button>
         </li>
       ))}
     </ul>
   );
 }
 
-/** 左边的列表。 */
-function ReviewList({ d, currentTitle, waiting, history, selected, onOpen }: {
-  d: ReviewPage | null; currentTitle: string | null; waiting: boolean; history: ReviewAttemptRow[];
-  selected: string; onOpen: (key: string) => void;
+interface Requested { itemId: number; attemptId: number; title: string; done: boolean }
+
+/** 点了“去复习”：新开一段对话，智能体先说正在出题，题好了就在这里作答。 */
+function RequestChat({ itemId, title, layout, onReady, onAsked, onDone }: {
+  itemId: number; title: string; layout: Layout; onReady: (quiz: QuizView) => void; onAsked: () => void; onDone: () => void;
 }) {
+  const [quiz, setQuiz] = useState<QuizView | null>(null);
+  const [lead, setLead] = useState<string | undefined>();
+  const [error, setError] = useState("");
+  const [round, setRound] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    setQuiz(null);
+    setError("");
+    api.requestReview(itemId)
+      .then((r) => { if (!alive) return; setQuiz(r.quiz); setLead(r.lead); onReady(r.quiz); })
+      .catch((e: Error) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [itemId, round]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (quiz) {
+    return <ReviewChat quiz={quiz} lead={lead} layout={layout} onChange={(q) => { setQuiz(q); if (q.state === "done") onReady(q); }}
+      onNext={onDone} nextLabel="看复习安排" onAsked={onAsked} />;
+  }
+  return (
+    <div className="chat-scroll">
+      <div className="chat-list" aria-live="polite">
+        <div className="msg msg-student"><div className="msg-body"><div className="bubble"><p>复习「{title}」</p></div></div></div>
+        <div className="msg msg-agent">
+          <AgentMark />
+          <div className="msg-body">
+            <span className="msg-meta"><strong>智能体</strong></span>
+            {error ? (
+              <>
+                <p>{error}</p>
+                <div className="attempt-confirm"><button type="button" className="btn btn-sm" onClick={() => setRound((n) => n + 1)}>再试一次</button></div>
+              </>
+            ) : (
+              <p className="review-making">正在出题<span className="typing" role="status" aria-label="正在出题"><i /><i /><i /></span></p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 左边的列表。 */
+function ReviewList({ d, currentTitle, waiting, history, requested, selected, onOpen }: {
+  d: ReviewPage | null; currentTitle: string | null; waiting: boolean; history: ReviewAttemptRow[];
+  requested: Requested | null; selected: string; onOpen: (key: string) => void;
+}) {
+  const requestKey = requested ? `i${requested.itemId}` : "";
   return (
     <div className="topic-pane">
       <header className="topic-head">
@@ -48,6 +98,11 @@ function ReviewList({ d, currentTitle, waiting, history, selected, onOpen }: {
             <strong>{currentTitle}</strong><small>今天 · 待完成</small>
           </button>
         )}
+        {requested && !requested.done && (   // 点了“去复习”新开的这一段，做完以后就在下面的记录里
+          <button type="button" className="topic-item" aria-current={selected === requestKey ? "true" : undefined} onClick={() => onOpen(requestKey)}>
+            <strong>{requested.title}</strong><small>今天 · 待完成</small>
+          </button>
+        )}
         {!currentTitle && waiting && (
           <span className="topic-item topic-wait" role="status"><strong>题目正在准备</strong><small>好了会自己出现</small></span>
         )}
@@ -56,7 +111,8 @@ function ReviewList({ d, currentTitle, waiting, history, selected, onOpen }: {
           <small>{d ? `到期 ${d.due.length} 项 · 接下来 ${d.upcoming.length} 项` : "　"}</small>
         </button>
         {history.map((a) => (
-          <button key={a.attemptId} type="button" className="topic-item" aria-current={selected === `a${a.attemptId}` ? "true" : undefined}
+          <button key={a.attemptId} type="button" className="topic-item"
+            aria-current={selected === `a${a.attemptId}` || (selected === requestKey && requested?.attemptId === a.attemptId) ? "true" : undefined}
             onClick={() => onOpen(`a${a.attemptId}`)}>
             <strong>{a.title}</strong>
             <small>{dayLabel(a.time)} · {a.right ? "做对了" : "没做对"}{a.asked ? ` · 问了 ${a.asked} 次` : ""}</small>
@@ -194,7 +250,7 @@ function HistoryChat({ id, layout, onAsked }: { id: number; layout: Layout; onAs
 }
 
 /** 复习安排：今天的情况、接下来、已经巩固。 */
-function PlanView({ d, waiting }: { d: ReviewPage; waiting: boolean }) {
+function PlanView({ d, waiting, onGo }: { d: ReviewPage; waiting: boolean; onGo: (id: number) => void }) {
   return (
     <div className="chat-scroll">
       <div className="review-plan stack">
@@ -208,9 +264,9 @@ function PlanView({ d, waiting }: { d: ReviewPage; waiting: boolean }) {
         {!waiting && d.due.length === 0 && (
           <div className="card"><Empty icon={CircleCheck} title="今天没有要做的题">需要巩固或重新练习的知识点，会在间隔一段时间后出现在这里。</Empty></div>
         )}
-        {d.due.length > 0 && <Card title="待复习"><Plan items={d.due} /></Card>}
+        {d.due.length > 0 && <Card title="待复习"><Plan items={d.due} onGo={onGo} /></Card>}
         <Card title="接下来">
-          {d.upcoming.length ? <Plan items={d.upcoming} /> : <p className="note">暂时没有别的安排。</p>}
+          {d.upcoming.length ? <Plan items={d.upcoming} onGo={onGo} /> : <p className="note">暂时没有别的安排。</p>}
         </Card>
         {d.graduated.length > 0 && (
           <Card title="已经巩固">
@@ -236,6 +292,7 @@ export default function Review() {
   const [dismissed, setDismissed] = useState<number | undefined>();
   const [drawer, setDrawer] = useState(false);
   const [nexting, setNexting] = useState(false);   // 点了“下一题”，新的还没取到
+  const [requested, setRequested] = useState<Requested | null>(null);   // 点了“去复习”新开的那一段
   const d = data.data;
   useEffect(() => setNexting(false), [d]);
   const current = d?.current && d.current.quiz.attemptId !== dismissed ? d.current : null;
@@ -245,7 +302,8 @@ export default function Review() {
   useEffect(() => setPoll(waiting ? 30000 : 0), [waiting]);   // 只在题还在准备时定时看一下
 
   const currentTitle = quiz ? (d?.due.find((x) => x.id === current?.itemId)?.title ?? "今天的复习") : null;
-  const rows = (history.data?.attempts ?? []).filter((a) => a.attemptId !== quiz?.attemptId);
+  const rows = (history.data?.attempts ?? []).filter((a) => a.attemptId !== quiz?.attemptId
+    && !(requested && !requested.done && a.attemptId === requested.attemptId));
   const key = param ?? (d ? (quiz ? "now" : "plan") : "");
 
   // /review：有备好的题就进这道，没有就看复习安排
@@ -270,9 +328,15 @@ export default function Review() {
   };
 
   const historyId = key.startsWith("a") ? Number(key.slice(1)) : null;
+  const requestId = key.startsWith("i") ? Number(key.slice(1)) : null;   // 点了“去复习”的那一项
+  const requestTitle = requestId !== null
+    ? [...(d?.due ?? []), ...(d?.upcoming ?? [])].find((x) => x.id === requestId)?.title ?? "复习题" : null;
   const historyTitle = rows.find((a) => a.attemptId === historyId)?.title ?? (quiz?.attemptId === historyId ? currentTitle : null);
-  const title = key === "now" ? currentTitle ?? "今天的复习" : key === "plan" ? "复习安排" : historyTitle ?? "复习题";
-  const pane = <ReviewList d={d ?? null} currentTitle={currentTitle} waiting={waiting} history={rows} selected={key} onOpen={open} />;
+  const title = key === "now" ? currentTitle ?? "今天的复习" : key === "plan" ? "复习安排"
+    : requestTitle ?? historyTitle ?? "复习题";
+  const go = (id: number) => open(`i${id}`);
+  const pane = <ReviewList d={d ?? null} currentTitle={currentTitle} waiting={waiting} history={rows}
+    requested={requested && requested.attemptId !== quiz?.attemptId ? requested : null} selected={key} onOpen={open} />;
 
   let body;
   if (data.error && !d) body = <div className="chat-scroll"><div className="chat-list"><Problem message={data.error} onRetry={data.reload} /></div></div>;
@@ -280,10 +344,17 @@ export default function Review() {
   else if (key === "now" && quiz) {
     body = <ReviewChat quiz={quiz} lead={quiz.state !== "done" ? current?.lead : undefined} layout={layout} onChange={update}
       onNext={next} nextLabel={(d.due.length ?? 0) > 1 ? "下一题" : "看复习安排"} onAsked={history.reload} />;
+  } else if (requestId !== null) {
+    body = <RequestChat key={requestId} itemId={requestId} title={requestTitle ?? "复习题"} layout={layout}
+      onReady={(q) => {
+        setRequested({ itemId: requestId, attemptId: q.attemptId, title: requestTitle ?? "复习题", done: q.state === "done" });
+        history.reload(); reloadStatus();
+      }}
+      onAsked={history.reload} onDone={() => { data.reload(); open("plan"); }} />;
   } else if (historyId !== null && quiz?.attemptId === historyId) {
     body = <ReviewChat quiz={quiz} layout={layout} onChange={update} onAsked={history.reload} />;
   } else if (historyId !== null) body = <HistoryChat key={historyId} id={historyId} layout={layout} onAsked={history.reload} />;
-  else body = <PlanView d={d} waiting={waiting} />;
+  else body = <PlanView d={d} waiting={waiting} onGo={go} />;
 
   // 点了“下一题”、今天的做完了：回到复习安排
   useEffect(() => {

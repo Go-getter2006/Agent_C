@@ -215,3 +215,31 @@ def test_secondary_skills_tested_or_incidental(database):
         assert (old["C01.02.03"].weight, old["C01.02.03"].independent) == (0.6, True)
         assert (old["C01.02.01"].weight, old["C01.02.01"].independent) == (0.2, False)
         assert mastery.reweigh_passes(s) == 0                                   # 只重算一次
+        assert old["C01.02.03"].algo_version == config.MASTERY_VERSION
+        # 以后再改版本号：已经按新规则记的、重算过的都不会再乘一次
+        s.add(m.SkillEvidence(user_id=UID, skill_code="C01.02.01", event_type="pass_first_try", success=True, weight=0.2,
+                              independent=False, ts=now, source_key="pass:1:9003", algo_version="2026-11-20"))
+        s.flush()
+        assert mastery.reweigh_passes(s) == 0
+
+
+def test_incidental_passes_do_not_block_mastered(database):
+    """顺带用到的次技能的通过不算正面也不算反面：做题多的同学，最近一条证据常常是这种，
+    不能因此一直到不了“已掌握”。分数高却不是已掌握时，给出原因。"""
+    now = db.now()
+    with db.session_scope() as s:
+        for i in range(6):   # 主技能独立做对 6 次
+            mastery.add_evidence(s, UID, "C03.01.01", "pass_first_try", True, 1.0, f"pass:1:{100 + i}",
+                                 now - dt.timedelta(days=6 - i), independent=True)
+        # 之后又在别的题里顺带用到（不算独立成功）
+        mastery.add_evidence(s, UID, "C03.01.02", "pass_first_try", True, 0.2, "pass:1:200",
+                             now - dt.timedelta(hours=1), independent=False)
+        kp = mastery.kp_states(s, UID, model="v2")["C03.01"]
+        assert kp.level == LEVEL_MASTERED and kp.last_kind == "independent" and kp.why == ""
+        # 最近一次直接证据是没过：基本掌握，并说明原因
+        mastery.add_evidence(s, UID, "C03.01.01", "submit_failed", False, 0.5, "fail:1:300:9000",
+                             now - dt.timedelta(minutes=5))
+        kp = mastery.kp_states(s, UID, model="v2")["C03.01"]
+        assert kp.level != LEVEL_MASTERED and kp.last_kind == "failed"
+        if kp.level == mastery.LEVEL_BASIC and kp.score is not None and round(kp.score * 100) >= 75:
+            assert kp.why == "最近一次在这里没过"

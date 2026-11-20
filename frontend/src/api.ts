@@ -88,6 +88,7 @@ export const api = {
   progress: () => get<ProgressData>("/api/progress"),
   review: () => get<ReviewPage>("/api/review"),
   startReview: (id: number) => post<ReviewCurrent>(`/api/review/${id}/start`),
+  requestReview: (id: number) => post<ReviewCurrent>(`/api/review/${id}/request`),
   reviewAttempts: () => get<{ attempts: ReviewAttemptRow[] }>("/api/review/attempts"),
   reviewAttempt: (id: number) => get<{ attemptId: number; title: string; time: string; quiz: QuizView }>(`/api/review/attempts/${id}`),
   reviewTurns: (id: number) => get<{ turns: ReviewTurn[] }>(`/api/review/${id}/discussion`),

@@ -929,6 +929,20 @@ class DecisionLog(Base):
     ref: Mapped[dict] = mapped_column(JSON, default=dict)            # 结果在哪：复习项、作答、小题、消息、提交的编号
 
 
+class ProblemPlan(Base):
+    """一道题的解题步骤（作业引导：还没做的题问“怎么做”时给的流程图，app/chat/plan.py）。
+    按（服务器, 题目）存一份，所有学生共用；题面变了（content_hash）才重新生成。"""
+
+    __tablename__ = "problem_plans"
+    server_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    problem_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    steps: Mapped[list] = mapped_column(JSON, default=list)   # [{"title","how","kp"}]
+    source: Mapped[str] = mapped_column(String(16), default="template")   # llm / template
+    version: Mapped[str] = mapped_column(String(16), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[Dt] = _ts()
+
+
 class HumanRating(Base):
     """不再使用（盲评不做了，2026-11-20）；表留着，免得再写迁移。原来是：老师盲评“理解”：看和大模型同样的材料（不显示学生是谁、不显示大模型和规则的等级），按同一个 0~3 量规评。
     用来算老师和大模型（原始、约束后）、规则的一致率（app/rating.py）。level 为空：老师看不出来。"""

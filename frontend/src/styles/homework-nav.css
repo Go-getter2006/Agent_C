@@ -6,14 +6,29 @@
 .homework-index-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 24px 18px 16px; }
 .homework-index-head h2 { font-size: 18px; font-weight: 600; }
 .homework-index { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior-y: contain; padding: 0 10px; }
-.homework-entry { display: flex; align-items: flex-start; gap: 10px; width: 100%; border: 0; border-bottom: 1px solid var(--line); padding: 20px 8px; text-align: left; background: none; color: var(--ink); border-radius: 8px; touch-action: manipulation; transition: background-color 120ms; }
+.homework-entry { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; border-bottom: 1px solid var(--line); padding: 12px 8px 12px 12px; text-align: left; background: none; color: var(--ink); border-radius: 8px; touch-action: manipulation; transition: background-color 120ms; }
 .homework-entry:hover { background: var(--surface-3); }
 .homework-entry:active { background: var(--line); transition: none; }
-.homework-entry > svg { color: var(--ink-3); margin-top: 2px; flex-shrink: 0; }
-.homework-entry-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.homework-entry strong { font-size: 14px; line-height: 1.55; font-weight: 600; overflow-wrap: anywhere; }
+.homework-entry > svg { color: var(--ink-3); flex-shrink: 0; }
+.homework-entry-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+/* 一行：标题（太长就省略）、未读红点、几比几；第二行：进度条、截止 */
+.homework-entry-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.homework-entry-top strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.homework-entry-top .failure-dot { margin: 0; flex-shrink: 0; }
+.homework-count { flex-shrink: 0; font-size: 13px; font-weight: 600; }
+.homework-entry-bottom { display: flex; align-items: center; gap: 10px; }
+.homework-entry-bottom .note { flex-shrink: 0; white-space: nowrap; }
+.homework-bar { flex: 1; height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.homework-bar span { display: block; height: 100%; border-radius: inherit; background: var(--lv-none); }
+/* 完成比例的颜色和掌握分一样 */
+.hw-mastered .homework-bar span { background: var(--lv-mastered); }
+.hw-basic .homework-bar span { background: var(--lv-basic); }
+.hw-weak .homework-bar span { background: var(--lv-weak); }
+.hw-mastered .homework-count { color: var(--pass); }
+.hw-weak .homework-count { color: var(--fail); }
+.hw-none .homework-count { color: var(--ink-3); }
+.homework-entry strong { font-size: 14px; line-height: 1.5; font-weight: 600; }
 .homework-entry .note { font-size: 12px; line-height: 1.6; }
-.homework-entry .bar { height: 3px; margin-top: 3px; }
 .homework-detail-head { flex-shrink: 0; padding: 12px 16px 16px; border-bottom: 1px solid var(--line); }
 .homework-back { display: inline-flex; align-items: center; justify-content: flex-start; gap: 10px; min-width: 126px; min-height: 44px; margin: 0 0 14px -6px; padding: 8px 10px; background: none; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--ink); font-size: 14px; font-weight: 500; touch-action: manipulation; }
 .homework-back:hover { background: var(--surface-3); }

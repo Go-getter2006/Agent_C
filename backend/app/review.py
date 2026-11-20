@@ -370,15 +370,17 @@ def prepared_attempt(s: Session, user_id: str, item_id: int, at: dt.datetime | N
     return item, None
 
 
-def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None, course: str | None = None):
-    """后台准备独立作答。已准备的作答复用，页面只调用 prepared_attempt。"""
+def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None, course: str | None = None,
+          *, force: bool = False):
+    """后台准备独立作答。已准备的作答复用，页面只调用 prepared_attempt。
+    force：学生自己点了“去复习”，不等到期、不受每天两道的限制（request_now）。"""
     from . import quiz, quizgen
 
     at = at or db.now()
     item, attempt = prepared_attempt(s, user_id, item_id, at, course)
     if item is None or attempt is not None:
         return item, attempt
-    if item.id not in {d.id for d in due_items(s, user_id, at, course, candidates=True)}:
+    if not force and item.id not in {d.id for d in due_items(s, user_id, at, course, candidates=True)}:
         return item, None
     trace: dict = {}
     q = quizgen.generate(s, user_id, item.skill_code, "review",
@@ -394,6 +396,38 @@ def start(s: Session, user_id: str, item_id: int, at: dt.datetime | None = None,
                            "serverId": item.origin_server_id,
                            "phase": "delayed"}]
     item.attempt_id = attempt.id
+    return item, attempt
+
+
+class RequestError(ValueError):
+    """学生点“去复习”出不了题：message 直接给学生看。"""
+
+
+def request_now(s: Session, user_id: str, item_id: int, course: str, at: dt.datetime | None = None):
+    """学生在复习安排里点了“去复习”：马上给这一项出一道题（已经备好的直接用）。返回 (复习项, 作答)。
+    不等到期、不受每天两道的限制，但一天最多 self_daily_cap 道。决策记录里记成学生自己选的。"""
+    at = at or db.now()
+    item, attempt = prepared_attempt(s, user_id, item_id, at, course)
+    if item is None:
+        raise RequestError("没有这个复习项。")
+    if attempt is None:
+        done, _skills = _today_count(s, user_id, at, course)
+        if done >= cfg()["self_daily_cap"]:
+            raise RequestError(f"今天已经做了 {done} 道复习题，明天再接着做。")
+        item, attempt = start(s, user_id, item_id, at, course, force=True)
+        if attempt is None:
+            raise RequestError("这一项暂时出不了题，过一会儿再试。")
+    from . import decisions
+
+    # 同一道题没做完又点了“继续”：还是这一次的选择，不再记一条
+    if s.scalar(select(m.DecisionLog.id).where(
+            m.DecisionLog.user_id == user_id, m.DecisionLog.kind == "review_pick", m.DecisionLog.rule == "student-pick",
+            m.DecisionLog.chosen == f"review:{item.id}", m.DecisionLog.ts >= attempt.created_at).limit(1)) is None:
+        st = mastery.skill_states(s, user_id, at=at, model="v2").get(item.skill_code)
+        decisions.record(s, user_id, course, "review_pick", [{**candidate_view(item, st, at), "rank": 1}],
+                         f"review:{item.id}", 1.0, context={"by": "student", "dueNow": item.due_at <= at},
+                         ref={"reviewItem": item.id, "attempt": attempt.id, "quizItem": attempt.item_id},
+                         ts=at, rule="student-pick")
     return item, attempt
 
 

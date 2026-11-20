@@ -63,9 +63,13 @@ export interface ProblemDetail {
   knowledge: KnowledgeLevel[];
 }
 
+export interface FlowStep { title: string; how: string; kp: string }
+
 export type Block =
   | { t: "p"; text: string }
-  | { t: "code"; caption: string; start: number; lines: string[]; mark: number[] };
+  | { t: "code"; caption: string; start: number; lines: string[]; mark: number[] }
+  // 解题流程图（还没做的题问“怎么做”）：pick 时让他选卡在哪几步；之后 current 是正在讲的那一步
+  | { t: "flow"; steps: FlowStep[]; pick: boolean; current: number | null; done: number[] };
 
 export type HelpAction = "think" | "hint" | "tell";
 
