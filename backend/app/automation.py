@@ -18,7 +18,7 @@ import logging
 import threading
 import time
 
-from . import assess, db, graphmodel, pdftext, pipeline, review
+from . import assess, db, graphmodel, mastery, pdftext, pipeline, review
 from .labeling import problems
 from .chat import workflow
 
@@ -76,9 +76,10 @@ def idle_work() -> int:
         with db.session_scope() as s:
             labeled = problems.label_assigned(s, limit=50)
             filled = pipeline.backfill_passes(s, limit=200)
-        if labeled or filled:
+            reweighed = mastery.reweigh_passes(s, limit=500)   # 以前的版本记下的次技能证据按现在的规则重算
+        if labeled or filled or reweighed:
             _last["labels"] = -1e9
-        done += labeled + filled
+        done += labeled + filled + reweighed
     if _due("pdftext"):
         # 以前的程序处理的 PDF 题面重新抽；还没交给大模型整理的整理（每次两道）
         with db.session_scope() as s:

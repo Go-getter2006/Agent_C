@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import (accounts, assess, catalog, config, cross, crypto, db, diagnosis, graphmodel, kpdesc, logs, mastery, profile,
-               rating, review, stuckstats)
+               review, stuckstats)
 from .. import models as m
 from ..labeling.labeler import current_problem_label
 from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
@@ -1072,36 +1072,15 @@ def cross_page(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
             "dKps": [{"code": c, "name": KNOWLEDGE_POINTS.get(c, "")} for c in d_kps]}
 
 
-# ------------------------------------------------------------ 老师盲评“理解”（app/rating.py）
-class RatingBody(BaseModel):
-    assessmentId: int
-    level: int | None = None
-    shownAt: int | None = None
-
-
-def _rating_scope(s: Session, user: m.User, key: str) -> tuple[list[str], str]:
-    cls = _class(s, user, key)
-    return [st.user_id for st in class_students(s, cls)], _course_of_class(s, cls)
-
-
+# ------------------------------------------------------------ 研究 · 理解评估
 @router.get("/classes/{key}/rating")
-def rating_next(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    """研究 · 理解评估：盲评的下一条，和一致率（大模型和规则；老师和大模型原始、约束后、规则；老师之间）。"""
-    ids, course = _rating_scope(s, user, key)
+def understanding_check(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """研究 · 理解评估：智能体评“理解”和只看事实的规则对照；按事实下调了多少、为什么；各档、各种材料有多少。"""
+    cls = _class(s, user, key)
+    ids = [st.user_id for st in class_students(s, cls)]
     rows = list(s.scalars(select(m.AgentAssessment).where(
-        m.AgentAssessment.user_id.in_(ids or ["-"]), m.AgentAssessment.course == course)).all())
-    return {**rating.next_item(s, user, ids, course),
-            "summary": {"agreement": assess.agreement(rows), "human": rating.agreement(s, ids, course)}}
-
-
-@router.post("/classes/{key}/rating")
-def rating_save(key: str, body: RatingBody, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    ids, course = _rating_scope(s, user, key)
-    try:
-        rating.rate(s, user, ids, course, body.assessmentId, body.level, body.shownAt)
-    except rating.RatingError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return rating.next_item(s, user, ids, course)
+        m.AgentAssessment.user_id.in_(ids or ["-"]), m.AgentAssessment.course == _course_of_class(s, cls))).all())
+    return {"summary": assess.overview(s, rows)}
 
 
 class ReviewLinkBody(BaseModel):

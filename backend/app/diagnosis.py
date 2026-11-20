@@ -3,8 +3,9 @@
 单位是一名学生对某一版题目的一次作答（quiz_attempts 一行）。
 - 判断：首次判断正确数 / 提交了首次判断的题数。错题识别、正确代码识别分开算分子分母。
 - 定位：首次选中有效位置数 / 真实错题里判断有问题、提交了首次选行的次数（只算独立作答，protocol 2）。
-- 修改：第一稿未经提示、未经运行公开样例就通过数 / 真实错题里提交过这种第一稿的次数（只算 protocol 2）。
-  先运行了公开样例、看了提示再交的，不进分母，另记在“提示后或运行后才改对”里。
+- 修改（dims-2）：看提示之前交的第一稿通过数 / 真实错题里交过这种第一稿的次数（只算 protocol 2）。
+  运行公开样例是自己测一下，不算帮助，进分母；其中“没运行样例就交的”另列（editClean，就是 dims-1 的修改）。
+  看了提示才交第一稿的不进分母，记在“提示后或重试后才改对”里。
 定位和修改的分母受前面判断的影响：1/2 只说明实际进入这一步的两次，不能读成对所有题的能力估计。
 
 另列（教师端）：应答机会（出过几道）、进入定位、进入修改、提示后或重试后才改对、跳过、还没做完、
@@ -23,7 +24,7 @@ from . import models as m
 from .quiz import revealing_stem
 from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill
 
-VERSION = "dims-1"   # 定义改了就改版本号（研究导出里带上，docs/研究数据与指标.md）
+VERSION = "dims-2"   # 定义改了就改版本号（研究导出里带上，docs/研究数据与指标.md）。dims-2：修改的分母含运行过样例的第一稿
 
 
 @dataclass
@@ -46,11 +47,13 @@ class Dims:
     judge_bug: Ratio = field(default_factory=Ratio)    # 错题识别
     judge_ok: Ratio = field(default_factory=Ratio)     # 正确代码识别
     locate: Ratio = field(default_factory=Ratio)
-    edit: Ratio = field(default_factory=Ratio)
+    edit: Ratio = field(default_factory=Ratio)         # 看提示之前交的第一稿
+    edit_clean: Ratio = field(default_factory=Ratio)   # 其中没运行公开样例就交的
+    missed: int = 0          # 有错的代码判断成没问题（没进入定位）
     shown: int = 0           # 应答机会
     locate_entered: int = 0
     edit_entered: int = 0
-    after_help: int = 0      # 看了提示、运行了公开样例或重试以后才改对
+    after_help: int = 0      # 看了提示或重试以后才改对
     skipped: int = 0
     open: int = 0            # 还没做完
     legacy: int = 0          # 旧版作答（未测定位）
@@ -90,18 +93,65 @@ def count(pairs) -> dict[str, Dims]:
                 d.legacy += 1
         else:
             real_bug_path = item.has_bug and a.judged_has_bug is True
+            if item.has_bug and a.judged_has_bug is False:
+                d.missed += 1
             if real_bug_path:
                 d.locate_entered += 1
                 if a.first_lines:
                     if not revealing_stem(item) or any(e.get("kind") == "viewed" and e.get("state") == "judge" for e in a.events or []):
                         d.locate.add(bool(a.locate_hit))
                     d.edit_entered += 1
-                if a.tries >= 1 and a.first_fix_pass is not None and a.first_fix_clean:
-                    d.edit.add(bool(a.first_fix_pass))   # 分母只算没看提示、没运行公开样例就交的第一稿
-                if a.outcome in ("right", "right_bypass", "right_second") and not (a.first_fix_pass and a.first_fix_clean):
+                hinted, sampled = _before_first_submit(a)
+                if a.tries >= 1 and a.first_fix_pass is not None and not hinted:
+                    d.edit.add(bool(a.first_fix_pass))   # 看提示之前交的第一稿（运行过样例的也算）
+                    if not sampled:
+                        d.edit_clean.add(bool(a.first_fix_pass))
+                if a.outcome in ("right", "right_bypass", "right_second") and not (a.first_fix_pass and not hinted):
                     d.after_help += 1
         if a.judged_has_bug is not None and (d.latest is None or a.id > d.latest.id):
             d.latest, d.latest_item = a, item
+    return out
+
+
+def _before_first_submit(a: m.QuizAttempt) -> tuple[bool, bool]:
+    """第一次提交修改之前，看过提示没有、运行过公开样例没有（按 events 的先后）。"""
+    hinted = sampled = False
+    for e in a.events or []:
+        kind = e.get("kind")
+        if kind == "submit":
+            break
+        hinted = hinted or kind == "hint"
+        sampled = sampled or kind == "sample"
+    if not any(e.get("kind") == "submit" for e in a.events or []):   # 旧记录没有事件：按 first_fix_clean
+        return (not a.first_fix_clean and bool(a.hints)), (not a.first_fix_clean and bool(a.sample_runs))
+    return hinted, sampled
+
+
+def why_empty(x: Dims) -> dict[str, str]:
+    """哪一格没有数时，说清楚为什么（不是没记下来，而是还没进到这一步）。"""
+    out: dict[str, str] = {}
+    if not x.judge_bug.d:
+        out["judgeBug"] = "还没做过有错的代码"
+    if not x.judge_ok.d:
+        out["judgeOk"] = "还没做过本来正确的代码"
+    if not x.locate.d:
+        if not x.judge_bug.d:
+            out["locate"] = "还没做过有错的代码"
+        elif x.missed and not x.locate_entered:
+            out["locate"] = "没看出有错，没进入定位"
+        elif x.locate_entered:
+            out["locate"] = "还没选行"
+        else:
+            out["locate"] = "旧版小题没有选行这一步" if x.legacy else "还没判断"
+    if not x.edit.d:
+        if x.after_help:
+            out["edit"] = f"看提示或重试后才改对 {x.after_help} 次"
+        elif out.get("locate"):
+            out["edit"] = out["locate"]
+        elif x.open:
+            out["edit"] = "还没交修改"
+        else:
+            out["edit"] = "没进入修改"
     return out
 
 
@@ -183,9 +233,11 @@ def teacher_rows(s: Session, d: dict[str, Dims]) -> list[dict]:
         out.append({
             "code": x.kp, "name": KNOWLEDGE_POINTS.get(x.kp, ""),
             "judge": x.judge.view(), "judgeBug": x.judge_bug.view(), "judgeOk": x.judge_ok.view(),
-            "locate": x.locate.view(), "edit": x.edit.view(),
+            "locate": x.locate.view(), "edit": x.edit.view(), "editClean": x.edit_clean.view(),
+            "why": why_empty(x),
             "counts": {"shown": x.shown, "locateEntered": x.locate_entered, "editEntered": x.edit_entered,
-                       "afterHelp": x.after_help, "skipped": x.skipped, "open": x.open, "legacy": x.legacy},
+                       "afterHelp": x.after_help, "skipped": x.skipped, "open": x.open, "legacy": x.legacy,
+                       "missed": x.missed},
             "latest": evidence(s, x.latest, x.latest_item) if x.latest is not None else None,
         })
     return out
@@ -194,6 +246,7 @@ def teacher_rows(s: Session, d: dict[str, Dims]) -> list[dict]:
 def summary(d: Dims | None) -> dict:
     """知识图谱节点详情：全班三行。"""
     if d is None:
-        return {"judge": None, "locate": None, "edit": None, "shown": 0}
+        return {"judge": None, "locate": None, "edit": None, "shown": 0, "why": {}}
     return {"judge": d.judge.view(), "locate": d.locate.view(), "edit": d.edit.view(), "shown": d.shown,
-            "judgeBug": d.judge_bug.view(), "judgeOk": d.judge_ok.view()}
+            "judgeBug": d.judge_bug.view(), "judgeOk": d.judge_ok.view(), "editClean": d.edit_clean.view(),
+            "why": why_empty(d)}

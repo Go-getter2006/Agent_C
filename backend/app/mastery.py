@@ -428,12 +428,57 @@ def _kp_states(s: Session, user_id: str, model: str, with_predicted: bool) -> di
 
 
 # ------------------------------------------------------------ 各类事件怎么记
-def problem_skills(label: m.ProblemLabel | None) -> list[tuple[str, float]]:
-    """一道题的证据记到主技能（全额）和次技能（按比例折算）上。"""
+def tested_secondary(s: Session, label: m.ProblemLabel | None) -> set[str]:
+    """次技能里有测试点专门考它的（标注时每个测试点标了主要考哪个技能）。按 XDOJ 标签兜底的标注没有测试点，一个也没有。"""
+    if label is None or not label.secondary_skills or label.id is None:
+        return set()
+    cases = set(s.scalars(select(m.TestcaseLabel.skill_code).where(m.TestcaseLabel.problem_label_id == label.id)).all())
+    return {c for c in label.secondary_skills if c in cases}
+
+
+def problem_skills(label: m.ProblemLabel | None, tested: set[str] | frozenset = frozenset()) -> list[tuple[str, float, bool]]:
+    """一道题通过时证据记到哪些技能：(技能, 分量的比例, 能不能算独立成功)。
+    主技能全额；次技能里有测试点专门考的按 secondary_tested_factor，只是顺带用到的按 secondary_incidental_factor、
+    不算独立成功（不让半衰期变长，也不能凭它到“已掌握”）。"""
     if label is None:
         return []
-    factor = config.MASTERY["secondary_skill_factor"]
-    return [(label.primary_skill, 1.0)] + [(c, factor) for c in (label.secondary_skills or [])]
+    cfg = config.MASTERY
+    out = [(label.primary_skill, 1.0, True)]
+    for c in label.secondary_skills or []:
+        if c == label.primary_skill or any(c == x[0] for x in out):
+            continue
+        out.append((c, cfg["secondary_tested_factor"], True) if c in tested
+                   else (c, cfg["secondary_incidental_factor"], False))
+    return out
+
+
+def reweigh_passes(s: Session, limit: int = 500) -> int:
+    """以前的版本（次技能一律按 1.0、算独立成功）记下的“通过”证据，按现在的规则重算分量（后台空闲时做，全用程序）。
+    返回改了几条。主技能的只改版本号；标注已经换过、这个技能不在当前标注里的，分量不动。"""
+    from .labeling.labeler import current_problem_label
+
+    rows = s.scalars(select(m.SkillEvidence).where(
+        m.SkillEvidence.event_type.like("pass%"), m.SkillEvidence.algo_version != config.MASTERY_VERSION)
+        .order_by(m.SkillEvidence.id).limit(limit)).all()
+    labels: dict[tuple[int, int], tuple[m.ProblemLabel | None, set[str]]] = {}
+    for r in rows:
+        parts = (r.source_key or "").split(":")
+        sub = s.get(m.Submission, (int(parts[1]), int(parts[2]))) if len(parts) == 3 and parts[0] == "pass" \
+            and parts[1].isdigit() and parts[2].isdigit() else None
+        if sub is not None:
+            key = (sub.server_id, sub.problem_id)
+            if key not in labels:
+                lab = current_problem_label(s, *key)
+                labels[key] = (lab, tested_secondary(s, lab))
+            lab, tested = labels[key]
+            if lab is not None and r.skill_code != lab.primary_skill and r.skill_code in (lab.secondary_skills or []):
+                cfg = config.MASTERY
+                if r.skill_code in tested:
+                    r.weight = round(r.weight * cfg["secondary_tested_factor"], 4)
+                else:
+                    r.weight, r.independent = round(r.weight * cfg["secondary_incidental_factor"], 4), False
+        r.algo_version = config.MASTERY_VERSION
+    return len(rows)
 
 
 def record_pass(s: Session, user_id: str, label: m.ProblemLabel | None, source_key: str, ts: dt.datetime,
@@ -451,8 +496,9 @@ def record_pass(s: Session, user_id: str, label: m.ProblemLabel | None, source_k
         event, weight, independent = "pass_after_h2", cfg["w_pass_after_h2"], False
     else:
         event, weight, independent = "pass_after_h3", cfg["w_pass_after_h3"], False
-    for code, factor in problem_skills(label):
-        add_evidence(s, user_id, code, event, True, weight * factor, source_key, ts, independent, reliability)
+    for code, factor, counts_independent in problem_skills(label, tested_secondary(s, label)):
+        add_evidence(s, user_id, code, event, True, weight * factor, source_key, ts,
+                     independent and counts_independent, reliability)
     return event
 
 

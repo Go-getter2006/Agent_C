@@ -213,6 +213,8 @@ def on_independent_practice(s: Session, sub: m.Submission, label: m.ProblemLabel
             enqueue(s, sub.user_id, label.primary_skill, "spot_check", sub.server_id, sub.problem_id, at, sub.submission_id)
     if help_level not in ("NA", "") or earlier_attempts >= 2:
         return
+    # 只是顺带用到的次技能不算“隔了一段时间还记得”（mastery.problem_skills）
+    skills = [label.primary_skill, *sorted(mastery.tested_secondary(s, label))]
     for code in skills:
         item = s.scalar(select(m.ReviewItem).where(
             m.ReviewItem.user_id == sub.user_id, m.ReviewItem.skill_code == code, m.ReviewItem.state == ACTIVE))

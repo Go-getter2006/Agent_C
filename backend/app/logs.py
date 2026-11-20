@@ -297,25 +297,23 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
         if course is not None:
             q = q.where(m.AgentAssessment.course == course)
         found = list(s.scalars(q.order_by(m.AgentAssessment.id)).all())
-        human: dict[int, list[m.HumanRating]] = {}
-        for h in s.scalars(select(m.HumanRating).where(
-                m.HumanRating.assessment_id.in_([a.id for a in found] or [-1])).order_by(m.HumanRating.id)).all():
-            human.setdefault(h.assessment_id, []).append(h)
+        reflect = set(s.scalars(select(m.ChatRound.id).where(
+            m.ChatRound.id.in_([a.round_id for a in found if a.round_id is not None] or [-1]),
+            m.ChatRound.end_reason == m.REFLECT_END)).all())
         for a in found:
-            hs = human.get(a.id, [])
             add(user_id=a.user_id, time=a.created_at, kind="assess", action="理解评估", course=a.course,
                 problem_id=a.problem_id, problem=_problem_title(s, titles, a.server_id, a.problem_id),
                 submission_id=a.submission_id,
-                detail=f"{skill_name(a.skill_code)}，{'看对话' if a.basis == 'chat' else '看代码怎么改的'}，"
+                detail=f"{skill_name(a.skill_code)}，"
+                       f"{'通过后的回顾' if a.round_id in reflect else '看对话' if a.basis == 'chat' else '看代码怎么改的'}，"
                        f"等级 {a.level if a.level is not None else '不评'}（{a.source}，原始 {a.raw_level}，规则 {a.rule_level}）"
-                       + (f"，下调：{a.adjusted}" if a.adjusted else "")
-                       + (f"，老师评 {'、'.join('看不出来' if h.level is None else str(h.level) for h in hs)}" if hs else ""),
+                       + (f"，下调：{a.adjusted}" if a.adjusted else ""),
                 text="\n".join(a.evidence or []) if include_text else "",
                 data={"assessment": a.id, "round": a.round_id, "skill": a.skill_code, "kp": kp_of_skill(a.skill_code),
                       "basis": a.basis, "level": a.level, "rawLevel": a.raw_level, "ruleLevel": a.rule_level,
                       "source": a.source, "confidence": round(a.confidence or 0, 2), "adjusted": a.adjusted,
                       "evidenceCount": len(a.evidence or []), "promptVersion": a.prompt_version,
-                      "human": [{"rater": h.rater_id, "level": h.level, "seconds": h.seconds} for h in hs]})
+                      "reflection": a.round_id in reflect})
 
     ui_kinds = {k for k, (kind, _t) in UI_KIND.items() if kind in kinds}
     if ui_kinds:
@@ -417,9 +415,9 @@ COLUMNS = [("user_id", "学号"), ("name", "姓名"), ("time", "时间"), ("kind
 
 def versions() -> dict:
     """导出里各指标的版本（定义改了版本号就变，docs/研究数据与指标.md）。"""
-    from . import config, diagnosis, helpeffect, rating, stuckstats
+    from . import config, diagnosis, helpeffect, stuckstats
 
-    return {"stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION, "rating": rating.VERSION,
+    return {"stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION,
             "prompt": config.PROMPT_VERSION,
             "diagnosis": diagnosis.VERSION, "quizProtocol": 2,
             "graph": config.GRAPH_VERSION,

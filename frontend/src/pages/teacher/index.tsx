@@ -32,7 +32,7 @@ function Routed() {
           : <Navigate to="/teacher/class" replace />} />
         {/* 研究（论文用） */}
         <Route path="models" element={<TeacherPage title="模型检验" sub="掌握程度怎么算更准：用学生之后的真实表现来检验">{(cls) => cls && <Models cls={cls} />}</TeacherPage>} />
-        <Route path="rating" element={<TeacherPage title="理解评估" sub="智能体评“理解”可不可信：老师盲评，和大模型、规则对照">{(cls) => cls && <Rating cls={cls} />}</TeacherPage>} />
+        <Route path="rating" element={<TeacherPage title="理解评估" sub="智能体评“理解”和只看事实的规则对照：一致率、按事实下调了多少">{(cls) => cls && <Rating cls={cls} />}</TeacherPage>} />
         <Route path="help" element={<TeacherPage title="求助效果" sub="分级帮助有没有用：卡住以后怎么样了，谁卡住了又没来问">{(cls) => cls && <Help cls={cls} />}</TeacherPage>} />
         {/* 数据 */}
         <Route path="logs" element={<TeacherPage title="日志申请" withClass={false} sub="按需取自己学生的使用记录，带学号">{() => <Logs />}</TeacherPage>} />
