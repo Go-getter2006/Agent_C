@@ -6,7 +6,7 @@
 ## 运行和测试
 
 - 启动、停止：`./run.sh`、`./run.sh stop`、`./run.sh log`、`./run.sh update`（后台运行，网页和同步在同一个进程里）。
-- 诊断同步：`cd backend && .venv/bin/python -m app.cli doctor`（只读本地库；最后列出每天备份的情况）。
+- 诊断同步：`cd backend && .venv/bin/python -m app.cli doctor`（只读本地库）。
 - 核对真实接口：`.venv/bin/python -m app.cli xdoj-probe`（`.env` 里要有 `XDOJ_USER`、`XDOJ_PASS`）。会打印各列表接口的字段名和类型、名单按 `classId` / `id` 筛的人数、评测结果的文字和数字对应、测试点运行记录的字段、`getRunOutput` 的字段名（只打印长度，不打印内容）。
 - 测试：`cd backend && .venv/bin/python -m pytest -q`，提交前全部要过。测试用的是 `app/xdoj/fake.py` 里的假 XDOJ；改了解析真实接口的代码，要让假 XDOJ 也能返回同样形状的数据，并加测试。
 - 改了前端：在有 Node 的机器上 `cd frontend && npm run build`，把 `frontend/dist` 一起提交（服务器上不装 Node）。
@@ -42,7 +42,7 @@
 - 系统替学生做的决定（复习先出哪个、出正确还是有错的代码、发不发主动消息）当时就记进 `decision_logs`（`app/decisions.py`）：候选和依据、规则版本、选了哪个、选中的概率、结果在哪。新加的自动决定也要记；有随机的，记下真实的概率。
 - 掌握分 = (1 + 会) / (2 + 会 + 不会)，档位只看分数（≥ 75 已掌握、≥ 50 基本掌握），不另标“证据不足”。证据的系数和半衰期不手调：经验值只当先验，每周学一版冻结（`app/learn.py`，`mastery_params`），预测同时记这一版和经验值的掌握分（`p_score`、`p_score_fixed`）比好坏。复习先出哪个用后验抽样（`review.py`，`thompson-1`），判断“满足要求”后一半随机追问（`challenge-random-1`），选中概率当时算出记下。
 - 日志导出一律带学号和姓名，不做化名（老师要按学号和期末考试系统的成绩比对，比对由老师自己做，系统里不做）。研究用的导出类别带指标版本。
-- 记下的东西都要能导出、不能丢：新加的表或字段（尤其是学生写的和智能体回的）要加进 `app/logs.py` 对应的类别，文字和代码按“包含原文”控制，改了列或字段就改 `EXPORT_VERSION`。不加删除记录、清理旧数据的任务；库每天自动全量备份一份、全部保留（`app/backup.py`，`data/backup/`）。
+- 记下的东西都要能导出、不能丢：新加的表或字段（尤其是学生写的和智能体回的）要加进 `app/logs.py` 对应的类别，文字和代码按“包含原文”控制，改了列或字段就改 `EXPORT_VERSION`。不加删除记录、清理旧数据的任务，记录一直留在库里。
 - 教师端的班级汇总页加 `@page_cache`（`app/web/cache.py`）：数据变了先给上次算好的、后台重算（`refreshing`，页面自己再取），不要让老师等着全班重算；新加的表会影响这些页面的，把它的最大编号或更新时间加进 `_VERSION_COLUMNS`。教师端请求开了 `mastery.memoize`，会写证据再读状态的地方（学生端、后台任务）不要开。
 - 教师端页面不各自定时刷新：拿 `useClasses().tick` 当 `useLoad` 的依赖和 `fresh`，只有 `common.tsx` 的 `useVersionTicks` 每分钟问一次 `/api/teacher/version`，数据变了才重取。新页面照做。
 - 后台任务调大模型、跑沙箱之前，先把已经写的提交：包在 `db.releasing(s)` 里（每次调大模型前自动提交），出题前 `db.release(s)`。SQLite 同一时间只有一个连接能写，拿着写锁等大模型，学生打开页面要记一条事件就会等满 30 秒报 database is locked（复习提升“服务器出问题了”就是这样）。请求里（学生发消息）不要这么做。

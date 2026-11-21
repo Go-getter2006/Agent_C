@@ -49,9 +49,6 @@ def _env_int(name: str, default: int) -> int:
 APP_ENV = _env("APP_ENV", "dev")  # dev / prod
 DATA_DIR = Path(_env("DATA_DIR", str(ROOT_DIR / "data")))
 DATABASE_URL = _env("DATABASE_URL", f"sqlite:///{DATA_DIR / 'agent.sqlite3'}")
-# 每天自动备份整个库（app/backup.py），全部保留；北京时间这个钟点以后的第一个空闲时做
-BACKUP_DIR = Path(_env("BACKUP_DIR", str(DATA_DIR / "backup")))
-BACKUP_HOUR = _env_int("BACKUP_HOUR", 3)
 
 # 会话签名、教师 XDOJ 密码加密都从这把密钥派生。生产环境必须设置。
 SECRET_KEY = _env("SECRET_KEY", "")
