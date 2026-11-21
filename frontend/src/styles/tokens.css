@@ -1,5 +1,5 @@
 /* 设计令牌。组件里不写死颜色、字号、间距，都从这里取。只有浅色主题。
-   两门课各一套纸面：C 语言是暖色的纸（墨色侧边栏、橙色强调），数据结构是冷色的纸（深蓝侧边栏、深蓝强调）。
+   两门课各一套纸面：C 语言是暖色的纸（橙色强调），数据结构是冷色的纸（深蓝强调）；侧边栏是比页面深一档的同一种纸，选中项是卡片色。
    首页和登录以后的页面用同一套：<html data-course="C|D">，登录页跟着课程开关换，登录以后跟着这次登录的课程。
    字体：标题用得意黑（Smiley Sans），西文和数字用 Atkinson Hyperlegible Next（为易读设计，0/O、1/l/I 分得清），
    代码用 Maple Mono；中文正文用系统字体。字体文件在 main.tsx 里引入，跟着前端一起打包，不连外网。 */
@@ -14,12 +14,15 @@
   --surface-3: #f0eadf;     /* 悬停、学生的消息气泡 */
   --row-hover: #fcf9f3;
   --dot: rgba(60, 48, 30, 0.07);   /* 页面底色上的点阵，像方格本 */
-  --sidebar: #23201b;       /* 侧边栏：墨色 */
-  --sidebar-2: #35312a;
-  --sidebar-3: #403b33;
-  --sidebar-line: #3a352d;
-  --sidebar-text: #bdb4a5;
-  --sidebar-label: #a1978a;
+  --sidebar: #ebe4d6;       /* 侧边栏：比页面深一档的纸 */
+  --sidebar-2: #e2d9c9;     /* 悬停 */
+  --sidebar-3: #ddd3c2;     /* 头像 */
+  --sidebar-line: #ddd3c2;  /* 右边线、底部分隔线 */
+  --sidebar-text: #4a4237;  /* 7.8:1 */
+  --sidebar-label: #6e6355; /* 分组小标题 4.6:1 */
+  --sidebar-ink: #1f1d18;   /* 名称、悬停的字 */
+  --sidebar-ring: #e1d8c9;  /* 选中项（卡片色）的描边 */
+  --ink-block: #23201b;     /* 深色块：登录页的课程开关滑块和按钮、流程图的标题和序号、复习提醒的图标 */
   --on-dark-2: #d2cabd;
 
   /* 文字 */
@@ -39,7 +42,7 @@
   /* 品牌和强调：标志、当前位置、少量图标。黄色只用在代码里被指出的那一行 */
   --brand: #b9431a;
   --on-brand: #fffaf3;
-  --brand-on-dark: #f0895a;   /* 深色底（侧边栏、墨色按钮）上的强调色 */
+  --brand-on-dark: #f0895a;   /* 深色底（墨色按钮、复习提醒）上的强调色 */
   --accent-bg: #fbeadf;
   --accent-line: #f1c9b3;
   --mark: #fff3bf;
@@ -150,12 +153,15 @@
   --surface-3: #e8eef6;
   --row-hover: #f8fafd;
   --dot: rgba(30, 60, 110, 0.075);
-  --sidebar: #13284d;       /* 侧边栏：深蓝 */
-  --sidebar-2: #1f3a68;
-  --sidebar-3: #28467a;
-  --sidebar-line: #24406f;
-  --sidebar-text: #b4c3dd;
-  --sidebar-label: #94a7c8;
+  --sidebar: #e1e8f1;       /* 侧边栏：比页面深一档的冷色纸 */
+  --sidebar-2: #d6dfea;
+  --sidebar-3: #cfd8e4;
+  --sidebar-line: #cfd8e4;
+  --sidebar-text: #3a465d;  /* 7.7:1 */
+  --sidebar-label: #56637c; /* 4.9:1 */
+  --sidebar-ink: #121c31;
+  --sidebar-ring: #d3dce8;
+  --ink-block: #13284d;     /* 深蓝块 */
   --on-dark-2: #c9d5e8;
 
   --ink: #121c31;
