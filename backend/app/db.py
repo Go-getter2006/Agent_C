@@ -120,6 +120,33 @@ def session_scope() -> Iterator[Session]:
         s.close()
 
 
+def release(s: Session) -> None:
+    """要做慢事（调大模型、跑沙箱）之前，把这个会话已经写的先提交，别拿着写锁等。
+
+    SQLite 同一时间只有一个连接能写；后台备复习题时拿着写锁调大模型（一次几秒到几十秒、还会重试），
+    学生打开页面要记一条事件就得等，等满 30 秒报 database is locked，页面显示“服务器出问题了”。
+    只在 SQLite 上做：PostgreSQL 各写各的，而且备题用的事务级锁一提交就放掉了。"""
+    if s.get_bind().dialect.name != "sqlite":
+        return
+    if s.new or s.dirty or s.deleted:
+        s.flush()
+    if s.in_transaction():
+        s.commit()
+
+
+@contextmanager
+def releasing(s: Session):
+    """后台任务里包住一段：这段里每次调大模型之前，先把 s 已经写的提交（release）。
+    只给后台任务用；请求里（比如学生发消息）不要用：中途提交了，回复失败时那条消息就收不回来了。"""
+    from . import llm
+
+    token = llm.before_call.set(lambda: release(s))
+    try:
+        yield s
+    finally:
+        llm.before_call.reset(token)
+
+
 def create_all() -> None:
     from . import models  # noqa: F401  注册全部表
 

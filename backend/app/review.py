@@ -310,18 +310,18 @@ def lowest_probabilities(params: list[tuple[float, float]], grid: int = 4000) ->
             run += v
         pdfs.append(f)
         cdfs.append(c)
-    out = []
-    for i in range(n):
-        acc = 0.0
-        for k in range(grid):
-            prod = pdfs[i][k]
-            if prod == 0.0:
-                continue
-            for j in range(n):
-                if j != i:
-                    prod *= 1.0 - cdfs[j][k]
-            acc += prod
-        out.append(acc)
+    # Π_{j≠i}(1 − F_j) 用前缀积 × 后缀积，每个格点 O(n)，整个 O(n·grid)（以前逐对乘是 O(n²·grid)，
+    # 七十个候选要两秒，后台备题时拖慢别的请求）
+    out = [0.0] * n
+    for k in range(grid):
+        surv = [1.0 - cdfs[j][k] for j in range(n)]
+        prefix = [1.0] * (n + 1)
+        for j in range(n):
+            prefix[j + 1] = prefix[j] * surv[j]
+        suffix = 1.0
+        for i in range(n - 1, -1, -1):
+            out[i] += pdfs[i][k] * prefix[i] * suffix
+            suffix *= surv[i]
     total = sum(out) or 1.0
     return [v / total for v in out]
 
@@ -636,6 +636,7 @@ def prepare(s: Session, user_id: str, course: str, at: dt.datetime | None = None
                              m.QuizAttempt.skipped.is_(True), m.QuizAttempt.review_item_id == m.ReviewItem.id)).all()
     for skipped in stale:
         on_quiz_result(s, skipped)
+    db.release(s)   # 上面记的先提交：下面出题要调大模型、跑沙箱，不拿着 SQLite 的写锁等（db.release）
     if _pending(s, user_id, course) is not None:
         return "ready"
     waiting = s.scalar(select(m.UiEvent.id).where(
@@ -742,7 +743,8 @@ def prepare_active(limit: int = 3, at: dt.datetime | None = None) -> int:
             if s.get_bind().dialect.name == "postgresql":
                 if not s.scalar(select(func.pg_try_advisory_xact_lock(19574, func.hashtext(user_id + ":" + course)))):
                     continue
-            result = prepare(s, user_id, course, at)
+            with db.releasing(s):   # 每次调大模型之前先提交，学生打开页面记事件不用等
+                result = prepare(s, user_id, course, at)
             tried += result in ("ready", "waiting")
             done += result == "ready"
     return done

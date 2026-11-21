@@ -812,6 +812,7 @@ def generate(s: Session, user_id: str, skill: str, reason: str, origin: tuple[in
         order.append(from_llm)
     order += [from_template, from_bank]
     for gen in order:
+        db.release(s)   # 出题要跑沙箱、可能调大模型：已经写的先提交，不拿着 SQLite 的写锁等
         try:
             item = gen(s, plan, rng)
         except Exception:  # 出题失败不能影响对话和复习

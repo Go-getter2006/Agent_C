@@ -733,6 +733,7 @@ def review_attempt(attempt_id: int, user: m.User = Depends(student), s: Session 
     view = quiz.view(s, a)
     if a.recap is not None:
         view["recap"] = a.recap or None
+    view["turns"] = a.discussion or []   # 之后的一问一答也一起给：右边一次画全，不先画上面再跳到底
     return {"attemptId": a.id, "title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), "复习题"),
             "time": (a.finished_at or a.created_at).isoformat(), "quiz": view}
 
