@@ -1,14 +1,21 @@
 // 班级总览：这周班里怎么样，先关注谁、课上讲什么。
-// 三个数；需要留意的学生、作业完成情况；要讲的知识点、最常见的错误；两张趋势图。
-// 全部知识点在知识图谱里看（这里只列要讲的几个），每个学生在学生明细里看。
+// 三个数；误区（本周 / 全部，课上要强调的错误点）；要讲的知识点（和误区对齐）；需要留意的学生（一直不做题、
+// 一直卡在某处、其他）、作业完成情况；两张趋势图。全部误区在“误区”页，全部知识点在知识图谱，每个学生在学生明细。
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Activity, ArrowRight, CircleAlert, CircleCheck, Copy, Hourglass, Send, Target, Users } from "lucide-react";
 import { get } from "../../api";
-import { BarList, ColumnChart, LineChart } from "../../components/charts";
-import { Avatar, Card, Empty, Loading, Problem, Stat } from "../../components/ui";
+import { ColumnChart, LineChart } from "../../components/charts";
+import { Avatar, Card, Empty, Loading, Problem, Stat, Tabs } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { deadline } from "../../lib/time";
-import { Code, useClasses, type ClassInfo } from "./common";
+import { useClasses, type ClassInfo } from "./common";
+import { MisconceptionGrid, PERIOD_TEXT, type Misconception, type Period } from "./Misconceptions";
+
+interface AttentionGroup {
+  key: "idle" | "stuck" | "other"; title: string; rule: string;
+  students: { userId: string; name: string; reasons: string[] }[];
+}
 
 interface Overview {
   class: { key: string; name: string; students: number; activeThisWeek: number };
@@ -19,10 +26,62 @@ interface Overview {
     review: { active: number; due: number; graduated: number; lapses: number; students: number };
   };
   trend: { label: string; start: string; submissions: number; active: number; passed: number; avgToPass: number | null; rounds: number }[];
-  attention: { userId: string; name: string; reasons: string[] }[];
+  attentionGroups: AttentionGroup[];
+  misconceptions: Record<Period, { items: Misconception[]; total: number }>;
   focus: { code: string; name: string; weak: number; stuck: number; silent: number; error: { code: string; name: string; count: number } | null }[];
-  errors: { code: string; name: string; students: number; count: number }[];
   homeworks: { title: string; contestId: number; problems: number; allPassed: number; started: number; endTime: string | null; ended: boolean }[];
+}
+
+const OVERVIEW_MISC = 6;   // 总览里每个范围列几条误区，其余在“误区”页
+
+function MisconceptionCard({ d }: { d: Overview }) {
+  const [period, setPeriod] = useState<Period>(d.misconceptions.week.total ? "week" : "all");
+  const block = d.misconceptions[period];
+  return (
+    <Card title="误区" sub="课上要强调的错误点：一种错误 × 一个技能，人数多的在前"
+      action={<Link to={`/teacher/misconceptions${period === "all" ? "?period=all" : ""}`} className="btn btn-sm">
+        全部 {block.total} 条<ArrowRight size={14} aria-hidden="true" /></Link>}>
+      <Tabs label="误区的范围" value={period} onChange={setPeriod}
+        options={(["week", "all"] as Period[]).map((p) => ({ value: p, label: `${PERIOD_TEXT[p]}误区`, count: d.misconceptions[p].total }))} />
+      <div role="tabpanel" id={`panel-${period}`} aria-labelledby={`tab-${period}`} className="misc-panel">
+        {block.items.length === 0
+          ? <Empty icon={CircleCheck} title={`${PERIOD_TEXT[period]}没有记到误区`} />
+          : <MisconceptionGrid items={block.items.slice(0, OVERVIEW_MISC)} />}
+      </div>
+    </Card>
+  );
+}
+
+function AttentionCard({ groups }: { groups: AttentionGroup[] }) {
+  const first = groups.find((g) => g.students.length)?.key ?? "idle";
+  const [tab, setTab] = useState<AttentionGroup["key"]>(first);
+  const g = groups.find((x) => x.key === tab) ?? groups[0];
+  return (
+    <Card title="需要留意的学生" sub="按写明的规则分三类，每人附理由"
+      action={<Link to="/teacher/students" className="btn btn-sm">全部学生<ArrowRight size={14} aria-hidden="true" /></Link>}>
+      <Tabs label="需要留意的学生分类" value={tab} onChange={setTab}
+        options={groups.map((x) => ({ value: x.key, label: x.title, count: x.students.length }))} />
+      <div role="tabpanel" id={`panel-${g.key}`} aria-labelledby={`tab-${g.key}`}>
+        <p className="note attn-rule">{g.rule}</p>
+        {g.students.length === 0 ? <Empty icon={CircleCheck} title="没有这类学生" /> : (
+          <ul className="attn-list">
+            {g.students.map((a) => (
+              <li key={a.userId}>
+                <Avatar name={a.name} />
+                <div className="attn-main">
+                  <Link to={`/teacher/students/${a.userId}`} className="attn-name">{a.name}<span className="code-tag">{a.userId}</span></Link>
+                  <span className="attn-reasons">
+                    {a.reasons.map((r) => <span key={r} className="pill pill-warn"><CircleAlert aria-hidden="true" />{r}</span>)}
+                  </span>
+                </div>
+                <Link to={`/teacher/students/${a.userId}`} className="btn btn-sm btn-ghost" aria-label={`看${a.name}的明细`}><ArrowRight size={15} /></Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Card>
+  );
 }
 
 export default function ClassOverview({ cls }: { cls: ClassInfo }) {
@@ -44,28 +103,31 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
           foot={k.suspicious ? <span className="warn-text"><Copy size={13} aria-hidden="true" />{k.suspicious} 次通过和同学代码雷同</span> : undefined} />
       </div>
 
+      <MisconceptionCard d={d} />
+
+      <Card title="要讲的知识点" sub="待加强、卡住过、没来问的人多的排前面"
+        action={<Link to="/teacher/map?view=table" className="btn btn-sm">全部知识点<ArrowRight size={14} aria-hidden="true" /></Link>}>
+        {d.focus.length === 0 ? <Empty icon={CircleCheck} title="目前没有特别要讲的知识点" /> : (
+          <ul className="focus-list focus-grid">
+            {d.focus.map((f) => (
+              <li key={f.code}>
+                <div className="focus-top">
+                  <Link to={`/teacher/map?kp=${f.code}`} className="focus-name">{f.name}</Link>
+                  <span className="focus-counts">
+                    {f.weak > 0 && <span className="pill pill-fail">待加强 {f.weak} 人</span>}
+                    {f.stuck > 0 && <span className="pill pill-warn">卡住过 {f.stuck} 人</span>}
+                    {f.silent > 0 && <span className="pill">没来问 {f.silent} 人</span>}
+                  </span>
+                </div>
+                {f.error && <span className="note">最常见的错：{f.error.name}（{f.error.count} 次）</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <div className="grid-main">
-        <Card title="需要留意的学生" sub="按写明的规则列出，每人附理由"
-          action={<Link to="/teacher/students" className="btn btn-sm">全部学生<ArrowRight size={14} aria-hidden="true" /></Link>}>
-          {d.attention.length === 0 ? (
-            <Empty icon={CircleCheck} title="目前没有需要特别留意的学生">规则：反复卡在同一个知识点、三个以上知识点待加强、一周没交题、通过一道题要交的次数明显比全班多等。</Empty>
-          ) : (
-            <ul className="attn-list">
-              {d.attention.slice(0, 6).map((a) => (
-                <li key={a.userId}>
-                  <Avatar name={a.name} />
-                  <div className="attn-main">
-                    <Link to={`/teacher/students/${a.userId}`} className="attn-name">{a.name}<span className="code-tag">{a.userId}</span></Link>
-                    <span className="attn-reasons">
-                      {a.reasons.map((r) => <span key={r} className="pill pill-warn"><CircleAlert aria-hidden="true" />{r}</span>)}
-                    </span>
-                  </div>
-                  <Link to={`/teacher/students/${a.userId}`} className="btn btn-sm btn-ghost" aria-label={`看${a.name}的明细`}><ArrowRight size={15} /></Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        <AttentionCard groups={d.attentionGroups} />
         <Card title="作业完成情况">
           {d.homeworks.length === 0 ? <Empty title="这个班还没有作业" /> : (
             <ul className="hw-list">
@@ -86,36 +148,6 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
                 </li>
               ))}
             </ul>
-          )}
-        </Card>
-      </div>
-
-      <div className="grid-main">
-        <Card title="要讲的知识点" sub="待加强、卡住过、没来问的人多的排前面"
-          action={<Link to="/teacher/map?view=table" className="btn btn-sm">全部知识点<ArrowRight size={14} aria-hidden="true" /></Link>}>
-          {d.focus.length === 0 ? <Empty icon={CircleCheck} title="目前没有特别要讲的知识点" /> : (
-            <ul className="focus-list">
-              {d.focus.map((f) => (
-                <li key={f.code}>
-                  <div className="focus-top">
-                    <Link to={`/teacher/map?kp=${f.code}`} className="focus-name">{f.name}</Link>
-                    <span className="focus-counts">
-                      {f.weak > 0 && <span className="pill pill-fail">待加强 {f.weak} 人</span>}
-                      {f.stuck > 0 && <span className="pill pill-warn">卡住过 {f.stuck} 人</span>}
-                      {f.silent > 0 && <span className="pill">没来问 {f.silent} 人</span>}
-                    </span>
-                  </div>
-                  {f.error && <span className="note">最常见的错：{f.error.name}（{f.error.count} 次）</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-        <Card title="最常见的错误" sub="最近 30 天，按出现的提交次数">
-          {d.errors.length === 0 ? <Empty icon={CircleCheck} title="最近 30 天没有标注到错误" /> : (
-            <BarList unit=" 次" rows={d.errors.slice(0, 5).map((e) => ({
-              key: e.code, label: <>{e.name} <Code>{e.code}</Code></>, value: e.count, sub: `${e.students} 人`,
-            }))} />
           )}
         </Card>
       </div>

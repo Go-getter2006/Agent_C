@@ -1,6 +1,6 @@
 // 教师端共用：导航、班级选择、页面骨架、几个对照表。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ClipboardCheck, Database, FileDown, GitCompare, LayoutDashboard, LifeBuoy, Link2, Users, Waypoints } from "lucide-react";
+import { ClipboardCheck, Database, FileDown, GitCompare, History, LayoutDashboard, LifeBuoy, Link2, TriangleAlert, Users, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { Empty, Loading, Problem } from "../../components/ui";
@@ -10,6 +10,8 @@ import { useLoad } from "../../lib/hooks";
 export const NAV: NavItem[] = [
   { to: "/teacher/class", label: "总览", icon: LayoutDashboard, section: "班级" },
   { to: "/teacher/students", label: "学生", icon: Users, section: "班级" },
+  { to: "/teacher/submissions", label: "提交记录", icon: History, section: "班级" },
+  { to: "/teacher/misconceptions", label: "误区", icon: TriangleAlert, section: "班级" },
   { to: "/teacher/map", label: "知识图谱", icon: Waypoints, section: "班级" },
   { to: "/teacher/models", label: "模型检验", icon: GitCompare, section: "研究" },
   { to: "/teacher/rating", label: "理解评估", icon: ClipboardCheck, section: "研究" },

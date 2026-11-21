@@ -32,8 +32,10 @@ def _fresh_page_cache():
     from app.web import cache
 
     cache.clear()
+    cache.BACKGROUND = False   # 数据变了当场重算；测后台重算的测试自己打开
     yield
     cache.clear()
+    cache.BACKGROUND = False
 
 
 @pytest.fixture(autouse=True)

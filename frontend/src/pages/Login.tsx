@@ -11,6 +11,7 @@ import { api } from "../api";
 import type { CourseCode } from "../types";
 import CourseScene from "../components/CourseScene";
 import CourseSwitch from "../components/CourseSwitch";
+import { markArrival, reducedMotion } from "../lib/arrival";
 import { useLoad } from "../lib/hooks";
 import { useSession } from "../session";
 
@@ -53,6 +54,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const all = info.data?.allCourses?.length ? info.data.allCourses : FALLBACK;
@@ -89,7 +91,14 @@ export default function Login() {
     setError(null);
     try {
       await api.login(name.trim(), password, course);
-      setMe(await api.me());
+      const me = await api.me();
+      // 登录页先淡出（约 0.2 秒），主界面接着淡入（components/Shell.tsx）
+      markArrival();
+      if (!reducedMotion()) {
+        setLeaving(true);
+        await new Promise((done) => window.setTimeout(done, 200));
+      }
+      setMe(me);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -98,7 +107,7 @@ export default function Login() {
   };
 
   return (
-    <div className="login" data-course={course}>
+    <div className={leaving ? "login login-leaving" : "login"} data-course={course}>
       <div className="login-bg" aria-hidden="true" />
       <CourseScene course={course} />
 

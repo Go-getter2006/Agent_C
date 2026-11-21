@@ -4,6 +4,7 @@ import { ClassesProvider, TeacherPage, useClasses } from "./common";
 import Cross from "./Cross";
 import Help from "./Help";
 import KnowledgeMap from "./KnowledgeMap";
+import Misconceptions from "./Misconceptions";
 import Logs from "./Logs";
 import Models from "./Models";
 import Rating from "./Rating";
@@ -11,6 +12,7 @@ import ClassOverview from "./Overview";
 import Sources from "./Sources";
 import StudentDetail from "./StudentDetail";
 import Students from "./Students";
+import Submissions from "./Submissions";
 
 const MAP_SUB = {
   C: "哪些知识点没学好，谁卡在这里。箭头从前置知识指向后续知识",
@@ -25,6 +27,8 @@ function Routed() {
         <Route path="class" element={<TeacherPage title="班级总览" sub="这周班里怎么样，先关注谁、课上讲什么">{(cls) => cls && <ClassOverview cls={cls} />}</TeacherPage>} />
         <Route path="students" element={<TeacherPage title="学生" sub="每个学生做得怎么样">{(cls) => cls && <Students cls={cls} />}</TeacherPage>} />
         <Route path="students/:id" element={<StudentDetail />} />
+        <Route path="submissions" element={<TeacherPage title="提交记录" sub="班里每一次提交，点开看代码和没过的测试点">{(cls) => cls && <Submissions cls={cls} />}</TeacherPage>} />
+        <Route path="misconceptions" element={<TeacherPage title="误区" sub="课上要强调的错误点：谁、在哪道题、他们怎么想的">{(cls) => cls && <Misconceptions cls={cls} />}</TeacherPage>} />
         <Route path="map" element={<TeacherPage title="知识图谱" wide sub={MAP_SUB[course]}>{(cls) => cls && <KnowledgeMap cls={cls} />}</TeacherPage>} />
         {/* 只在数据结构这边有（导航里也只在那边出现）；登录 C 语言时打开这个地址会回到总览 */}
         <Route path="cross" element={course === "D" || loading

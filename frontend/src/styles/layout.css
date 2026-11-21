@@ -2090,3 +2090,11 @@ button.flow-card:focus-visible {
 .srow-code { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-8); min-width: 0; }
 .srow-code > .code { align-self: stretch; }
 .back-link { display: inline-flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-6); font-size: var(--fs-13); }
+
+/* 刚从登录页进来：侧栏从左边轻轻滑入，内容淡入、微微上移。只这一次，刷新和切栏目都不做 */
+.shell-enter .sidebar { animation: shell-side .32s cubic-bezier(.2, .7, .2, 1) both; }
+.shell-enter .shell-main,
+.shell-enter .appbar { animation: shell-main .36s cubic-bezier(.2, .7, .2, 1) .06s both; }
+@keyframes shell-side { from { opacity: 0; transform: translateX(-10px); } }
+@keyframes shell-main { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .shell-enter .sidebar, .shell-enter .shell-main, .shell-enter .appbar { animation: none; } }

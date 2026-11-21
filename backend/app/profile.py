@@ -328,6 +328,44 @@ def kp_profile(s: Session, user_id: str, course: str, at: dt.datetime | None = N
     return out
 
 
+class _Light:
+    """explain_gaps 用：只有做题的状态和智能体评的理解（_understanding 要的两样）。"""
+
+    def __init__(self, states: dict, assessments: list, at: dt.datetime):
+        self.states, self.assessments, self.at = states, assessments, at
+
+
+def explain_gaps(s: Session, states_by_uid: dict[str, dict], course: str) -> dict[str, list[str]]:
+    """全班“会做但讲不清”的知识点（和 kp_profile 的 explain_gap 同一个规则、同一个结果）。
+    这条规则只用做题和理解两维；kp_profile 要把七个维度都取一遍，班级总览给每个学生各算一次要好几秒。
+    states_by_uid：每个学生现在的技能状态（班级页已经算好的）。"""
+    if not states_by_uid:
+        return {}
+    at = db.now()
+    rows = s.scalars(select(m.AgentAssessment).where(
+        m.AgentAssessment.user_id.in_(list(states_by_uid)), m.AgentAssessment.level.is_not(None))).all()
+    by_uid: dict[str, list] = defaultdict(list)
+    for a in rows:
+        if a.created_at <= at:
+            by_uid[a.user_id].append(a)
+    out: dict[str, list[str]] = {}
+    for uid, states in states_by_uid.items():
+        src = _Light(states, by_uid.get(uid, []), at)
+        skills = {c for c, st in states.items() if not st.predicted} | {a.skill_code for a in src.assessments}
+        by_kp: dict[str, list[Dims]] = defaultdict(list)
+        for code in skills:
+            if course_of(code) != course:
+                continue
+            d = Dims()
+            st = states.get(code)
+            if st is not None and not st.predicted:
+                d.perf, d.weight = st.p, max(1.0, st.raw)
+            d.understanding, d.n_assess = _understanding(src, code)
+            by_kp[kp_of_skill(code)].append(d)
+        out[uid] = sorted(kp for kp, parts in by_kp.items() if "explain_gap" in _flags(_merge(parts)))
+    return out
+
+
 def _r(x: float | None, nd: int = 2) -> float | None:
     return round(x, nd) if x is not None else None
 

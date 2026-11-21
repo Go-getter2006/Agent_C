@@ -234,3 +234,9 @@
 @media (prefers-reduced-motion: reduce) {
   .login, .login *, .login-bg { transition: none !important; }
 }
+
+/* 登录成功：登录框和左边的话淡出、微微下沉（约 0.2 秒），主界面接着淡入（layout.css 的 .shell-enter） */
+.login-leaving .login-main,
+.login-leaving .login-hero { animation: login-leave .2s ease-in forwards; }
+@keyframes login-leave { to { opacity: 0; transform: translateY(6px) scale(.99); } }
+@media (prefers-reduced-motion: reduce) { .login-leaving .login-main, .login-leaving .login-hero { animation: none; } }

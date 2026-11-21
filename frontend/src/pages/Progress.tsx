@@ -4,7 +4,7 @@
 // 只用档位、做题记录和文字，不显示概率、排名、细技能编码。
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BookOpen, CircleAlert, CircleCheck, Gauge, History, ListChecks, RotateCcw } from "lucide-react";
+import { BookOpen, CircleAlert, CircleCheck, History, RotateCcw } from "lucide-react";
 import { api } from "../api";
 import { ColumnChart, StackedBar } from "../components/charts";
 import { StudentShell } from "../components/Shell";
@@ -186,12 +186,6 @@ export default function Progress() {
                     )}
                   </Card>
 
-                  <Card title="做题">
-                    <div className="hw-facts">
-                      <span><Gauge size={14} aria-hidden="true" />做过 {p.activity.tried} 题，{p.activity.passed} 题已通过</span>
-                      <span><ListChecks size={14} aria-hidden="true" />平均每题提交 {p.activity.avgSubmissions ?? "—"} 次</span>
-                    </div>
-                  </Card>
                 </div>
               </div>
             </div>
