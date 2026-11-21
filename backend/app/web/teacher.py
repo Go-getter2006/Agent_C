@@ -23,7 +23,7 @@ from .. import (accounts, assess, catalog, config, cross, crypto, db, diagnosis,
 from .. import models as m
 from ..labeling.labeler import current_problem_label
 from ..taxonomy import (COURSE_NAMES, ERRORS, JUDGEMENTS, KNOWLEDGE_POINTS, LEVELS, SKILLS, TOPICS, course_of,
-                        error_name, kp_of_skill, skill_name, skills_of_kp)
+                        error_name, kp_of_skill, kp_rank, skill_name, skills_of_kp)
 from ..taxonomy.prereq import PREREQ_STATUS
 from ..xdoj import api as sync_api
 from ..xdoj import store
@@ -626,10 +626,10 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     kps = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "level": kp.level, "p": round(kp.p, 2),
             "score": score(kp.score), "text": kpdesc.describe(recs.get(code), teacher=True), "why": kp.why,
             "v1": round(kp1[code].p, 2) if code in kp1 else None, "v1Level": kp1[code].level if code in kp1 else None}
-           for code, kp in sorted(kp2.items()) if not kp.predicted and in_course(code, course)]
+           for code, kp in sorted(kp2.items(), key=lambda kv: kp_rank(kv[0])) if not kp.predicted and in_course(code, course)]
     # 数据结构：还没有证据的知识点，按 C 语言里的先修推出来的准备度；C 语言这边没有这一块
     readiness = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "p": round(kp.p, 2)}
-                 for code, kp in sorted(kp2.items()) if kp.predicted and course == "D" and in_course(code, "D")]
+                 for code, kp in sorted(kp2.items(), key=lambda kv: kp_rank(kv[0])) if kp.predicted and course == "D" and in_course(code, "D")]
     reviews = [{**_skill_view(r.skill_code), "origin": review.ORIGIN_TEXT.get(r.origin, r.origin), "state": r.state,
                 "halfLife": round(r.half_life, 1), "retention": round(review.retention(r), 2), "reps": r.reps,
                 "lapses": r.lapses, "streak": r.streak, "due": r.due_at.isoformat()}

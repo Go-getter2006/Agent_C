@@ -9,6 +9,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ArrowUp, CalendarClock, CircleCheck, List } from "lucide-react";
 import { api } from "../api";
 import Attempt from "../components/Attempt";
+import { RecapBody, useRecap } from "../components/Recap";
 import Quiz from "../components/Quiz";
 import { StudentShell } from "../components/Shell";
 import { AgentMark } from "../components/Thread";
@@ -131,6 +132,7 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
   onNext?: () => void; nextLabel?: string; onAsked?: () => void;
 }) {
   const done = quiz.state === "done" && quiz.result?.outcome !== "skipped";
+  const recap = useRecap(quiz.attemptId, done);   // 解释之后智能体的回顾（第一次要时生成）
   const [turns, setTurns] = useState<ReviewTurn[]>([]);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState<string | null>(null);
@@ -149,8 +151,8 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
 
   useEffect(() => {
     const el = scroller.current;
-    if (el && (turns.length || asking)) el.scrollTop = el.scrollHeight;
-  }, [turns.length, asking]);
+    if (el && (turns.length || asking || recap)) el.scrollTop = el.scrollHeight;
+  }, [turns.length, asking, recap]);
 
   const send = async () => {
     const q = text.trim();
@@ -191,14 +193,21 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
             <AgentMark />
             <div className="msg-body">
               <span className="msg-meta"><strong>智能体</strong></span>
-              {quiz.protocol === 2
-                ? <Attempt key={quiz.attemptId} quiz={quiz} onChange={onChange} onNext={done || quiz.state === "done" ? onNext : undefined} nextLabel={nextLabel} />
+              {(quiz.protocol ?? 1) >= 2
+                ? <Attempt key={quiz.attemptId} quiz={quiz} onChange={onChange} onNext={done || quiz.state === "done" ? onNext : undefined}
+                  nextLabel={nextLabel} showRecap={false} />
                 : <>
                   <Quiz key={quiz.attemptId} quiz={quiz} layout={layout} onChange={onChange} />
                   {quiz.state === "done" && onNext && <div className="attempt-confirm"><button className="btn" type="button" onClick={onNext}>{nextLabel ?? "继续"}</button></div>}
                 </>}
             </div>
           </div>
+          {recap !== null && done && (   // 解释之后，回顾他以前在这里出过的错（智能体分析）
+            <div className="msg msg-agent">
+              <AgentMark />
+              <div className="msg-body"><span className="msg-meta"><strong>智能体</strong></span><RecapBody recap={recap} /></div>
+            </div>
+          )}
           {turns.map((t) => (
             <Fragment key={t.id}>
               <div className="msg msg-student"><div className="msg-body"><div className="bubble"><p>{t.question}</p></div></div></div>

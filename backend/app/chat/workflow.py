@@ -454,13 +454,15 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             decision = Decision("R00", plan_step[2], "甲", "plan_step")
             flow = "plan_step"
         elif ctx.problem is not None and ctx.submission is None and plan_mod.wants_plan(prose, analysis.intent):
+            # 大模型按题面分好的步骤（后台一般已经做好）；给不出合格的就不出流程图，按平常的引导走
             steps = plan_mod.steps_for(s, ctx.problem.server_id, ctx.problem.problem_id, ctx.statement, ctx.plabel,
                                        course, list(ctx.all_tests))
-            state = {"version": plan_mod.VERSION, "steps": steps, "picking": True, "current": None,
-                     "queue": [], "done": [], "tries": 0}
-            plan_step = (state, "这道题可以分成下面几步。你卡在哪一步？可以选一步或几步，都不会也没关系，我们从头一步一步来。",
-                         "H0")
-            decision, flow = Decision("R00", "H0", "甲", "plan"), "plan"
+            if steps:
+                state = {"version": plan_mod.VERSION, "steps": steps, "picking": True, "current": None,
+                         "queue": [], "done": [], "tries": 0}
+                plan_step = (state, "这道题可以分成下面几步。你卡在哪一步？可以选一步或几步，都不会也没关系，我们从头一步一步来。",
+                             "H0")
+                decision, flow = Decision("R00", "H0", "甲", "plan"), "plan"
     prior: m.StuckPoint | None = None
     stuck_point: m.StuckPoint | None = None
     if in_recall and ctx.root_skill and reflect_on is None and plan_step is None:

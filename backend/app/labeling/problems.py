@@ -15,7 +15,7 @@ from .. import config, llm, pdftext
 from .. import models as m
 from ..sandbox import run_program
 from ..sandbox.precheck import check_reference_solution
-from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, is_skill_code, skills_for_course
+from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, is_skill_code, kp_of_skill, skills_for_course
 from ..xdoj.assemble import source_text
 from ..xdoj.util import decode_bytes, json_hash, sha256
 
@@ -270,7 +270,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
 
     server = s.get(m.Server, server_id)
     course_skills = skills_for_course(server.course if server else "C")
-    skill_table = "\n".join(f"{code} {item[0]}（{KNOWLEDGE_POINTS[code[:6]]}）" for code, item in course_skills.items())
+    skill_table = "\n".join(f"{code} {item[0]}（{KNOWLEDGE_POINTS[kp_of_skill(code)]}）" for code, item in course_skills.items())
     # 测试点完整给出；没取到的是 null，和“空输出”分开（和写回复、标注提交时的证据一样）
     case_text = json.dumps([
         {"testcaseId": c.testcase_id,
@@ -286,4 +286,37 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
         llm.flush_records(s)
         return current
     llm.flush_records(s)
-    return save_problem_label(s, server_id, problem_id, brief, primary, secondary, tcs, "llm")
+    new = save_problem_label(s, server_id, problem_id, brief, primary, secondary, tcs, "llm")
+    if current is not None:
+        from .. import mastery
+
+        mastery.follow_relabel(s, server_id, problem_id, new)   # 以前的“通过”证据跟着新标注走
+    return new
+
+
+_relabel_tried: dict[tuple[int, int], float] = {}
+
+
+def relabel_changed(s: Session, limit: int = 5) -> int:
+    """技能表改过以后（config.RELABEL_SKILLS 的意思变窄了），用到这些技能的旧标注在后台用大模型重新标一次；
+    没用到的只把版本号改成现在的。没有大模型时不动；标不成的一小时内不再试。返回试了几道。"""
+    import time
+
+    if not llm.available():
+        return 0
+    rows = s.scalars(select(m.ProblemLabel).where(
+        m.ProblemLabel.is_current.is_(True), m.ProblemLabel.taxonomy_version != config.TAXONOMY_VERSION)).all()
+    done = 0
+    for lab in rows:
+        if done >= limit:
+            break
+        if not ({lab.primary_skill, *(lab.secondary_skills or [])} & config.RELABEL_SKILLS):
+            lab.taxonomy_version = config.TAXONOMY_VERSION   # 这道题的标注在新表里意思没变
+            continue
+        key = (lab.server_id, lab.problem_id)
+        if time.monotonic() - _relabel_tried.get(key, -1e9) < 3600:
+            continue
+        _relabel_tried[key] = time.monotonic()
+        annotate_problem(s, lab.server_id, lab.problem_id, force=True)
+        done += 1
+    return done

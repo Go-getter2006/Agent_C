@@ -566,16 +566,6 @@
   color: var(--fail);
 }
 
-.quiz-skip {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: calc(-1 * var(--sp-4));
-}
-
-.quiz-skip .link {
-  font-size: var(--fs-13);
-}
-
 @media (max-width: 767px) {
   .quiz {
     padding: var(--sp-12);
@@ -2607,6 +2597,19 @@
 .chip-sm { min-height: 30px; padding: 0 var(--sp-10); border: 1px solid var(--line-strong); border-radius: var(--r-pill); background: var(--surface); color: var(--ink-2); font: inherit; font-size: var(--fs-12); cursor: pointer; }
 .chip-sm[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); background: var(--surface-3); }
 .chip-sm:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* 小题之后的回顾：以前在这里出过的错，一条一行 */
+.recap { display: flex; flex-direction: column; gap: var(--sp-6); }
+.recap-list { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: var(--sp-4); }
+.recap-list li { line-height: 1.7; }
+.recap-list li::marker { color: var(--ink-3); }
+/* 判断满足要求以后的追问：他的判断、智能体的追问、他的回答，像对话里的一问一答 */
+.attempt-challenge { display: flex; flex-direction: column; gap: var(--sp-10); }
+.attempt-challenge-me, .attempt-challenge-a {
+  align-self: flex-end; max-width: 85%; padding: var(--sp-8) var(--sp-14, 14px); border-radius: 16px 16px 6px 16px;
+  background: var(--surface-3); color: var(--ink);
+}
+.attempt-challenge-q { display: flex; gap: var(--sp-10); align-items: flex-start; max-width: 92%; line-height: 1.7; }
+.attempt-challenge-q .brand-mark { flex: none; width: 24px; height: 24px; border-radius: 7px; margin-top: 2px; }
 .attempt-picked { padding: var(--sp-10) var(--sp-12); border-radius: var(--r-sm); background: var(--select-bg); box-shadow: inset 3px 0 0 var(--select); color: var(--ink); }
 .attempt-picked.empty { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--line-strong); color: var(--ink-3); }
 .code-pick .code-no-btn {

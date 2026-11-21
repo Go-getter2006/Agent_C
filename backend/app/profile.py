@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 from . import config, db, mastery, review
 from . import models as m
 from .chat.analyze import ACTS, CONSTRUCTIVE_ACTS
-from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, course_of, kp_of_skill
+from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, course_of, kp_of_skill, kp_rank
 
 log = logging.getLogger("profile")
 
@@ -334,7 +334,7 @@ def _r(x: float | None, nd: int = 2) -> float | None:
 
 def teacher_view(s: Session, user_id: str, course: str) -> list[dict]:
     rows = []
-    for kp, d in sorted(kp_profile(s, user_id, course).items()):
+    for kp, d in sorted(kp_profile(s, user_id, course).items(), key=lambda kv: kp_rank(kv[0])):
         rows.append({
             "code": kp, "name": KNOWLEDGE_POINTS.get(kp, ""), "level": d.level, "perf": _r(d.perf),
             "perfLower": _r(d.perf_lower), "understanding": _r(d.understanding), "nAssess": d.n_assess,

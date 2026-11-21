@@ -1,15 +1,18 @@
-// 独立作答（界面改造方案第 4 节）：先判断 → 再选位置/依据 → 判断有问题的修改 → 反馈。
+// 独立作答（界面改造方案第 4 节）：先判断 → 判断有问题的选位置、修改；判断满足要求的智能体追问一句 → 反馈。
 // - 第一步“满足要求”“存在问题”同样分量，确认前可以改选；确认以后锁定。把握可选，放在确认按钮旁边；
-// - 第二步学生自己点行号选（一行或连续几行），选中的行才变黄；判断有问题叫“确认位置”，判断满足要求叫“确认依据”；
+// - 判断满足要求：智能体追问“你确定吗”（正确和有错的代码问法一样），坚持就出反馈，改判就去选位置、修改
+//   （protocol 2 的旧题判断满足要求的选依据）；
+// - 学生自己点行号选位置（一行或连续几行），选中的行才变黄；
 // - 判断有问题的再修改：可以运行公开样例、看提示，也可以原样提交；
 // - 反馈之前不提示对错。完成后在复习页就这道题答疑。
 // 用在复习提升（整页，题干、代码、作答在一条阅读轴线上）和对话里通过后出的小题（compact）。
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { CircleCheck, CircleX, FileCode2, Lightbulb, Play, SkipForward } from "lucide-react";
+import { Braces, CircleCheck, CircleX, FileCode2, Lightbulb, Play } from "lucide-react";
 import { api } from "../api";
 import type { QuizView } from "../types";
 import { highlightC } from "../lib/cSyntax";
 import { CodeBlock, Loading, SynLine } from "./ui";
+import Recap from "./Recap";
 
 const CodeEditor = lazy(() => import("./CodeEditor"));
 const LEVELS = ["没把握", "一半", "很有把握"];
@@ -20,6 +23,30 @@ interface Props {
   compact?: boolean;
   onNext?: () => void;          // 复习提升：做完以后“下一题”
   nextLabel?: string;
+  showRecap?: boolean;          // 反馈之后的回顾放在这里（复习提升另起一条消息，传 false）
+}
+
+/** 判断“满足要求”以后，智能体的追问和他的回答（像对话里的一问一答）。 */
+function Challenge({ text, reply, busy, onReply }: {
+  text: string; reply: "kept" | "flipped" | null; busy: boolean; onReply?: (keep: boolean) => void;
+}) {
+  return (
+    <div className="attempt-challenge">
+      <p className="attempt-challenge-me">满足要求。</p>
+      <p className="attempt-challenge-q">
+        <span className="brand-mark" aria-hidden="true"><Braces size={13} strokeWidth={2.4} /></span>
+        <span>{text}</span>
+      </p>
+      {reply ? (
+        <p className="attempt-challenge-a">{reply === "kept" ? "我确定，满足要求。" : "我改判：存在问题。"}</p>
+      ) : onReply && (
+        <div className="attempt-choices" role="group" aria-label="回答追问">
+          <button type="button" className="attempt-choice" disabled={busy} onClick={() => onReply(true)}>我确定，满足要求</button>
+          <button type="button" className="attempt-choice" disabled={busy} onClick={() => onReply(false)}>我改判：存在问题</button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function where(lines: number[]): string {
@@ -74,7 +101,7 @@ function SelectableCode({ caption, lines, start, selected, onSelect, disabled }:
   );
 }
 
-export default function Attempt({ quiz, onChange, compact = false, onNext, nextLabel = "下一题" }: Props) {
+export default function Attempt({ quiz, onChange, compact = false, onNext, nextLabel = "下一题", showRecap = true }: Props) {
   const shownAt = useRef(Date.now());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -171,16 +198,21 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
         </div>
       )}
 
+      {quiz.challenge && state !== "done" && (
+        <Challenge text={quiz.challenge.text} reply={quiz.challenge.reply} busy={busy !== null}
+          onReply={state === "challenge" ? (keep) => call("challenge", () => api.quizChallenge(quiz.attemptId, keep)) : undefined} />
+      )}
+
       {state === "locate" && (
         <div className="attempt-ask">
-          <h3>{quiz.judged === "bug" ? "问题在哪几行？" : "哪些行支持你的判断？"}</h3>
+          <h3>{(quiz.current ?? quiz.judged) === "bug" ? "问题在哪几行？" : "哪些行支持你的判断？"}</h3>
           <p className={picked.length ? "attempt-picked" : "attempt-picked empty"} role="status">
             {picked.length ? `已选${where(picked)}` : "点行号选一行；按住 Shift 再点一行，选连续的几行"}
           </p>
           <div className="attempt-confirm">
             <button type="button" className="btn btn-primary" disabled={!picked.length || busy !== null}
               onClick={() => call("locate", () => api.quizLocate(quiz.attemptId, picked))}>
-              {busy === "locate" ? "正在保存" : quiz.judged === "bug" ? "确认位置" : "确认依据"}
+              {busy === "locate" ? "正在保存" : (quiz.current ?? quiz.judged) === "bug" ? "确认位置" : "确认依据"}
             </button>
           </div>
         </div>
@@ -220,7 +252,9 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
         <div className="attempt-feedback">
           <p className={result.outcome === "right" ? "attempt-verdict ok" : "attempt-verdict bad"}>
             {result.outcome === "right" ? <CircleCheck size={18} aria-hidden="true" /> : <CircleX size={18} aria-hidden="true" />}
-            {quiz.judged === "ok" ? "你选了「满足要求」" : "你选了「存在问题」"}{result.lines?.length ? `，并指出${where(result.lines)}` : ""}。
+            {quiz.judged === "ok" ? "你选了「满足要求」" : "你选了「存在问题」"}
+            {result.challenge === "kept" ? "，追问以后仍坚持" : result.challenge === "flipped" ? "，追问以后改判为「存在问题」" : ""}
+            {result.lines?.length ? `，并指出${where(result.lines)}` : ""}。
             {result.explanation ? ` ${result.explanation}` : ""}
           </p>
 
@@ -228,6 +262,7 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
             <CodeBlock caption={result.bugLines?.length ? `问题在${where(result.bugLines)}，可以这样改` : "可以这样改"}
               lines={result.fix.lines} mark={result.fix.mark} start={result.fix.start ?? start} copyable={false} />
           )}
+          {showRecap && <Recap attemptId={quiz.attemptId} />}
           {onNext && (
             <div className="attempt-confirm">
               <button type="button" className="btn btn-primary" onClick={onNext}>{nextLabel}</button>
@@ -238,13 +273,6 @@ export default function Attempt({ quiz, onChange, compact = false, onNext, nextL
       {state === "done" && result?.outcome === "skipped" && onNext && <button className="btn btn-primary" type="button" onClick={onNext}>{nextLabel}</button>}
 
       {error && <p className="error-text" role="alert">{error}</p>}
-      {state !== "done" && (
-        <div className="quiz-skip">
-          <button type="button" className="link link-muted" disabled={busy !== null} onClick={() => call("skip", () => api.quizSkip(quiz.attemptId))}>
-            <SkipForward size={14} aria-hidden="true" />先跳过
-          </button>
-        </div>
-      )}
     </div>
   );
 }

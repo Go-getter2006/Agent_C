@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .. import config, llm
 from .. import models as m
-from ..taxonomy import SKILLS, course_prompt, errors_for_course, is_error_code, is_skill_code
+from ..taxonomy import SKILLS, course_prompt, errors_for_course, is_error_code, is_skill_code, kp_of_skill
 from ..taxonomy.errors import error_kp
 from ..taxonomy.skills import skills_for_error
 from ..xdoj.assemble import assemble_submission
@@ -61,7 +61,7 @@ def pick_skill(error_code: str, testcase_ids: list[int], plabel: m.ProblemLabel 
     kp = error_kp(error_code)
     if kp:
         for code in related:
-            if code.startswith(kp):
+            if kp_of_skill(code) == kp:
                 return code
     if related:
         return related[0]

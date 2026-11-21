@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from . import config, db, llm, mastery
 from . import models as m
-from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, LEVEL_WEAK, SKILLS, kp_of_skill, skill_name, skills_of_kp
+from .taxonomy import KNOWLEDGE_POINTS, LEVEL_NONE, LEVEL_WEAK, SKILLS, kp_of_skill, kp_rank, skill_name, skills_of_kp
 from .taxonomy.prereq import CROSS_EDGES, CROSS_NOTES, parents_of
 
 log = logging.getLogger("cross")
@@ -291,7 +291,7 @@ def joint_state(s: Session, user_id: str) -> list[dict]:
                                          "eta": eta, "p": st.p, "w": 1 + st.raw, "predicted": st.predicted})
     kp_states = mastery.kp_states(s, user_id, model="v2", with_predicted=True)
     out = []
-    for kp, items in sorted(by_kp.items()):
+    for kp, items in sorted(by_kp.items(), key=lambda kv: kp_rank(kv[0])):
         real = [x for x in items if not x["predicted"]]
         items = real or items   # 有证据的技能优先（和知识点的档位一个算法）
 
@@ -314,7 +314,7 @@ def c_foundation(s: Session, user_id: str) -> list[dict]:
         known = st is not None and not st.predicted
         rows.append({"code": c_kp, "name": KNOWLEDGE_POINTS.get(c_kp, ""),
                      "level": st.level if known else LEVEL_NONE, "p": round(st.p, 2) if known else None,
-                     "supports": [{"code": d, "name": KNOWLEDGE_POINTS.get(d, "")} for d in sorted(d_kps)]})
+                     "supports": [{"code": d, "name": KNOWLEDGE_POINTS.get(d, "")} for d in sorted(d_kps, key=kp_rank)]})
     return rows
 
 

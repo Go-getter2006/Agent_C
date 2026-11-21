@@ -38,7 +38,7 @@ def test_adopts_old_create_all_database(tmp_path, monkeypatch):
     assert "act" in {c["name"] for c in insp.get_columns("chat_steps")}
     assert {"agent_assessments", "model_weights", "cross_links"} <= set(insp.get_table_names())
     with db.engine().connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0016"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0017"
     assert "discussion" in {c["name"] for c in insp.get_columns("quiz_attempts")}
     assert "tidy_version" in {c["name"] for c in insp.get_columns("xdoj_problem_texts")}
     assert db.migrate() == "upgraded"            # 再启动一次：什么都不用做
@@ -49,5 +49,5 @@ def test_new_database_is_created_and_stamped(tmp_path):
     db.init_engine(f"sqlite:///{tmp_path / 'new.sqlite3'}")
     assert db.migrate() == "created"
     with db.engine().connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0016"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0017"
     db.engine().dispose()

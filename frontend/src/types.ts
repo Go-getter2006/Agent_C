@@ -73,6 +73,13 @@ export type Block =
 
 export type HelpAction = "think" | "hint" | "tell";
 
+export interface QuizRecap {
+  intro: string;
+  items: { kind: "problem" | "quiz"; key?: string; attemptId?: number; title: string; text: string }[];
+  analysis?: string;   // 大模型对这几次错在哪的分析（没写出合格的就是空的，只列事实）
+  outro: string;
+}
+
 export interface QuizResult {
   outcome: "right" | "wrong" | "skipped";
   headline: string;
@@ -84,6 +91,7 @@ export interface QuizResult {
   lines?: number[];
   bugLines?: number[];
   origin?: { key: string; title: string } | null;
+  challenge?: "kept" | "flipped" | null;   // 判断满足要求以后被追问：坚持还是改判
 }
 
 export interface QuizView {
@@ -93,10 +101,12 @@ export interface QuizView {
   code: string[];
   startLine?: number;
   mark?: number[];
-  state: "confidence" | "judge" | "locate" | "edit" | "done";
+  state: "confidence" | "judge" | "challenge" | "locate" | "edit" | "done";
   confidence: string | null;
   judged: "bug" | "ok" | null;
-  protocol?: number;          // 2：独立作答（先判断 → 再选位置/依据 → 判断有问题的修改）
+  protocol?: number;          // 2：独立作答（先判断 → 再选位置/依据 → 判断有问题的修改）；3：判断满足要求的改成智能体追问
+  current?: "ok" | "bug" | null;   // 现在的判断（被追问后改判的是 bug；首次判断仍是 judged）
+  challenge?: { text: string; reply: "kept" | "flipped" | null };
   lines?: number[];           // 学生首次选的行
   hints?: string[];
   moreHints?: boolean;

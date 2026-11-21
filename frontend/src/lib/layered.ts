@@ -121,8 +121,10 @@ function bandLayers(codes: string[], edges: LEdge[], pullRight: Set<string>): Ma
       if (indeg.get(k) === 0) queue.push(k);
     }
   }
+  // 万一有环（先修表是人工改的），环上的点排不进拓扑序：接在最后，按已经排好的父节点放，页面不至于空白
+  for (const c of codes) if (!order.includes(c)) order.push(c);
   const layer = new Map<string, number>();
-  for (const c of order) layer.set(c, Math.max(-1, ...parents.get(c)!.map((p) => layer.get(p)!)) + 1);
+  for (const c of order) layer.set(c, Math.max(-1, ...parents.get(c)!.map((p) => layer.get(p) ?? -1)) + 1);
   const maxL = Math.max(0, ...layer.values());
   for (let i = order.length - 1; i >= 0; i--) {
     const c = order[i];

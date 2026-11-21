@@ -129,3 +129,59 @@ def test_completely_lost_student_gets_example_instead_of_recall_loop(demo):
         assert any(b["t"] == "code" for b in out[-1].content["blocks"])
         text = "\n".join(b.get("text", "") for b in out[-1].content["blocks"])
         assert "还记得" not in text
+
+
+def test_homework_reply_is_grounded_in_the_failing_case_and_the_code(demo):
+    """作业引导走真实的对话流程：写回复的大模型拿到没通过的那组输入、期望输出、他程序的输出，以及他这次提交的代码。"""
+    from sqlalchemy import select
+
+    from app.xdoj.assemble import assemble_submission
+
+    sid = demo["server_id"]
+    calls: list[tuple[str, str]] = []
+
+    def backend(messages, *_args):
+        system, user = messages[0]["content"], messages[1]["content"]
+        calls.append((system, user))
+        if "【这次的任务】" in user:   # 写回复
+            return json.dumps({"before": "先看看你的程序在没通过的那组数据上输出了什么。", "after": "你觉得问题出在哪一行？"},
+                              ensure_ascii=False), 10, 10
+        return json.dumps({"intent": "DEBUG", "skillCode": "", "hasAttempt": True, "icap": "active",
+                           "answerCorrect": None, "understood": False}), 10, 10
+
+    llm.set_backend(backend)
+    try:
+        with db.session_scope() as s:
+            sub = s.scalars(select(m.Submission).where(
+                m.Submission.server_id == sid, m.Submission.problem_id == 406, m.Submission.user_id == "2500000001")
+                .order_by(m.Submission.submission_id.desc())).first()
+            ev = assemble_submission(s, sid, sub.submission_id)
+            failed = [t for t in ev["testCases"] if t.get("passed") is False and t.get("programOutput") is not None]
+            assert failed, "演示数据里这次提交应当有没通过、取到了程序输出的测试点"
+            workflow.handle(s, "2500000001", (sid, 406), "这次为什么又错了？我觉得逻辑没问题")
+        prompt = next(u for _sys, u in calls if "【这次的任务】" in u)
+        case = failed[0]
+        for value in (case["standardInput"], case["standardOutput"], case["programOutput"]):
+            assert json.dumps(value, ensure_ascii=False) in prompt   # 没通过那组的输入、期望输出、他的输出都在（原样）
+        assert "int max = 0;" in prompt                     # 他这次提交的代码（带行号）
+        assert "2500000001" not in prompt                   # 不带学号
+    finally:
+        llm.set_backend(None)
+
+
+def test_failure_notice_asks_about_the_diagnosed_spot(demo):
+    """提交没过时智能体先说的那句：按程序对这次提交的诊断问（哪类情况、哪个变量），不说测试数据。"""
+    from app.chat import proactive
+    from app.xdoj.assemble import assemble_submission
+
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        sub = s.get(m.Submission, (sid, 537200))
+        text = proactive._failure_text(s, sub, 2, proactive._primary(s, sub))
+        assert text.startswith("你的第 2 次提交没有通过（5 组过 3 组）。") and "全是负数" in text and "`max`" in text
+        for case in assemble_submission(s, sid, 537200)["testCases"]:
+            for value in (case.get("standardInput"), case.get("standardOutput"), case.get("programOutput")):
+                if value and len(value.strip()) > 2:
+                    assert value.strip() not in text
+        ce = proactive._failure_text(s, s.get(m.Submission, (sid, 537199)), 1, proactive._primary(s, s.get(m.Submission, (sid, 537199))))
+        assert ce.startswith("你的第 1 次提交编译没有通过。") and ce.count("编译没有通过") == 1

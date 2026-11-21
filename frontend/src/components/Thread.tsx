@@ -398,7 +398,7 @@ function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend
               <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} onCopy={onCopy} />
             ),
           )}
-          {message.quiz && (message.quiz.protocol === 2
+          {message.quiz && ((message.quiz.protocol ?? 1) >= 2
             ? <Attempt quiz={message.quiz} onChange={onQuiz} compact />
             : <Quiz quiz={message.quiz} layout={layout} onChange={onQuiz} />)}
           {message.actions.length > 0 && (

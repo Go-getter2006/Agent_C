@@ -170,15 +170,6 @@ export default function Quiz({ quiz, layout, onChange }: Props) {
       )}
 
       {error && <p className="error-text" role="alert">{error}</p>}
-
-      {!done && (
-        <div className="quiz-skip">
-          <button type="button" className="link link-muted" disabled={busy !== null}
-            onClick={() => call("skip", () => api.quizSkip(quiz.attemptId))}>
-            <SkipForward size={14} aria-hidden="true" />先跳过
-          </button>
-        </div>
-      )}
     </div>
   );
 }

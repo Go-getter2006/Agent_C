@@ -229,22 +229,7 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
             ctx.source, ctx.source_kind = pasted, "pasted"
 
     # 第 4 步：诊断。程序优先：读已有的错误标注
-    tlabels = labeler.testcase_labels(s, ctx.plabel)
-    failed_ids = [t["testcaseId"] for t in (ctx.evidence or {}).get("testCases", []) if t.get("passed") is False]
-    primary = next((lab for lab in ctx.labels if lab.role == "primary"), None)
-    if ctx.has_failure and primary is not None:
-        ctx.root_error, ctx.root_skill = primary.error_code, primary.skill_code
-        ctx.diag_confidence, ctx.diag_line = primary.confidence, primary.line
-    elif ctx.has_failure:
-        skills = [tlabels[t].skill_code for t in failed_ids if t in tlabels and not tlabels[t].is_ordinary]
-        ctx.root_skill = skills[0] if skills else (ctx.plabel.primary_skill if ctx.plabel else "")
-        ctx.diag_confidence = 0.3
-    else:
-        ctx.root_skill = ctx.plabel.primary_skill if ctx.plabel else ""
-        ctx.diag_confidence = 1.0
-    special = [tlabels[t] for t in failed_ids if t in tlabels and not tlabels[t].is_ordinary]
-    match = [t for t in special if t.skill_code == ctx.root_skill] or special
-    ctx.situation = match[0].situation if match else ""
+    _diagnose(s, ctx)
 
     # 第 5 步：状态
     if ctx.root_skill:
@@ -263,6 +248,43 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
     if rnd is not None and sub is not None and rnd.submission_id and rnd.submission_id != sub.submission_id \
             and rnd.error_code and rnd.error_code == ctx.root_error and sub.submission_id > rnd.submission_id:
         ctx.same_error_resubmit = True  # 带着同一个错误又交了一次
+    return ctx
+
+
+def _diagnose(s: Session, ctx: Ctx) -> None:
+    """第 4 步：诊断。程序优先：读已有的错误标注（标注时比对过没通过那几组的期望输出和他程序的输出、看过代码）；
+    没有标注时看没通过的测试点主要考哪个技能。“哪类情况”取没通过的那组的标注（不是测试数据本身）。"""
+    tlabels = labeler.testcase_labels(s, ctx.plabel)
+    failed_ids = [t["testcaseId"] for t in (ctx.evidence or {}).get("testCases", []) if t.get("passed") is False]
+    primary = next((lab for lab in ctx.labels if lab.role == "primary"), None)
+    if ctx.has_failure and primary is not None:
+        ctx.root_error, ctx.root_skill = primary.error_code, primary.skill_code
+        ctx.diag_confidence, ctx.diag_line = primary.confidence, primary.line
+    elif ctx.has_failure:
+        skills = [tlabels[t].skill_code for t in failed_ids if t in tlabels and not tlabels[t].is_ordinary]
+        ctx.root_skill = skills[0] if skills else (ctx.plabel.primary_skill if ctx.plabel else "")
+        ctx.diag_confidence = 0.3
+    else:
+        ctx.root_skill = ctx.plabel.primary_skill if ctx.plabel else ""
+        ctx.diag_confidence = 1.0
+    special = [tlabels[t] for t in failed_ids if t in tlabels and not tlabels[t].is_ordinary]
+    match = [t for t in special if t.skill_code == ctx.root_skill] or special
+    ctx.situation = match[0].situation if match else ""
+
+
+def for_submission(s: Session, sub: m.Submission, course: str = "C") -> Ctx:
+    """一次提交的取证和诊断（第 3、4 步），不需要对话回合。提交没过时的主动消息用它：问的是诊断出来的那一处。"""
+    ctx = Ctx(user_id=sub.user_id, thread=(sub.server_id, sub.problem_id), course=course)
+    ctx.problem = catalog.problem_info(s, sub.server_id, sub.problem_id)
+    ctx.plabel = labeler.current_problem_label(s, sub.server_id, sub.problem_id)
+    ctx.submission = sub
+    ctx.evidence = assemble_submission(s, sub.server_id, sub.submission_id, include_problem_text=False)
+    ctx.source = ctx.evidence.get("sourceCode")
+    ctx.source_kind = "submission"
+    ctx.labels = list(s.scalars(select(m.SubmissionLabel).where(
+        m.SubmissionLabel.server_id == sub.server_id, m.SubmissionLabel.submission_id == sub.submission_id,
+        m.SubmissionLabel.is_current.is_(True))).all())
+    _diagnose(s, ctx)
     return ctx
 
 

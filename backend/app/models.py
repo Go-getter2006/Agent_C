@@ -639,6 +639,7 @@ class QuizItem(Base):
 
 class QuizAttempt(Base):
     discussion: Mapped[list | None] = mapped_column(JSON, nullable=True)  # 本题反馈后的答疑，独立于测量事件和作业会话
+    recap: Mapped[dict | None] = mapped_column(JSON, nullable=True)       # 做完以后回顾他以前在这里出过的错（app/recap.py）
     __tablename__ = "quiz_attempts"
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
@@ -937,7 +938,7 @@ class ProblemPlan(Base):
     server_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     problem_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     steps: Mapped[list] = mapped_column(JSON, default=list)   # [{"title","how","kp"}]
-    source: Mapped[str] = mapped_column(String(16), default="template")   # llm / template
+    source: Mapped[str] = mapped_column(String(16), default="llm")   # llm：大模型按题面分的；failed：大模型没给出合格步骤（不出流程图）
     version: Mapped[str] = mapped_column(String(16), default="")
     content_hash: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[Dt] = _ts()

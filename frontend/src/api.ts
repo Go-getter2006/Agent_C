@@ -1,6 +1,6 @@
 // 和后端通信。出错时抛 ApiError，message 是可以直接给人看的一句中文。
 import type {
-  AuthInfo, DiffView, Homework, Me, Message, ProblemDetail, ProblemRow, ProgressData, QuizView, ReviewCurrent,
+  AuthInfo, DiffView, Homework, Me, Message, ProblemDetail, ProblemRow, ProgressData, QuizRecap, QuizView, ReviewCurrent,
   ReviewAttemptRow, ReviewPage, ReviewTurn, StatusInfo, SubmissionChange, SubmissionView, Topic,
 } from "./types";
 
@@ -79,11 +79,12 @@ export const api = {
     post<QuizView>(`/api/quiz/${id}/judge`, { hasBug, confidence: confidence ?? null, elapsedMs }),
   quizViewed: (id: number) => post(`/api/quiz/${id}/viewed`),
   quizLocate: (id: number, lines: number[]) => post<QuizView>(`/api/quiz/${id}/locate`, { lines }),
+  quizChallenge: (id: number, keep: boolean) => post<QuizView>(`/api/quiz/${id}/challenge`, { keep }),
+  quizRecap: (id: number) => get<{ recap: QuizRecap | null }>(`/api/quiz/${id}/recap`),
   quizSample: (id: number, code: string) => post<QuizView>(`/api/quiz/${id}/sample`, { code }),
   quizHint: (id: number) => post<QuizView>(`/api/quiz/${id}/hint`),
   quizSubmit: (id: number, code: string) => post<QuizView>(`/api/quiz/${id}/submit`, { code }),
   quizRun: (id: number, body: { code?: string; choice?: number }) => post<QuizView>(`/api/quiz/${id}/run`, body),
-  quizSkip: (id: number) => post<QuizView>(`/api/quiz/${id}/skip`),
 
   progress: () => get<ProgressData>("/api/progress"),
   review: () => get<ReviewPage>("/api/review"),

@@ -14,7 +14,7 @@ from app import models as m
 from app.web.app import create_app
 
 UID = "2599000088"
-KP_SKILL = "C06.03.02"     # 最值、求和、统计
+KP_SKILL = "C06.03.02"     # 求最值
 OTHER_SKILL = "C05.03.01"  # for
 _n = [0]
 

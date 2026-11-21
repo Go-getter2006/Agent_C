@@ -35,6 +35,8 @@ from sqlalchemy.orm import Session
 
 from . import db
 from . import models as m
+from .diagnosis import CHALLENGE_VERSION
+from .quiz import challenge_state
 from .taxonomy import JUDGEMENTS, KNOWLEDGE_POINTS, course_of, error_name, kp_of_skill, skill_name
 
 KINDS: dict[str, str] = {
@@ -232,7 +234,9 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                       "judgeCorrect": a.judge_correct, "firstLines": a.first_lines, "locateHit": a.locate_hit,
                       "firstFixPass": a.first_fix_pass, "firstFixClean": a.first_fix_clean, "hints": a.hints,
                       "sampleRuns": a.sample_runs, "skipped": a.skipped, "durationMs": a.duration_ms,
-                      "events": [{k: v for k, v in e.items() if k in ("t", "kind", "misjudge", "pass", "triggerAt", "triggerReason", "phase", "secondsSinceTrigger")}
+                      "challenge": challenge_state(a) if a.protocol >= 3 else None,
+                      "challengeVersion": CHALLENGE_VERSION if a.protocol >= 3 else None,
+                      "events": [{k: v for k, v in e.items() if k in ("t", "kind", "misjudge", "pass", "triggerAt", "triggerReason", "phase", "secondsSinceTrigger", "keep")}
                                  for e in (a.events or [])]})
 
     if "round" in kinds:
