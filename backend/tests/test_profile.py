@@ -197,6 +197,7 @@ def test_teacher_profile_without_review(demo):
         assert d["profile"] and d["assessments"][0]["levelName"] == "能解释" and d["dialogue"]["total"] >= 2
         assert "agentReview" not in d and not hasattr(profile, "agent_review")
         key = f"c{demo['server_id']}-31"
+        c.post("/api/auth/login", json={"loginName": "dev-test", "password": "dev-pass"})   # 研究页只给开发者
         g = c.get(f"/api/teacher/classes/{key}/graph").json()
         assert g["fusion"]["weights"][0]["dim"] == "bias"
         # 一致率在研究 · 理解评估，对话行为和表现在研究 · 求助效果

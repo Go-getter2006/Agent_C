@@ -60,6 +60,10 @@ DEV_SECRET_FALLBACK = "dev-only-not-for-production"
 SYNC_IN_WEB = _env("SYNC_IN_WEB", "1") == "1"
 AUTH_MODE = _env("AUTH_MODE", "xdoj")  # xdoj：学生去 XDOJ 核对密码；dev：真实名单里的学生也能用演示口令（只用于调试）
 DEV_LOGIN_PASSWORD = _env("DEV_LOGIN_PASSWORD", "")
+# 开发者账号：教师端的“研究”和“数据”两块（模型检验、理解评估、求助效果、日志申请、数据源）和学生明细的模型细节只给它看，
+# 能看这门课所有老师的班。一个账号一个密码，登录时和大家一样选 C 语言或数据结构。两项都填才能登录。
+DEV_ACCOUNT = _env("DEV_ACCOUNT", "").strip()
+DEV_PASSWORD = _env("DEV_PASSWORD", "")
 SESSION_HOURS = _env_int("SESSION_HOURS", 12)
 
 # 大模型（DeepSeek，OpenAI 兼容接口）。不填 key 时，对话走规则分析和固定模板。

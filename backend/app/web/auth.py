@@ -107,6 +107,27 @@ def _dev_password_ok(password: str) -> bool:
         password.encode("utf-8"), config.DEV_LOGIN_PASSWORD.encode("utf-8"))
 
 
+def _developer_password_ok(password: str) -> bool:
+    return bool(config.DEV_PASSWORD) and hmac.compare_digest(password.encode("utf-8"), config.DEV_PASSWORD.encode("utf-8"))
+
+
+def _developer_login(s: Session, password: str, course: str, key: str, response: Response) -> dict:
+    """开发者账号（.env 的 DEV_ACCOUNT、DEV_PASSWORD）：第一次登录时建好（角色 admin），以后照样选课程登录。"""
+    if not _developer_password_ok(password):
+        record_failure(key)
+        raise HTTPException(status_code=401, detail="账号或密码不对。")
+    user = s.scalar(select(m.User).where(m.User.login_name == config.DEV_ACCOUNT))
+    if user is None:
+        user = m.User(role="admin", login_name=config.DEV_ACCOUNT, display_name="开发者")
+        s.add(user)
+        s.flush()
+    elif user.role != "admin":
+        raise HTTPException(status_code=409, detail="开发者账号和已有的学生或老师重名了，请在 .env 里换一个 DEV_ACCOUNT。")
+    accounts.touch_login(s, user)
+    set_login_cookie(response, user, course)
+    return {"role": user.role, "name": user.display_name, "course": course}
+
+
 def _student_servers(s: Session, user: m.User, course: str | None = None) -> list[m.Server]:
     ids = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id or user.login_name)}
     rows = [srv for srv in (s.get(m.Server, i) for i in sorted(ids)) if srv is not None]
@@ -134,6 +155,8 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
     course = check_course(body.course)
     key = f"{request.client.host if request.client else ''}:{name}"
     throttle(key)
+    if config.DEV_ACCOUNT and name == config.DEV_ACCOUNT:
+        return _developer_login(s, body.password, course, key, response)
     user = s.scalar(select(m.User).where(m.User.login_name == name))
     if user is None:
         # 不在名单里的账号：去这门课的 XDOJ 试登一次，看是不是教师（userType 1）。是教师就登记、进入教师端；
@@ -176,6 +199,7 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
             raise HTTPException(status_code=401, detail="学号或密码不对。用的是 XDOJ 的学号和密码。")
     else:
         # 管理员、演示教师用演示口令；真实的老师不在用户表里叫这个名字（是“服务器:工号”），走上面的 XDOJ 试登
+        # （开发者账号 DEV_ACCOUNT 在最前面单独处理，用自己的密码）
         if not _dev_password_ok(body.password):
             record_failure(key)
             raise HTTPException(status_code=401, detail="账号或密码不对。")

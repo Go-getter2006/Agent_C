@@ -97,7 +97,7 @@ def test_decisions_are_exported_but_not_shown_to_students(demo):
                             probability=0.5, candidates=[{"hasBug": True, "p": 0.5}, {"hasBug": False, "p": 0.5}],
                             context={"bugRule": "random"}, ref={"attempt": 1}))
     with TestClient(create_app()) as c:
-        c.post("/api/auth/login", json={"loginName": "demo-teacher", "password": "test-pass"})
+        c.post("/api/auth/login", json={"loginName": "dev-test", "password": "dev-pass"})   # 日志申请只给开发者
         body = {"ids": UID, "dateFrom": "2026-06-01", "dateTo": "2027-05-31", "format": "json",
                 "kinds": ["decision"], "purpose": "论文数据分析"}
         resp = c.post("/api/teacher/logs", json=body)
