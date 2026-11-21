@@ -405,14 +405,14 @@ def run_pending(limit: int | None = None) -> int:
     """后台空闲时调用：评几个刚结束的对话回合，和几道没问过问题、自己改对的题。返回评了几个。"""
     n = 0
     limit = limit or config.AGENT_ASSESS["batch"]
-    with db.session_scope() as s:
+    with db.session_scope() as s, db.releasing(s):   # 调大模型之前先提交（db.releasing）
         for rnd in pending_rounds(s, limit):
             try:
                 if assess_round(s, rnd) is not None:
                     n += 1
             except Exception:  # 一个回合出错不影响别的
                 log.exception("理解评估出错（回合 %s）", rnd.id)
-    with db.session_scope() as s:
+    with db.session_scope() as s, db.releasing(s):
         for sub in pending_code(s, limit):
             try:
                 if assess_code(s, sub) is not None:

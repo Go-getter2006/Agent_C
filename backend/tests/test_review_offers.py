@@ -255,3 +255,57 @@ def test_review_ranks_evidence_above_age_and_waits_before_rechecking(database):
         states = mastery.skill_states(s, UID, at=now, model="v2")
         probs = review.lowest_probabilities([review.beta_of(states.get(r.skill_code)) for r in due])
         assert max(zip(probs, [r.id for r in due]))[1] == weak.id
+
+
+def test_review_page_does_not_wait_for_a_quiz_being_prepared(demo, monkeypatch):
+    """后台备复习题、正在等大模型的时候，学生打开复习页（要记一条事件）不能等它。
+    以前备题拿着 SQLite 的写锁调大模型，页面等满 30 秒报 database is locked，显示“服务器出问题了”。"""
+    import threading
+    import time as _time
+
+    from fastapi.testclient import TestClient
+
+    from app import llm, quizgen
+    from app.web.app import create_app
+
+    who = "2500000001"   # 演示数据里的学生（这个文件的 UID 是测试用的空账号）
+    asking, done = threading.Event(), threading.Event()
+
+    def slow(messages, *_a):
+        asking.set()
+        done.wait(20)
+        return "{}", 1, 1
+
+    with db.session_scope() as s:
+        for it in s.scalars(select(m.QuizItem)).all():
+            it.verified = False                           # 题库里没有能用的：只能找大模型出
+        for r in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == who)).all():
+            r.attempt_id = None
+        for e in s.scalars(select(m.UiEvent).where(m.UiEvent.kind.in_(("review_wait", "review_item_wait")))).all():
+            s.delete(e)                                   # 演示数据入库时出过题、记了“过一会儿再试”
+    monkeypatch.setattr(quizgen, "from_own_code", lambda *a: None)
+    llm.set_backend(slow)
+
+    outcome: list = []
+
+    def prepare():
+        try:
+            with db.session_scope() as s, db.releasing(s):
+                outcome.append(review.prepare(s, who, "C"))
+        except Exception as exc:   # noqa: BLE001
+            outcome.append(exc)
+            asking.set()
+
+    worker = threading.Thread(target=prepare)
+    try:
+        worker.start()
+        assert asking.wait(20) and not outcome, outcome   # 后台正在等大模型
+        with TestClient(create_app()) as c:
+            t = _time.monotonic()
+            assert c.post("/api/auth/login", json={"loginName": who, "password": "test-pass"}).status_code == 200
+            r = c.get("/api/review")                          # 记一条“打开复习”事件：要写库
+            assert r.status_code == 200 and _time.monotonic() - t < 5
+    finally:
+        done.set()
+        worker.join(30)
+        llm.set_backend(None)

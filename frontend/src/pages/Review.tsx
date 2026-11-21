@@ -4,7 +4,7 @@
 //   之后可以在下面就这道题提问。反馈之前输入框不能用（不提前给对错、错误行和改法）。
 // - 中途离开，回来还是同一道、同一步；做完了点“下一题”接着做；题还在准备：说一声，好了自己出现（不用点）。
 // - 复习安排里每一项都能点“去复习”：新开一段对话，智能体先说“正在出题”，题好了就在对话里作答（不等到期）。
-import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowUp, CalendarClock, CircleCheck, List } from "lucide-react";
 import { api } from "../api";
@@ -55,7 +55,7 @@ function RequestChat({ itemId, title, layout, onReady, onAsked, onDone }: {
     return () => { alive = false; };
   }, [itemId, round]); // eslint-disable-line react-hooks/exhaustive-deps
   if (quiz) {
-    return <ReviewChat quiz={quiz} lead={lead} layout={layout} onChange={(q) => { setQuiz(q); if (q.state === "done") onReady(q); }}
+    return <ReviewChat key={quiz.attemptId} quiz={quiz} lead={lead} layout={layout} onChange={(q) => { setQuiz(q); if (q.state === "done") onReady(q); }}
       onNext={onDone} nextLabel="看复习安排" onAsked={onAsked} />;
   }
   return (
@@ -126,6 +126,9 @@ function ReviewList({ d, currentTitle, waiting, history, requested, selected, on
 
 const newRequestId = () => Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
 
+/** 取过的“做完以后的一问一答”，切回来直接有（不先画上面、再等它取到） */
+const turnsCache = new Map<number, ReviewTurn[]>();
+
 /** 右边的一段对话：为什么复习这里、这道小题（就在对话里作答）、做完以后的一问一答。 */
 function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }: {
   quiz: QuizView; lead?: string; layout: Layout; onChange: (q: QuizView) => void;
@@ -133,26 +136,60 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
 }) {
   const done = quiz.state === "done" && quiz.result?.outcome !== "skipped";
   const recap = useRecap(quiz.attemptId, done, quiz.recap);
-  const [turns, setTurns] = useState<ReviewTurn[]>([]);
+  // 每道题一个 ReviewChat（key 是作答编号）：一问一答先用手上有的（随题目一起给的、上次取过的），没有才去取
+  const [turns, setTurns] = useState<ReviewTurn[]>(() => turnsCache.get(quiz.attemptId) ?? quiz.turns ?? []);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState<string | null>(null);
   const [error, setError] = useState("");
   const token = useRef("");
   const scroller = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setTurns([]);
-    setError("");
-    if (!done) return;
-    let alive = true;
-    api.reviewTurns(quiz.attemptId).then((r) => { if (alive) setTurns(r.turns); }).catch(() => undefined);
-    return () => { alive = false; };
-  }, [quiz.attemptId, done]);
-
-  useEffect(() => {
+  const list = useRef<HTMLDivElement>(null);
+  // 做完的题停在最底下（反馈、回顾、之后的提问）：画出来之前就滚到底，内容后来变高（代码上色、回顾到了）也跟着；
+  // 他自己往上翻了就不再拉回来，再提问时回到底部。没做完的题从头看。
+  const pinned = useRef(done);
+  const doneRef = useRef(done);
+  doneRef.current = done;
+  const toBottom = () => {
     const el = scroller.current;
-    if (el && (turns.length || asking || recap)) el.scrollTop = el.scrollHeight;
-  }, [turns.length, asking, recap]);
+    if (el) el.scrollTop = el.scrollHeight;
+  };
+
+  useEffect(() => {
+    setError("");
+    if (!done || quiz.turns) return;
+    let alive = true;
+    api.reviewTurns(quiz.attemptId).then((r) => {
+      if (!alive) return;
+      turnsCache.set(quiz.attemptId, r.turns);
+      setTurns(r.turns);
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [quiz.attemptId, done]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {   // 后台取到更新的一问一答（比如别处又问了）：换上
+    if (quiz.turns && quiz.turns.length > turns.length) setTurns(quiz.turns);
+  }, [quiz.turns]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {   // 这道题刚做完、或者他刚提了问：回到底部
+    if (done || asking) pinned.current = true;
+  }, [done, asking]);
+
+  useLayoutEffect(() => {   // 每次画之前：该停在底部的就先滚到底（不先露出顶部再跳）
+    if (pinned.current && doneRef.current) toBottom();
+  });
+
+  useLayoutEffect(() => {   // 内容自己变高（代码上色、图片、回顾）：还停在底部的跟着到底
+    const el = list.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => { if (pinned.current && doneRef.current) toBottom(); });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const onScroll = () => {
+    const el = scroller.current;
+    if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
 
   const send = async () => {
     const q = text.trim();
@@ -162,6 +199,7 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
     setError("");
     try {
       const r = await api.reviewAsk(quiz.attemptId, q, token.current);
+      turnsCache.set(quiz.attemptId, r.turns);
       setTurns(r.turns);
       setText("");
       token.current = "";
@@ -181,8 +219,8 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
 
   return (
     <>
-      <div className="chat-scroll" ref={scroller}>
-        <div className="chat-list" aria-live="polite">
+      <div className="chat-scroll" ref={scroller} onScroll={onScroll}>
+        <div className="chat-list" aria-live="polite" ref={list}>
           {lead && (
             <div className="msg msg-agent">
               <AgentMark />
@@ -255,7 +293,7 @@ function HistoryChat({ id, layout, onAsked }: { id: number; layout: Layout; onAs
   const one = useLoad(() => api.reviewAttempt(id), [id], 0, false, `s:review-attempt:${id}`);
   if (one.error) return <div className="chat-scroll"><div className="chat-list"><Problem message={one.error} onRetry={one.reload} /></div></div>;
   if (!one.data) return <div className="chat-scroll"><div className="chat-list"><Loading what="正在取这道题" /></div></div>;
-  return <ReviewChat quiz={one.data.quiz} layout={layout} onChange={() => undefined} onAsked={onAsked} />;
+  return <ReviewChat key={one.data.quiz.attemptId} quiz={one.data.quiz} layout={layout} onChange={() => undefined} onAsked={onAsked} />;
 }
 
 /** 复习安排：今天的情况、接下来、已经巩固。 */
@@ -351,7 +389,7 @@ export default function Review() {
   if (data.error && !d) body = <div className="chat-scroll"><div className="chat-list"><Problem message={data.error} onRetry={data.reload} /></div></div>;
   else if (!d || (key === "now" && !quiz && nexting)) body = <div className="chat-scroll"><div className="chat-list"><Loading what="正在准备复习题" /></div></div>;
   else if (key === "now" && quiz) {
-    body = <ReviewChat quiz={quiz} lead={quiz.state !== "done" ? current?.lead : undefined} layout={layout} onChange={update}
+    body = <ReviewChat key={quiz.attemptId} quiz={quiz} lead={quiz.state !== "done" ? current?.lead : undefined} layout={layout} onChange={update}
       onNext={next} nextLabel={(d.due.length ?? 0) > 1 ? "下一题" : "看复习安排"} onAsked={history.reload} />;
   } else if (requestId !== null) {
     body = <RequestChat key={requestId} itemId={requestId} title={requestTitle ?? "复习题"} layout={layout}
@@ -361,7 +399,7 @@ export default function Review() {
       }}
       onAsked={history.reload} onDone={() => { data.reload(); open("plan"); }} />;
   } else if (historyId !== null && quiz?.attemptId === historyId) {
-    body = <ReviewChat quiz={quiz} layout={layout} onChange={update} onAsked={history.reload} />;
+    body = <ReviewChat key={quiz.attemptId} quiz={quiz} layout={layout} onChange={update} onAsked={history.reload} />;
   } else if (historyId !== null) body = <HistoryChat key={historyId} id={historyId} layout={layout} onAsked={history.reload} />;
   else body = <PlanView d={d} waiting={waiting} onGo={go} />;
 

@@ -96,6 +96,8 @@ export interface QuizResult {
 
 export interface QuizView {
   attemptId: number;
+  /** 做完以后的一问一答（取一道做完的题时一起给，右边一次画全） */
+  turns?: ReviewTurn[];
   stem: string;
   caption: string;
   code: string[];

@@ -75,7 +75,7 @@ def idle_work() -> int:
         done += assessed
     if _due("labels"):
         # 作业里还没有标注的题，按 XDOJ 的标签兜底标上（不需要大模型）；以前因为没有标注没记上的通过补记
-        with db.session_scope() as s:
+        with db.session_scope() as s, db.releasing(s):   # 重标要调大模型：调之前先提交（db.releasing）
             labeled = problems.label_assigned(s, limit=50)
             labeled += problems.relabel_changed(s, limit=5)   # 技能表改过：用到改了的技能的标注重标（大模型）
             filled = pipeline.backfill_passes(s, limit=200)
@@ -85,7 +85,7 @@ def idle_work() -> int:
         done += labeled + filled + reweighed
     if _due("pdftext"):
         # 以前的程序处理的 PDF 题面重新抽；还没交给大模型整理的整理（每次两道）
-        with db.session_scope() as s:
+        with db.session_scope() as s, db.releasing(s):
             redone = pdftext.redo_stored(s)
         if redone:
             _last["pdftext"] = -1e9
@@ -94,7 +94,7 @@ def idle_work() -> int:
         # 作业里的题提前做好解题步骤（每次两道；题面要先整理好）
         from .chat import plan
 
-        with db.session_scope() as s:
+        with db.session_scope() as s, db.releasing(s):
             planned = plan.prepare_assigned(s, limit=2)
         if planned:
             _last["plans"] = -1e9

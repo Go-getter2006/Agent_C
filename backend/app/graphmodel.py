@@ -198,7 +198,7 @@ def nightly(user_ids: list[str] | None = None) -> dict:
         with db.session_scope() as s:
             update_student(s, uid)
             n_pred += log_predictions(s, uid)
-    with db.session_scope() as s:
+    with db.session_scope() as s, db.releasing(s):   # 补跨课程联系要调大模型：调之前先提交（db.releasing）
         weights = profile.refit(s)
         links = cross.auto_links(s)   # 跨课程的联系：智能体补充、用新记下的预测检验、按检验结果采用或不用
     from . import learn

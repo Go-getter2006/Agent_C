@@ -26,6 +26,8 @@ T = TypeVar("T")
 # 测试时可以换成假的后端：fn(messages, json_mode, max_tokens, temperature) -> (text, tokens_in, tokens_out)
 _backend: Callable | None = None
 last_model: ContextVar[str] = ContextVar("last_successful_llm_model", default="")
+# 调大模型之前先做的事（后台任务用 db.releasing 设：先把已经写的提交，不拿着 SQLite 的写锁等大模型）
+before_call: ContextVar[Callable[[], None] | None] = ContextVar("llm_before_call", default=None)
 
 
 class LLMUnavailable(RuntimeError):
@@ -107,6 +109,9 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
 
 
 def _json_request(prompt_id, system, user, validate, retries, max_tokens, model):
+    hook = before_call.get()
+    if hook is not None:
+        hook()
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     started, tin, tout, last, invalid = time.monotonic(), 0, 0, "", False
     for attempt in range(1, retries + 2):
