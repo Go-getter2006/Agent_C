@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import (accounts, assess, catalog, config, cross, crypto, db, diagnosis, graphmodel, kpdesc, logs, mastery, profile,
+from .. import (accounts, assess, catalog, config, cross, crypto, db, diagnosis, graphmodel, kpdesc, llm, logs, mastery, profile,
                review, stuckstats)
 from .. import models as m
 from ..labeling.labeler import current_problem_label
@@ -29,6 +29,7 @@ from ..xdoj import api as sync_api
 from ..xdoj import store
 from ..xdoj.client import SessionError, XdojClient, XdojError, limiter_for
 from .auth import record_failure, set_login_cookie, throttle
+from .. import misconceptions
 from . import cache
 from .deps import get_session, teacher
 
@@ -192,9 +193,20 @@ def page_cache(name: str):
             s, user = kwargs["s"], kwargs["user"]
             _class(s, user, kwargs["key"])
             extra = tuple(sorted((k, v) for k, v in kwargs.items() if k not in ("s", "user")))
-            return cache.cached(s, (name, user.course, *extra), lambda: fn(**kwargs))
+            return cache.cached(s, (name, user.course, *extra), lambda: fn(**kwargs),
+                                rebuild=_rebuilder(fn, kwargs, user.id))
         return wrapper
     return deco
+
+
+def _rebuilder(fn, kwargs: dict, user_id: int):
+    """后台重算这一页：换成后台自己的数据库会话，老师按编号重新取（请求里的对象不能跨会话用）。"""
+    def rebuild(s: Session):
+        who = s.get(m.User, user_id)
+        if who is None:
+            raise HTTPException(status_code=404)
+        return fn(**{**kwargs, "s": s, "user": who})
+    return rebuild
 
 
 def class_students(s: Session, cls: m.XClass) -> list[m.Student]:
@@ -268,7 +280,9 @@ def _skill_view(code: str) -> dict:
 # ------------------------------------------------------------ 班级
 @router.get("/version")
 def version(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
-    """数据变没变（app/web/cache.py 的 version_tag）。教师端页面定时只问这个，变了才重取。"""
+    """数据变没变（app/web/cache.py 的 version_tag）。教师端页面定时只问这个，变了才重取。
+    数据变了，最近看过的页面在后台先算上，页面来取时多半已经算好了。"""
+    cache.refresh_recent(s)
     return cache.version_tag(s)
 
 
@@ -276,6 +290,10 @@ def version(user: m.User = Depends(teacher), s: Session = Depends(get_session)) 
 def classes(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     out = []
     for c in my_classes(s, user):
+        # 进教师端先看总览：取班级列表时就在后台把每个班的总览算上
+        k = class_key(c.server_id, c.class_id)
+        cache.prewarm(("overview", user.course, ("key", k)),
+                      _rebuilder(overview.__wrapped__, {"key": k}, user.id))
         server = s.get(m.Server, c.server_id)
         out.append({"key": class_key(c.server_id, c.class_id), "name": c.class_name,
                     "server": server.name if server else "", "students": len(class_students(s, c))})
@@ -372,6 +390,8 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
         m.CodeFingerprint.server_id == cls.server_id, m.CodeFingerprint.user_id.in_(data.ids),
         m.CodeFingerprint.suspicious.is_(True))).all() if data.ids else []
     stuck_week = len(data.stuck_points(week))
+    attention = _attention_groups(s, data, now, stats)
+    names = {st.user_id: st.name for st in data.students}
     kpis = {
         "students": len(data.ids), "active": this["active"], "activeDelta": this["active"] - last["active"],
         "passed": this["passed"], "passedDelta": this["passed"] - last["passed"],
@@ -382,8 +402,104 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
         "review": review.teacher_stats(s, data.ids, now, data.course),
     }
     return {"class": {"key": key, "name": cls.class_name, "students": len(data.ids), "activeThisWeek": active},
-            "kpis": kpis, "trend": trend, "attention": _attention(s, data, now, stats),
+            "kpis": kpis, "trend": trend, "attention": attention["flat"], "attentionGroups": attention["groups"],
+            "misconceptions": {p: _top(misconceptions.collect(s, cls.server_id, names, data.course, p, now))
+                               for p in misconceptions.PERIODS},
             "focus": _focus(data, stats, kp_errors), "errors": errors, "homeworks": homeworks}
+
+
+SUBMISSION_PAGE = 50
+RESULT_FILTERS = {"passed": ("AC",), "wrong": ("WA", "PE", "OLE"), "compile": ("CE",), "runtime": ("RE", "TLE", "MLE")}
+
+
+@router.get("/classes/{key}/submissions")
+def class_submissions(key: str, student: str = "", problem: int | None = None, result: str = "", page: int = 1,
+                      user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """班级的提交记录：最近的在前，可以按学生、题目、结果筛。每页 50 条，点一条看代码和没过的测试点。"""
+    cls = _class(s, user, key)
+    students = class_students(s, cls)
+    names = {st.user_id: st.name for st in students}
+    ids = [student] if student else list(names)
+    if student and student not in names:
+        raise HTTPException(status_code=404, detail="这个学生不在这个班里。")
+    problems = class_problems(s, cls)
+    titles = dict(s.execute(select(m.Problem.problem_id, m.Problem.title).where(
+        m.Problem.server_id == cls.server_id)).all())
+    q = select(m.Submission).where(m.Submission.server_id == cls.server_id, m.Submission.user_id.in_(ids)) if ids \
+        else select(m.Submission).where(False)
+    if problem is not None:
+        q = q.where(m.Submission.problem_id == problem)
+    if result in RESULT_FILTERS:
+        q = q.where(m.Submission.judgement.in_(RESULT_FILTERS[result]))
+    total = s.scalar(select(func.count()).select_from(q.subquery())) or 0
+    page = max(1, page)
+    rows = s.scalars(q.order_by(m.Submission.submission_id.desc())
+                     .offset((page - 1) * SUBMISSION_PAGE).limit(SUBMISSION_PAGE)).all()
+    labels: dict[int, list[m.SubmissionLabel]] = defaultdict(list)
+    if rows:
+        for lab in s.scalars(select(m.SubmissionLabel).where(
+                m.SubmissionLabel.server_id == cls.server_id, m.SubmissionLabel.is_current.is_(True),
+                m.SubmissionLabel.submission_id.in_([x.submission_id for x in rows]))).all():
+            labels[lab.submission_id].append(lab)
+    out = []
+    for x in rows:
+        nth = s.scalar(select(func.count()).select_from(m.Submission).where(
+            m.Submission.server_id == x.server_id, m.Submission.user_id == x.user_id,
+            m.Submission.problem_id == x.problem_id, m.Submission.submission_id <= x.submission_id)) or 1
+        out.append({"key": catalog.submission_key(x.server_id, x.submission_id), "userId": x.user_id,
+                    "name": names.get(x.user_id, ""), "problemId": x.problem_id, "title": titles.get(x.problem_id, ""),
+                    "attemptNo": nth, "result": x.judgement, "resultText": JUDGEMENTS.get(x.judgement, "结果未知"),
+                    "grid": catalog.grid(s, x), "time": x.submit_time.isoformat() if x.submit_time else None,
+                    "labels": [{"name": error_name(lab.error_code), "skill": skill_name(lab.skill_code) if lab.skill_code else "",
+                                "line": lab.line} for lab in sorted(labels[x.submission_id], key=lambda lab: lab.role != "primary")
+                               if lab.error_code and lab.error_code != "OT99"]})
+    return {"items": out, "total": total, "page": page, "pageSize": SUBMISSION_PAGE,
+            "students": [{"userId": st.user_id, "name": st.name} for st in students],
+            "problems": [{"problemId": pid, "title": titles.get(pid, "")} for _sid, pid in problems],
+            "results": [{"key": k, "label": v} for k, v in
+                        (("passed", "通过"), ("wrong", "答案错误"), ("compile", "编译错误"), ("runtime", "运行错误、超时"))]}
+
+
+@router.get("/submissions/{skey}")
+def submission_detail(skey: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+    """一条提交：他的代码（标出错的行）、程序标的错误、每个测试点过没过、没过的测试点（老师可以看输入输出）。"""
+    from ..xdoj.assemble import assemble_submission
+
+    parsed = catalog.parse_key(skey, "s")
+    sub = s.get(m.Submission, parsed) if parsed else None
+    if sub is None:
+        raise HTTPException(status_code=404, detail="没有这条提交。")
+    _student_in_my_classes(s, user, sub.user_id)
+    if catalog.server_course(s, sub.server_id) != user.course:
+        raise HTTPException(status_code=404, detail="没有这条提交。")
+    ev = assemble_submission(s, sub.server_id, sub.submission_id, include_problem_text=False)
+    labels = s.scalars(select(m.SubmissionLabel).where(
+        m.SubmissionLabel.server_id == sub.server_id, m.SubmissionLabel.submission_id == sub.submission_id,
+        m.SubmissionLabel.is_current.is_(True))).all()
+    code = (ev.get("sourceCode") or "").replace("\r\n", "\n").rstrip("\n")
+    return {"key": skey, "lines": code.split("\n") if code else [], "compileOutput": ev.get("compileOutput") or "",
+            "marks": sorted({lab.line for lab in labels if lab.line}),
+            "labels": [{"name": error_name(lab.error_code), "skill": skill_name(lab.skill_code) if lab.skill_code else "",
+                        "line": lab.line} for lab in labels if lab.error_code and lab.error_code != "OT99"],
+            "failed": llm.failed_cases(ev, limit=5, chars=600)}
+
+
+def _top(rows: list[dict], limit: int = 10) -> dict:
+    """总览只放前几条误区，其余在“误区”页看。"""
+    return {"items": rows[:limit], "total": len(rows)}
+
+
+@router.get("/classes/{key}/misconceptions")
+@page_cache("misconceptions")
+def misconception_list(key: str, period: str = "week", user: m.User = Depends(teacher),
+                       s: Session = Depends(get_session)) -> dict:
+    """误区页：这个班全部的误区（本周或全部），每条有人数、次数、出现在哪几道题、谁、他们的说法。"""
+    if period not in misconceptions.PERIODS:
+        raise HTTPException(status_code=400, detail="period 只能是 week 或 all")
+    cls = _class(s, user, key)
+    names = {st.user_id: st.name for st in class_students(s, cls)}
+    rows = misconceptions.collect(s, cls.server_id, names, _course_of_class(s, cls), period)
+    return {"period": period, "items": rows, "version": misconceptions.VERSION}
 
 
 def _focus(data: "_ClassData", stats: dict, kp_errors: dict[str, Counter], limit: int = 6) -> list[dict]:
@@ -450,9 +566,16 @@ def _weekly(s: Session, data: "_ClassData", now: dt.datetime, weeks: int = 8) ->
     return out
 
 
-def _attention(s: Session, data: "_ClassData", now: dt.datetime, stats: dict | None = None) -> list[dict]:
-    """需要留意的学生，每人列出理由。规则是透明的，不是训练出来的预测模型。"""
-    out = []
+ATTENTION_GROUPS = [
+    ("idle", "一直不做题", "一周以上没交题，或者还没交过"),
+    ("stuck", "一直卡在某处", "同一个知识点反复卡住、一道题交了很多次还没过、同一个错在几道题里反复出现"),
+    ("other", "其他要留意的", "交很多次才通过、几个知识点待加强、会做但讲不清、和同学雷同"),
+]
+
+
+def _attention_groups(s: Session, data: "_ClassData", now: dt.datetime, stats: dict | None = None) -> dict:
+    """需要留意的学生，分三类，每人列出理由。规则是透明的，不是训练出来的预测模型。
+    返回 {"groups": [{key, title, rule, students: [{userId, name, reasons}]}], "flat": [{userId, name, reasons}]}。"""
     week = now - dt.timedelta(days=7)
     stats = stats if stats is not None else stuckstats.compute(s, data.ids, data.course)
     rounds_by_kp = stuckstats.episodes_by_round(stats)   # 知识点 → 学生 → 卡住过几个回合
@@ -460,51 +583,110 @@ def _attention(s: Session, data: "_ClassData", now: dt.datetime, stats: dict | N
         m.CodeFingerprint.user_id.in_(data.ids), m.CodeFingerprint.server_id == data.cls.server_id,
         m.CodeFingerprint.suspicious.is_(True))).all()) if data.ids else Counter()
     stuck_week = Counter(sp.user_id for sp in data.stuck_points(week))
+    gaps = profile.explain_gaps(s, data.skills, data.course)
+    titles = {pid: title for pid, title in s.execute(select(m.Problem.problem_id, m.Problem.title).where(
+        m.Problem.server_id == data.cls.server_id)).all()}
+    # 同一个错在几道题里反复出现、最近一次还没改掉（最近 30 天，程序标注的错误）
+    recurring: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    if data.ids:
+        rows = s.execute(
+            select(m.Submission.user_id, m.Submission.problem_id, m.SubmissionLabel.error_code)
+            .join(m.SubmissionLabel, (m.SubmissionLabel.server_id == m.Submission.server_id)
+                  & (m.SubmissionLabel.submission_id == m.Submission.submission_id))
+            .where(m.SubmissionLabel.is_current.is_(True), m.Submission.server_id == data.cls.server_id,
+                   m.Submission.user_id.in_(data.ids), m.Submission.submit_time >= now - dt.timedelta(days=30),
+                   m.SubmissionLabel.error_code != "OT99")).all()
+        seen: dict[tuple[str, str], set[int]] = defaultdict(set)
+        for uid, pid, code in rows:
+            if not any(x.judgement == "AC" for x in data.subs[uid].get((data.cls.server_id, pid), [])):
+                seen[(uid, code)].add(pid)    # 这道题还没过
+        for (uid, code), pids in seen.items():
+            if len(pids) >= 2:
+                recurring[uid].append((code, len(pids)))
+    open_hw = []
+    for c in s.scalars(select(m.Contest).join(m.ContestClass, (m.ContestClass.server_id == m.Contest.server_id)
+                                              & (m.ContestClass.contest_id == m.Contest.contest_id))
+                       .where(m.ContestClass.server_id == data.cls.server_id, m.ContestClass.class_id == data.cls.class_id)).all():
+        if c.end_time is None or c.end_time >= now:
+            open_hw.append((c, catalog.contest_problem_ids(s, c.server_id, c.contest_id)))
 
     def tries_of(uid: str) -> list[int]:
         return [k for v in data.subs[uid].values() if v and (k := tries_to_pass(v)) is not None]
 
     all_tries = [k for uid in data.ids for k in tries_of(uid)]
     class_avg = sum(all_tries) / len(all_tries) if all_tries else None
+    groups: dict[str, list[dict]] = {g: [] for g, _t, _r in ATTENTION_GROUPS}
+    flat = []
     for st in data.students:
-        reasons = []
-        per = data.subs[st.user_id]
+        uid = st.user_id
+        found: dict[str, list[str]] = {g: [] for g in groups}
+        rank: dict[str, float] = {g: 0.0 for g in groups}
+        per = data.subs[uid]
         tried = [k for k, v in per.items() if v]
-        mine = tries_of(st.user_id)
+        # 一直不做题
+        last_sub = max((x for k in tried for x in per[k] if x.submit_time), key=lambda x: x.submit_time, default=None)
+        if not tried:
+            found["idle"].append("还没有交过题")
+            rank["idle"] = 10_000
+        elif last_sub is not None and last_sub.submit_time < week:
+            days = (now - last_sub.submit_time).days
+            title = titles.get(last_sub.problem_id, "")
+            found["idle"].append(f"{days} 天没有交题" + (f"（上次交的是「{title}」）" if title else ""))
+            rank["idle"] = days
+        if found["idle"]:
+            untouched = [c for c, pids in open_hw if pids and not any(per.get((c.server_id, p)) for p in pids)]
+            if untouched:
+                found["idle"].append(f"{len(untouched)} 个没截止的作业还没开始：" + "、".join(c.title for c in untouched[:2])
+                                     + ("等" if len(untouched) > 2 else ""))
+        # 一直卡在某处
+        many = sorted(((n, kp) for kp, per_uid in rounds_by_kp.items() if (n := per_uid.get(uid, 0)) >= 3), reverse=True)
+        for n, kp in many[:2]:
+            found["stuck"].append(f"在「{KNOWLEDGE_POINTS.get(kp, kp)}」上卡住 {n} 次")
+            rank["stuck"] += n
+        if stuck_week.get(uid, 0) >= 2:
+            found["stuck"].append(f"最近 7 天卡住 {stuck_week[uid]} 次")
+            rank["stuck"] += stuck_week[uid]
+        stuck_on = sorted(((len(per[k]), k) for k in tried if len(per[k]) >= 5 and not any(x.judgement == "AC" for x in per[k])),
+                          reverse=True)
+        for n, k in stuck_on[:2]:
+            found["stuck"].append(f"「{titles.get(k[1], '某道题')}」交了 {n} 次还没通过")
+            rank["stuck"] += n
+        if len(stuck_on) > 2:
+            found["stuck"].append(f"还有 {len(stuck_on) - 2} 道题交了 5 次以上没通过")
+        for code, n in sorted(recurring.get(uid, []), key=lambda x: -x[1])[:2]:
+            found["stuck"].append(f"「{error_name(code)}」在 {n} 道还没过的题里出现")
+            rank["stuck"] += n
+        # 其他
+        mine = tries_of(uid)
         if class_avg is not None and len(mine) >= 4:
             avg = sum(mine) / len(mine)
             if avg >= class_avg * 1.6 and avg - class_avg >= 1:
-                reasons.append(f"平均交 {avg:.1f} 次才通过，全班是 {class_avg:.1f} 次")
-        if stuck_week.get(st.user_id, 0) >= 2:
-            reasons.append(f"最近 7 天卡住 {stuck_week[st.user_id]} 次")
-        many = [(n, kp) for kp, per_uid in rounds_by_kp.items() if (n := per_uid.get(st.user_id, 0)) >= 3]
-        if many:
-            n, kp = max(many)
-            reasons.append(f"在「{KNOWLEDGE_POINTS.get(kp, kp)}」上卡住 {n} 次")
-        weak = [kp for kp in data.kps[st.user_id].values() if kp.level == "待加强"]
+                found["other"].append(f"平均交 {avg:.1f} 次才通过，全班是 {class_avg:.1f} 次")
+        weak = [kp for kp in data.kps[uid].values() if kp.level == "待加强"]
         if len(weak) >= 3:
-            reasons.append(f"{len(weak)} 个知识点待加强")
-        last = max((x.submit_time for k in tried for x in per[k] if x.submit_time), default=None)
-        if tried and last is not None and last < week:
-            reasons.append(f"{(now - last).days} 天没有交题")
-        if not tried:
-            reasons.append("还没有交过题")
-        stuck_on = [k for k in tried if len(per[k]) >= 5 and not any(x.judgement == "AC" for x in per[k])]
-        if stuck_on:
-            reasons.append(f"{len(stuck_on)} 道题交了 5 次以上还没通过")
-        if copied.get(st.user_id):
-            reasons.append(f"{copied[st.user_id]} 次通过和同学的代码雷同")
-        gaps = [kp for kp, d in profile.kp_profile(s, st.user_id, data.course).items() if "explain_gap" in d.flags]
-        if len(gaps) >= 2:
-            reasons.append(f"{len(gaps)} 个知识点会做但讲不清为什么（智能体评估）")
+            found["other"].append(f"{len(weak)} 个知识点待加强")
+        if len(gaps.get(uid, [])) >= 2:
+            found["other"].append(f"{len(gaps[uid])} 个知识点会做但讲不清为什么（智能体评估）")
+        if copied.get(uid):
+            found["other"].append(f"{copied[uid]} 次通过和同学的代码雷同")
         if data.course == "D":
-            weak_c = cross.weak_foundation(cross.c_foundation(s, st.user_id), data.focus or None)
+            weak_c = cross.weak_foundation(cross.c_foundation(s, uid), data.focus or None)
             if weak_c:
-                reasons.append("C 语言基础薄弱：" + "、".join(r["name"] for r in weak_c[:3]))
+                found["other"].append("C 语言基础薄弱：" + "、".join(r["name"] for r in weak_c[:3]))
+        rank["other"] = len(found["other"])
+        for g, reasons in found.items():
+            if reasons:
+                groups[g].append({"userId": uid, "name": st.name, "reasons": reasons, "_rank": rank[g]})
+        reasons = [r for g in groups for r in found[g]]
         if reasons:
-            out.append({"userId": st.user_id, "name": st.name, "reasons": reasons})
-    out.sort(key=lambda r: -len(r["reasons"]))
-    return out[:12]
+            flat.append({"userId": uid, "name": st.name, "reasons": reasons})
+    for rows in groups.values():
+        rows.sort(key=lambda r: (-r["_rank"], r["userId"]))
+        for r in rows:
+            r.pop("_rank")
+    flat.sort(key=lambda r: -len(r["reasons"]))
+    return {"groups": [{"key": g, "title": title, "rule": rule, "students": groups[g]} for g, title, rule in ATTENTION_GROUPS],
+            "flat": flat[:12]}
 
 
 @router.get("/classes/{key}/students")

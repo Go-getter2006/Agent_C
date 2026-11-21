@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { BarChart3, Braces, LogOut, Menu, MessagesSquare, NotebookPen, RotateCcw, type LucideIcon } from "lucide-react";
+import { takeArrival } from "../lib/arrival";
 import { sectionTarget } from "../lib/memory";
 import { useSession, useStatus } from "../session";
 import { useSlider } from "./Slider";
@@ -128,12 +129,13 @@ interface ShellProps {
 
 export function Shell({ nav, bottom = [], kind = "student", children }: ShellProps) {
   const [menu, setMenu] = useState(false);
+  const [entering] = useState(() => takeArrival());   // 刚从登录页进来：轻轻淡入一次
   const location = useLocation();
   useEffect(() => setMenu(false), [location.pathname]);
   const current = [...nav, ...bottom].find((n) => isActive(n, location.pathname));
 
   return (
-    <div className={`shell shell-${kind}`}>
+    <div className={`shell shell-${kind}${entering ? " shell-enter" : ""}`}>
       <aside className="sidebar" aria-label="主导航">
         <Brand />
         <nav className="nav">

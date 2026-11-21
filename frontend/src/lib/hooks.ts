@@ -64,15 +64,26 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
   const freshRef = useRef(fresh);
   freshRef.current = fresh;
   const seq = useRef(0);
+  const retry = useRef<number>();
+  const retries = useRef(0);
 
   const run = useCallback((silent: boolean) => {
     const mine = ++seq.current;
     const session = memoSession;
+    window.clearTimeout(retry.current);
     if (!silent) setLoading(true);
     fnRef.current()
       .then((value) => {
         if (mine !== seq.current || session !== memoSession) return;
-        if (keyRef.current) remember(keyRef.current, value, freshRef.current);
+        // 服务器先给了上一次算好的（教师端汇总页，app/web/cache.py），新的正在后台算：先显示，过两秒再取
+        const refreshing = !!value && typeof value === "object" && (value as { refreshing?: boolean }).refreshing === true;
+        if (keyRef.current) remember(keyRef.current, value, refreshing ? undefined : freshRef.current);
+        if (refreshing && retries.current < 15) {
+          retries.current += 1;
+          retry.current = window.setTimeout(() => { if (mine === seq.current) run(true); }, 2000);
+        } else {
+          retries.current = 0;
+        }
         setData(value);
         setStale(false);
         setError(null);
@@ -102,7 +113,7 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
       else setData(null);
       run(false);
     }
-    return () => { seq.current += 1; }; // 切换或卸载后，丢弃旧请求的响应。
+    return () => { seq.current += 1; window.clearTimeout(retry.current); retries.current = 0; }; // 切换或卸载后，丢弃旧请求的响应。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
