@@ -343,8 +343,8 @@ def candidate_view(r: m.ReviewItem, st: mastery.SkillState | None, at: dt.dateti
 
 def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None,
               *, candidates: bool = False) -> list[m.ReviewItem]:
-    """今天可以做的：到期的、今天还没做过这个技能的，按掌握证据和复习原因排优先级，最多 daily_limit 个。
-    candidates：备题时要全部候选（真正先出哪个由后验抽样定，见 prepare）。"""
+    """今天可以做的：到期的、今天还没做过这个技能的，按掌握证据和复习原因排优先级，最多 daily_limit 个。"""
+    # candidates：备题时要全部候选（真正先出哪个由后验抽样定，见 prepare）
     at = at or db.now()
     done, skills_today = _today_count(s, user_id, at, course)
     room = max(0, cfg()["daily_limit"] - done)
