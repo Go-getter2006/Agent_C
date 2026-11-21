@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from itertools import groupby
 
 from .. import llm, pdftext
 from ..taxonomy import HELP_ORDER, course_prompt
@@ -20,6 +21,7 @@ from . import teaching
 
 HELP_ACTIONS = ["think", "hint", "tell"]
 BLANK = "______"
+_CODE_FENCE = re.compile(r"^[ \t]*```[ \t]*(?:[\w+.-]+)?[ \t]*\n(.*?)^[ \t]*```[ \t]*$", re.M | re.S)
 
 
 # ------------------------------------------------------------ 引用他自己的代码
@@ -53,6 +55,30 @@ def to_blocks(draft: Draft, ctx: Ctx) -> list[dict]:
     for para in [p.strip() for p in draft.after.split("\n") if p.strip()]:
         blocks.append({"t": "p", "text": para})
     return blocks
+
+
+def restore_knowledge_code(blocks: list[dict]) -> list[dict]:
+    """旧知识问答会把围栏和每行代码各存成一个段落，读取时恢复成代码块。"""
+    out = []
+    for is_text, group in groupby(blocks, key=lambda block: block.get("t") == "p"):
+        paragraphs = list(group)
+        if not is_text:
+            out.extend(paragraphs)
+            continue
+        text = "\n".join(block["text"] for block in paragraphs)
+        matches = list(_CODE_FENCE.finditer(text))
+        if not matches:
+            out.extend(paragraphs)
+            continue
+        pos = 0
+        for match in matches:
+            out.extend({"t": "p", "text": line} for line in text[pos:match.start()].splitlines() if line.strip())
+            code = match[1].rstrip("\n")
+            if code:
+                out.append({"t": "code", "caption": "示例", "start": 1, "lines": code.split("\n"), "mark": []})
+            pos = match.end()
+        out.extend({"t": "p", "text": line} for line in text[pos:].splitlines() if line.strip())
+    return out
 
 
 # ------------------------------------------------------------ 示例代码（H3，用他自己的变量名）
@@ -214,7 +240,7 @@ _FLOW_RULES = {
 _SYSTEM = """你是大学 C 语言课程的答疑助手，在帮一名学生看他自己的作业。说话像一位认真的助教：平实、简短、直接。
 输出 JSON：{"before":"代码块前面的话","quote":{"from":10,"to":12,"mark":[10]},"code":null,"after":"代码块后面的话","keyLine":null}
 - quote：引用学生代码时，选出包含前置变量、条件和相关循环体的连续范围（最多 8 行），mark 只标问题行。不要只选孤立一行；系统还会尽量补充前后文。不引用填 null。你不要自己抄他的代码。
-- code：只有这一级允许给新代码时才填，否则填 null。keyLine 是 code 里最关键的那一行的序号。
+- code：只有这一级允许给新代码时才填，否则填 null。多行代码只写在 code 里，直接填源码，不加 Markdown 围栏。before 和 after 只写说明，行内代码可以用单个反引号。keyLine 是 code 里最关键的那一行的序号。
 - 提到变量名用反引号。提到行号必须是他代码里真实的行号。
 硬性规则：
 1. 学生看不到测试点。下面给你的测试点输入、期望输出、实际输出只用来帮你判断错在哪；
@@ -239,6 +265,19 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
 
     def validate(d: dict) -> Draft:
         before, after = str(d.get("before") or "").strip(), str(d.get("after") or "").strip()
+        code = d.get("code")
+        code = code.replace("\r\n", "\n").strip("\n") if isinstance(code, str) and code.strip() else None
+        if ctx.knowledge:
+            if code and (wrapped := _CODE_FENCE.fullmatch(code)):
+                code = wrapped[1].rstrip("\n") or None
+            prose = (before + "\n" + after).replace("\r\n", "\n")
+            fences = list(_CODE_FENCE.finditer(prose))
+            if fences:
+                if code or len(fences) > 1:
+                    raise ValueError("请只在 code 里提供一段示例，说明放在 before 和 after")
+                match = fences[0]
+                before, after = prose[:match.start()].strip(), prose[match.end():].strip()
+                code = match[1].rstrip("\n") or None
         if not (before or after):
             raise ValueError("回复是空的")
         if before and after and _squash(after) in _squash(before):
@@ -254,8 +293,6 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
                 raise ValueError("quote 的范围不在他的代码里，或超过 8 行")
             marks = [int(x) for x in (q.get("mark") or []) if isinstance(x, int) and a <= x <= b]
             quote = (a, b, marks)
-        code = d.get("code")
-        code = str(code).strip("\n") if isinstance(code, str) and code.strip() else None
         if code and not allow_code:
             raise ValueError("这一级不能给新代码")
         key = d.get("keyLine") if isinstance(d.get("keyLine"), int) else None

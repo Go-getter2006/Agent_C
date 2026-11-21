@@ -4,7 +4,7 @@ import { api, setUnauthorizedHandler } from "./api";
 import { KeyCache } from "./lib/keyCache";
 import { clearLoadMemo, useLoad } from "./lib/hooks";
 import { clearDrafts, setScope } from "./lib/memory";
-import type { Homework, Me, Message, ProblemDetail, StatusInfo } from "./types";
+import type { Homework, Me, Message, ProblemDetail, QuizRecap, StatusInfo } from "./types";
 
 interface SessionValue {
   me: Me | null;
@@ -96,7 +96,20 @@ function useHomeworksState(): HomeworksValue {
 
 // ---------- 学生端：XDOJ 状态、该复习的数量（侧边栏的小红点用） ----------
 function makeStudentCache() {
-  return { threads: new KeyCache<Message[]>(), problems: new KeyCache<ProblemDetail>() };
+  const recaps = new KeyCache<QuizRecap | null>();
+  const recapRequests = new Map<string, Promise<QuizRecap | null>>();
+  const loadRecap = (key: string) => {
+    const cached = recaps.get(key);
+    if (cached !== undefined) return Promise.resolve(cached);
+    const pending = recapRequests.get(key);
+    if (pending) return pending;
+    const request = api.quizRecap(Number(key))
+      .then(({ recap }) => recaps.put(key, recap))
+      .finally(() => recapRequests.delete(key));
+    recapRequests.set(key, request);
+    return request;
+  };
+  return { threads: new KeyCache<Message[]>(), problems: new KeyCache<ProblemDetail>(), recaps, loadRecap };
 }
 
 const StudentCacheContext = createContext<ReturnType<typeof makeStudentCache> | null>(null);

@@ -116,6 +116,7 @@ export interface QuizView {
   draft?: string;
   message?: { kind: string; text: string } | null;
   result?: QuizResult;
+  recap?: QuizRecap | null;    // 已经存入服务器的回顾，随复习历史返回
 }
 
 export interface Message {

@@ -3,20 +3,30 @@
 // 第一次打开时后端生成（这时显示“正在输入”），之后用存的。之后可以接着问。
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api";
+import { useStudentCache } from "../session";
 import type { QuizRecap } from "../types";
 
 /** 取这次作答的回顾。undefined：还在取；null：没有要回顾的。 */
-export function useRecap(attemptId: number, done: boolean): QuizRecap | null | undefined {
-  const [recap, setRecap] = useState<QuizRecap | null | undefined>(undefined);
+export function useRecap(attemptId: number, done: boolean, saved?: QuizRecap | null): QuizRecap | null | undefined {
+  const { recaps, loadRecap } = useStudentCache();
+  const key = String(attemptId);
+  const [result, setResult] = useState<{ key: string; recap: QuizRecap | null }>();
   useEffect(() => {
-    if (!done) { setRecap(undefined); return; }
+    if (!done) return;
+    if (saved !== undefined) {
+      recaps.put(key, saved);
+      return;
+    }
+    if (recaps.get(key) !== undefined) return;
     let alive = true;
-    setRecap(undefined);
-    api.quizRecap(attemptId).then((r) => { if (alive) setRecap(r.recap); }).catch(() => { if (alive) setRecap(null); });
+    loadRecap(key).then(recap => { if (alive) setResult({ key, recap }); })
+      .catch(() => { if (alive) setResult({ key, recap: null }); });
     return () => { alive = false; };
-  }, [attemptId, done]);
-  return recap;
+  }, [key, done, saved, recaps, loadRecap]);
+  if (!done) return undefined;
+  if (saved !== undefined) return saved;
+  const cached = recaps.get(key);
+  return cached !== undefined ? cached : result?.key === key ? result.recap : undefined;
 }
 
 export function RecapBody({ recap }: { recap: QuizRecap | undefined }) {
