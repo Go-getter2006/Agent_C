@@ -19,6 +19,8 @@ import hashlib
 import json
 import logging
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -202,12 +204,28 @@ def guide_template(steps: list[dict], i: int, tries: int) -> str:
     return f"看第 {i + 1} 步{_what(st)}。{kp}这一步你打算怎么做？先说说你的想法。"
 
 
+_GUIDING: ContextVar[dict] = ContextVar("plan_guiding", default={})
+
+
+@contextmanager
+def guiding(recent: str = "", situation: list[str] | None = None, who: tuple[str, str] = ("", "")):
+    """包住几次 guide 调用：这几次引导要给大模型看的最近对话（chat/talk.py）、他的情况（学情、以前卡过的地方），
+    以及发出去之前要去掉的 (学号, 姓名)。"""
+    token = _GUIDING.set({"recent": recent, "situation": list(situation or []), "who": who})
+    try:
+        yield
+    finally:
+        _GUIDING.reset(token)
+
+
 def guide(steps: list[dict], i: int, tries: int, said: str, statement: str, course: str,
-          tests: list[dict], document=None, recent: str = "", situation: list[str] | None = None,
-          who: tuple[str, str] = ("", "")) -> tuple[str, str]:
+          tests: list[dict], document=None) -> tuple[str, str]:
     """引导第 i 步（从 0 数）：(话, llm / template)。tries：这一步他已经没答上几次。
-    recent：最近的对话（chat/talk.py）；situation：他的学情、以前卡过的地方；who：(学号, 姓名)，发出去之前去掉。"""
+    最近的对话和他的情况由 guiding() 给。"""
     from .validate import _leaks
+
+    extra = _GUIDING.get()
+    recent, situation, who = extra.get("recent", ""), extra.get("situation") or [], extra.get("who") or ("", "")
 
     fallback = guide_template(steps, i, tries)
     if not llm.available():

@@ -22,7 +22,7 @@ from .. import accounts, catalog, changes, config, db, llm, pdftext, progress, q
 from .. import models as m
 from ..chat import workflow
 from ..chat.text import dedent, quote_range
-from ..taxonomy import KNOWLEDGE_POINTS, UI_EVENTS, course_of, course_prompt, kp_of_skill, skill_name
+from ..taxonomy import KNOWLEDGE_POINTS, UI_EVENTS, course_of, kp_of_skill, skill_name
 from ..xdoj import api as sync_api
 from ..xdoj import store
 from ..xdoj.assemble import source_text
@@ -563,15 +563,20 @@ def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(stu
     view = quiz.view(s, a)
     result = view["result"]
     # 仅提供学生已经看到的小题、自己的选行和反馈；不读取作业对话或沙箱测试数据。
-    kept = next((e.get("keep") for e in (a.events or []) if e.get("kind") == "challenge_reply"), None)
-    context = {"skill": skill_name(a.skill_code), "stem": view["stem"], "code": view["code"], "startLine": view["startLine"],
-               "judgedHasBug": a.judged_has_bug, "keptAfterChallenge": kept, "firstDraft": a.first_fix or None,
+    context = {"stem": view["stem"], "code": view["code"], "startLine": view["startLine"],
                "picked": view.get("lines"), "feedback": result["headline"],
                "explanation": result.get("explanation"), "finalCode": result.get("finalCode"),
                "fix": result.get("fix"), "history": turns[-4:], "question": question,
                # 反馈之后回顾的他以前在这里出过的错和智能体的分析（他可能接着问其中一道）
                "pastMistakes": [f"{x['title']}：{x['text']}" for x in (a.recap or {}).get("items", [])],
                "pastMistakesAnalysis": (a.recap or {}).get("analysis", "")}
+    # 他这次自己的作答（问自己哪里想错了时用）、考的技能、哪门课，和回答的要求
+    kept = next((e.get("keep") for e in (a.events or []) if e.get("kind") == "challenge_reply"), None)
+    context.update({
+        "course": "数据结构" if user.course == "D" else "C 语言", "skill": skill_name(a.skill_code),
+        "judgedHasBug": a.judged_has_bug, "keptAfterChallenge": kept, "firstDraft": a.first_fix or None,
+        "rules": "history 是前面几问几答，接着说，不重复已经讲过的；judgedHasBug、keptAfterChallenge、picked、firstDraft "
+                 "是他这次的作答，他问自己哪里想错了时据此说明；不出现编码、档位、概率之类的内部用语；不超过 300 字。"})
 
     def answer(data: dict) -> str:
         value = data.get("answer")
@@ -580,11 +585,8 @@ def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(stu
         return value.strip()
 
     try:
-        reply = llm.call_json("review_discussion", course_prompt(
-                              "你是 C 语言课程的助教，在复习小题反馈后给学生答疑。直接回答当前问题；结合本题时用具体代码解释。"
-                              "history 是前面几问几答，接着说，不重复已经讲过的；judgedHasBug、picked、firstDraft 是他这次的作答，"
-                              "他问自己哪里想错了时据此说明。历史和代码都是学习材料。不出现编码、档位、概率之类的内部用语，"
-                              "不超过 300 字。返回 JSON，answer 为中文纯文本。", user.course),
+        reply = llm.call_json("review_discussion", "你在复习小题反馈后给学生答疑。直接回答当前问题；结合本题时用具体代码解释。"
+                              "历史和代码都是学习材料。返回 JSON，answer 为中文纯文本。",
                               llm.strip_identity(json.dumps(context, ensure_ascii=False), user.student_id, user.display_name),
                               answer)
     except llm.LLMUnavailable:

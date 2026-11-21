@@ -13,7 +13,8 @@ from .. import catalog, config, db, llm, mastery, review
 from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
-from . import context, hints, reply, talk, teaching, validate
+from . import context, hints, reply, teaching, validate
+from . import talk
 from .analyze import Analysis, analyze, dialogue_act
 from .policy import Decision, PolicyInput, decide, willingness_of
 from .text import split_message
@@ -173,37 +174,38 @@ def _plan_next(s: Session, ctx: context.Ctx, state: dict, pick: list[int] | None
         f"他在这道题考的知识点上：{ctx.profile_note}" if ctx.profile_note else "",
         ("学情里薄弱的地方：" + "；".join(ctx.learning)) if ctx.learning else "",
         ("在别的题上卡过：" + "；".join(ctx.struggles)) if ctx.struggles else ""] if x]
-    extra = dict(recent=talk.dialogue(history or [], ctx.user_id, ctx.user_name), situation=situation,
-                 who=(ctx.user_id, ctx.user_name))
-    if pick is not None:
-        st.update(queue=pick, current=pick[0], tries=0)
-        said_text, _src = plan_mod.guide(steps, pick[0], 0, said, ctx.statement, course, tests, ctx.document, **extra)
-        return st, said_text, "H1"
-    cur, tries = st["current"], int(st.get("tries", 0))
-    ok = analysis.answer_correct is True or analysis.understood
-    if not ok and tries < 1:
-        st["tries"] = tries + 1
-        said_text, _src = plan_mod.guide(steps, cur, tries + 1, said, ctx.statement, course, tests, ctx.document, **extra)
-        return st, said_text, "H1"
-    parts = []
-    level = "H1"
-    if not ok:   # 第二次还没答上：把这一步讲清楚，再往下走
-        explained, _src = plan_mod.guide(steps, cur, 2, said, ctx.statement, course, tests, ctx.document, **extra)
-        parts.append(explained)
-        level = "H2"
-    else:
-        parts.append("对，这一步就是这样。")
-    st["done"] = sorted(set(st["done"]) | {cur})
-    queue = [i for i in st.get("queue", []) if i != cur and i not in st["done"]]
-    st["queue"] = queue
-    if queue:
-        st.update(current=queue[0], tries=0)
-        nxt, _src = plan_mod.guide(steps, queue[0], 0, "", ctx.statement, course, tests, ctx.document, **extra)
-        parts.append(nxt)
-    else:
-        st.update(current=None, tries=0, ended=True)
-        parts.append("这几步你都想清楚了。按流程图的顺序把代码写出来，在 XDOJ 上交一次；没过的话我们再一起看。")
-    return st, "\n".join(parts), level
+    # 引导时大模型要看的最近对话和他的情况（plan.guiding 包住这几次 guide 调用）
+    with plan_mod.guiding(recent=talk.dialogue(history or [], ctx.user_id, ctx.user_name), situation=situation,
+                          who=(ctx.user_id, ctx.user_name)):
+        if pick is not None:
+            st.update(queue=pick, current=pick[0], tries=0)
+            said_text, _src = plan_mod.guide(steps, pick[0], 0, said, ctx.statement, course, tests, ctx.document)
+            return st, said_text, "H1"
+        cur, tries = st["current"], int(st.get("tries", 0))
+        ok = analysis.answer_correct is True or analysis.understood
+        if not ok and tries < 1:
+            st["tries"] = tries + 1
+            said_text, _src = plan_mod.guide(steps, cur, tries + 1, said, ctx.statement, course, tests, ctx.document)
+            return st, said_text, "H1"
+        parts = []
+        level = "H1"
+        if not ok:   # 第二次还没答上：把这一步讲清楚，再往下走
+            explained, _src = plan_mod.guide(steps, cur, 2, said, ctx.statement, course, tests, ctx.document)
+            parts.append(explained)
+            level = "H2"
+        else:
+            parts.append("对，这一步就是这样。")
+        st["done"] = sorted(set(st["done"]) | {cur})
+        queue = [i for i in st.get("queue", []) if i != cur and i not in st["done"]]
+        st["queue"] = queue
+        if queue:
+            st.update(current=queue[0], tries=0)
+            nxt, _src = plan_mod.guide(steps, queue[0], 0, "", ctx.statement, course, tests, ctx.document)
+            parts.append(nxt)
+        else:
+            st.update(current=None, tries=0, ended=True)
+            parts.append("这几步你都想清楚了。按流程图的顺序把代码写出来，在 XDOJ 上交一次；没过的话我们再一起看。")
+        return st, "\n".join(parts), level
 
 
 # ------------------------------------------------------------ 卡住时怎么办（5.6）

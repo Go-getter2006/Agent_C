@@ -21,11 +21,13 @@ Leitner 盒子；半衰期回归（Settles 和 Meeder 2016）。
 6. 不打扰：不弹窗，不往对话里插题。小题在“复习提升”里做（界面改造方案第 4 节）：后台空闲时给最近来过的学生
    提前备好一道（prepare_active），没备好时后台退避重试；
    侧边栏的数字只数已经备好的题（ready_count）。中途离开的，回来接着做同一道。
-   每天最多 daily_limit 道，同一个技能一天最多一道。
-   到期的里面先出哪一个：后验抽样（2026-11-21 起，rule thompson-1）。每个候选的掌握分是 Beta(1+S, 1+F)
+   每天最多 daily_limit 道，同一个技能一天最多一道；到期后按掌握证据、反复修改和独立性确认安排。
+   列出来的顺序按 priority（掌握证据、反复修改、独立性确认）；真正先出哪一个：后验抽样（2026-11-21 起，rule thompson-1）。每个候选的掌握分是 Beta(1+S, 1+F)
    的均值，从各自的 Beta 里抽一个数，抽到最低的先出：越薄弱、越拿不准的越容易被选中，数据少的也会被测到。
    每个候选被选中的概率（∫ f_i(x) Π_{j≠i}(1−F_j(x)) dx，数值积分）当时就算出来记进决策记录，
    以后能无偏地评估“换一种选法会怎样”。
+   只是抽查、而且不薄弱的（spot_only，priority 的第二项）仍排在错误和不确定的后面：别的到期项都没有了才抽它，
+   它的选中概率记 0。
 7. 出什么题：正式检查使用同一技能的新场景；刚答错过就降一级，出判断题。
 8. 两门课分开：复习项按技能编码属于哪门课，C 语言登录只看 C 语言的，数据结构只看数据结构的；每天的上限也各算各的。
 """
@@ -268,6 +270,23 @@ def _weak(st: mastery.SkillState | None) -> bool:
     return st is not None and st.events > 0 and (st.level == LEVEL_WEAK or st.score < config.MASTERY_V2["weak_below"])
 
 
+def priority(r: m.ReviewItem, st: mastery.SkillState | None) -> tuple:
+    """复习项的排序依据（越小越先出）：已经开始的先做；抽查而且不薄弱的放后面；
+    薄弱 3 分、改对后又犯或反复改 2 分、要确认是不是独立做的 1 分，分高的先；再按掌握分低的先、到期早的先。
+    决策记录（decisions.py）记的就是这几项。"""
+    weak = _weak(st)
+    repeat = r.origin in ("recurrence", "repeated_fix")
+    verify = r.origin == "verify"
+    importance = 3 * weak + 2 * repeat + verify
+    return (r.attempt_id is None, r.origin == "spot_check" and not weak, -importance,
+            st.score if st is not None else 0.5, available_at(r), r.id)
+
+
+def spot_only(r: m.ReviewItem, st: mastery.SkillState | None) -> bool:
+    """只是抽查、而且不薄弱（priority 的第二项）：有别的到期项时不出它（错误和不确定的先复习），别的都没有了才抽它。"""
+    return priority(r, st)[1]
+
+
 def beta_of(st: mastery.SkillState | None) -> tuple[float, float]:
     """后验抽样用的 Beta(1+S, 1+F)：均值就是掌握分。没有证据是 Beta(1, 1)。"""
     return (1.0 + st.s, 1.0 + st.f) if st is not None else (1.0, 1.0)
@@ -308,13 +327,12 @@ def lowest_probabilities(params: list[tuple[float, float]], grid: int = 4000) ->
 
 
 def candidate_view(r: m.ReviewItem, st: mastery.SkillState | None, at: dt.datetime) -> dict:
-    """决策记录里的一个候选：后验抽样用的 Beta 和当时的掌握状态（研究用，学生端看不到）。"""
-    avail = available_at(r)
+    """决策记录里的一个候选：排序依据、后验抽样用的 Beta 和当时的掌握状态（研究用，学生端看不到）。"""
+    started, spot, neg, score, avail, _id = priority(r, st)
     a, b = beta_of(st)
     return {"reviewItem": r.id, "skill": r.skill_code, "kp": kp_of_skill(r.skill_code), "origin": r.origin,
-            "weak": _weak(st), "betaA": round(a, 4), "betaB": round(b, 4),
-            "score": round(st.score if st is not None else 0.5, 4),
-            "paramsVersion": st.params_version if st is not None else "",
+            "weak": _weak(st), "importance": -neg, "spotCheckNotWeak": spot, "score": round(score, 4),
+            "betaA": round(a, 4), "betaB": round(b, 4), "paramsVersion": st.params_version if st is not None else "",
             "level": st.level if st is not None else None, "p": round(st.p, 4) if st is not None else None,
             "halfLife": r.half_life, "reps": r.reps, "lapses": r.lapses, "streak": r.streak,
             "dueAt": r.due_at.isoformat() if r.due_at else None, "availableAt": avail.isoformat(),
@@ -325,8 +343,8 @@ def candidate_view(r: m.ReviewItem, st: mastery.SkillState | None, at: dt.dateti
 
 def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None,
               *, candidates: bool = False) -> list[m.ReviewItem]:
-    """今天可以做的：到期的、今天还没做过这个技能的（已经开始的在前，其余按到期先后），最多 daily_limit 个。
-    candidates：备题时要全部候选（先出哪个由后验抽样定，见 prepare）。"""
+    """今天可以做的：到期的、今天还没做过这个技能的，按掌握证据和复习原因排优先级，最多 daily_limit 个。
+    candidates：备题时要全部候选（真正先出哪个由后验抽样定，见 prepare）。"""
     at = at or db.now()
     done, skills_today = _today_count(s, user_id, at, course)
     room = max(0, cfg()["daily_limit"] - done)
@@ -335,7 +353,9 @@ def due_items(s: Session, user_id: str, at: dt.datetime | None = None, course: s
         or_(m.ReviewItem.due_at <= at, m.ReviewItem.attempt_id.is_not(None)))).all()
     rows = [r for r in rows if _in_course(r.skill_code, course)
             and (r.attempt_id is not None or (r.skill_code not in skills_today and available_at(r) <= at))]
-    rows.sort(key=lambda r: (r.attempt_id is None, available_at(r), r.id))
+    states = mastery.skill_states(s, user_id, at=at, model="v2") if any(r.attempt_id is None for r in rows) else {}
+
+    rows.sort(key=lambda r: priority(r, states.get(r.skill_code)))
     pending = [r for r in rows if r.attempt_id is not None]
     available = [r for r in rows if r.attempt_id is None]
     return pending + (available if candidates and room else available[:room])
@@ -371,7 +391,7 @@ def item_view(s: Session, user_id: str, item: m.ReviewItem, at: dt.datetime) -> 
 
 def summary(s: Session, user_id: str, at: dt.datetime | None = None, course: str | None = None) -> dict:
     at = at or db.now()
-    due = due_items(s, user_id, at, course, candidates=True)   # 到期的全部列出（先出哪个由后验抽样定）
+    due = due_items(s, user_id, at, course)
     due_ids = {d.id for d in due}
     rows = [r for r in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)).all()
             if _in_course(r.skill_code, course)]
@@ -630,6 +650,8 @@ def prepare(s: Session, user_id: str, course: str, at: dt.datetime | None = None
         m.UiEvent.course == course, m.UiEvent.kind == "review_item_wait", m.UiEvent.ts > at - dt.timedelta(hours=1))))
     states = mastery.skill_states(s, user_id, at=at, model="v2")
     pool = [r for r in due if str(r.id) not in tried]
+    first = [r for r in pool if not spot_only(r, states.get(r.skill_code))]
+    pool = first or pool   # 抽查（不薄弱的）排在错误和不确定的后面：前面有的话只在前面里抽
     misses = []
     draws: list[dict] = []
     chosen: tuple[m.ReviewItem, m.QuizAttempt] | None = None
@@ -671,7 +693,7 @@ def _record_pick(s: Session, user_id: str, course: str, at: dt.datetime, due: li
     from . import decisions
 
     first = {cid: p for cid, p in zip(draws[0]["candidates"], draws[0]["probabilities"])} if draws else {}
-    cands = [{**candidate_view(r, states.get(r.skill_code), at), "rank": i + 1, "pickProbability": first.get(r.id),
+    cands = [{**candidate_view(r, states.get(r.skill_code), at), "rank": i + 1, "pickProbability": first.get(r.id, 0.0 if draws else None),
               "skippedRecently": str(r.id) in tried} for i, r in enumerate(due)]
     item, attempt = chosen if chosen is not None else (None, None)
     last = draws[-1]["p"] if draws and item is not None else 1.0
