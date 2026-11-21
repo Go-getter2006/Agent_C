@@ -135,12 +135,12 @@
 }
 
 .check-chip:has(input:checked) {
-  border-color: var(--ink);
+  border-color: var(--solid);
   background: var(--surface-2);
 }
 
 .check-chip input {
-  accent-color: var(--ink);
+  accent-color: var(--solid);
   margin: 0;
 }
 
@@ -423,8 +423,8 @@
   height: 24px;
   padding: 0 var(--sp-10);
   border-radius: var(--r-pill);
-  background: var(--ink);
-  color: var(--on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
   font-size: var(--fs-12);
   font-weight: 600;
 }
@@ -750,8 +750,8 @@
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  background: var(--ink);
-  color: var(--brand-on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
   flex-shrink: 0;
 }
 
@@ -872,8 +872,8 @@
 }
 
 .next-icon-review {
-  background: var(--ink);
-  color: var(--brand-on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
 }
 
 .next-main {

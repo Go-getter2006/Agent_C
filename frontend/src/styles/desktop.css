@@ -18,7 +18,7 @@
   .side-statement-head h2 { margin-bottom: 0; }
   .kg-chapters { display: flex; gap: 8px; flex-wrap: wrap; padding: 4px 0; }
   .kg-chapters .btn { flex-shrink: 0; }
-  .kg-chapters .btn[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+  .kg-chapters .btn[aria-pressed="true"] { background: var(--solid); color: var(--on-solid); }
   .kg-chapters .btn[aria-pressed="true"] .note { color: inherit; }
   .msg-body { font-size: 16px; line-height: 1.75; }
   .overview-stats .stat { min-height: 112px; }

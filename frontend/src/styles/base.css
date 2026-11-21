@@ -138,26 +138,26 @@ pre,
 }
 
 .btn[aria-pressed="true"] {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--on-dark);
+  background: var(--solid);
+  border-color: var(--solid);
+  color: var(--on-solid);
 }
 
 .btn-primary {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--on-dark);
+  background: var(--solid);
+  border-color: var(--solid);
+  color: var(--on-solid);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--ink-hover);
-  border-color: var(--ink-hover);
+  background: var(--solid-hover);
+  border-color: var(--solid-hover);
 }
 
 .btn-primary:disabled {
-  background: var(--ink-disabled);
-  border-color: var(--ink-disabled);
-  color: var(--on-dark);
+  background: var(--solid-disabled);
+  border-color: var(--solid-disabled);
+  color: var(--on-solid);
 }
 
 .btn-ghost {
@@ -255,7 +255,7 @@ select.field {
 .check input {
   width: 16px;
   height: 16px;
-  accent-color: var(--ink);
+  accent-color: var(--solid);
 }
 
 .check-sub {
@@ -330,8 +330,8 @@ select.field {
 }
 
 .pill-dark {
-  background: var(--ink);
-  color: var(--on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
 }
 
 .pill-outline {
