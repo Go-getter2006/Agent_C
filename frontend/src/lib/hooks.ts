@@ -97,7 +97,11 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
       });
   }, []);
 
+  // 等着再取的那一次（refreshing）：卸载时取消；换了 deps 以后旧的那次本来就作废（mine !== seq.current）
+  useEffect(() => () => window.clearTimeout(retry.current), []);
+
   useLayoutEffect(() => {
+    retries.current = 0;
     setError(null);
     const hit = memoKey ? memo.get(memoKey) : undefined;
     if (hit && fresh !== undefined && hit.fresh === fresh) {
@@ -113,7 +117,7 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[], pollMs = 0, ke
       else setData(null);
       run(false);
     }
-    return () => { seq.current += 1; window.clearTimeout(retry.current); retries.current = 0; }; // 切换或卸载后，丢弃旧请求的响应。
+    return () => { seq.current += 1; }; // 切换或卸载后，丢弃旧请求的响应。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
