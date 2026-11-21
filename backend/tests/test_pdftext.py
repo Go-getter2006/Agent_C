@@ -155,6 +155,39 @@ def test_tidy_falls_back_when_the_model_invents(fake_llm):
     assert pdftext.tidy("杈撳叆涓€涓鏁存暟 3 5 8 [图1] 10 5", "garbled") == ("输入一个正整数 3 5 8 [图1] 10 5", "llm_guess")
 
 
+def test_old_sample_is_repaired_offline_without_touching_source(ctx):
+    raw = "输出样例2：\n  * *\n***\n测试用例3：\n输入：3\n输出：[图1]"
+    assert "***\n【公开样例数据结束】\n测试用例3" in pdftext.for_llm(raw)
+    assert pdftext._tidy_spaces(raw + "  ") == raw + "  "
+    for damaged in (raw.replace("  * *", " *  *"), raw.replace("测试用例3：\n", ""), raw.replace("[图1]", "[图片]")):
+        assert pdftext.check_tidy(raw, damaged, False)
+    with db.session_scope() as s:
+        row = _old_tidied(s, ctx.server_id, 4100)
+        row.raw_text, row.extracted_text = raw, raw.replace("  * *", "* *")
+        row.tidy_version = "latex-1"
+        original = row.file_bytes
+        s.flush()
+        assert pdftext.usable_text(row) == raw
+        assert pdftext.redo_stored(s) == 1
+        assert (row.extracted_text, row.raw_text, row.file_bytes) == (raw, raw, original)
+        assert row.tidy_version == pdftext.TIDY_VERSION and pdftext.redo_stored(s) == 0
+
+
+def test_image_placeholder_uses_the_original_pages(demo):
+    sid = demo["server_id"]
+    key = f"p{sid}-406"
+    with db.session_scope() as s:
+        row = s.get(m.ProblemText, (sid, 406))
+        row.content_type, row.file_bytes = "application/pdf", make_pdf(LINES, image=True)
+        row.raw_text = row.extracted_text = "输出样例2：[图片]"
+        row.extract_status = "layer"
+    with TestClient(create_app()) as c:
+        assert c.post("/api/auth/login", json={"loginName":"2500000001","password":"test-pass"}).status_code == 200
+        detail = c.get(f"/api/problems/{key}").json()
+        assert detail["pages"] == [f"/api/problems/{key}/pages/1"]
+        assert c.get(detail["pages"][0]).content.startswith(b"\x89PNG")
+
+
 # ------------------------------------------------------------ 同步、存库、学生端
 def _pdf_problem(ctx, fake, **kw):
     fake.problem_files[406] = (make_pdf(LINES, **kw), "application/pdf")

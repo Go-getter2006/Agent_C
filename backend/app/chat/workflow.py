@@ -171,18 +171,18 @@ def _plan_next(s: Session, ctx: context.Ctx, state: dict, pick: list[int] | None
     st = {**state, "picking": False, "done": list(state.get("done", []))}
     if pick is not None:
         st.update(queue=pick, current=pick[0], tries=0)
-        said_text, _src = plan_mod.guide(steps, pick[0], 0, said, ctx.statement, course, tests)
+        said_text, _src = plan_mod.guide(steps, pick[0], 0, said, ctx.statement, course, tests, ctx.document)
         return st, said_text, "H1"
     cur, tries = st["current"], int(st.get("tries", 0))
     ok = analysis.answer_correct is True or analysis.understood
     if not ok and tries < 1:
         st["tries"] = tries + 1
-        said_text, _src = plan_mod.guide(steps, cur, tries + 1, said, ctx.statement, course, tests)
+        said_text, _src = plan_mod.guide(steps, cur, tries + 1, said, ctx.statement, course, tests, ctx.document)
         return st, said_text, "H1"
     parts = []
     level = "H1"
     if not ok:   # 第二次还没答上：把这一步讲清楚，再往下走
-        explained, _src = plan_mod.guide(steps, cur, 2, said, ctx.statement, course, tests)
+        explained, _src = plan_mod.guide(steps, cur, 2, said, ctx.statement, course, tests, ctx.document)
         parts.append(explained)
         level = "H2"
     else:
@@ -192,7 +192,7 @@ def _plan_next(s: Session, ctx: context.Ctx, state: dict, pick: list[int] | None
     st["queue"] = queue
     if queue:
         st.update(current=queue[0], tries=0)
-        nxt, _src = plan_mod.guide(steps, queue[0], 0, "", ctx.statement, course, tests)
+        nxt, _src = plan_mod.guide(steps, queue[0], 0, "", ctx.statement, course, tests, ctx.document)
         parts.append(nxt)
     else:
         st.update(current=None, tries=0, ended=True)
@@ -431,6 +431,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
                                  config.CHAT["quick_hint_seconds"])
 
     # 第 6 步 策略
+    llm.last_model.set("")  # 这条回复单独记，不能把消息分析用的模型当成读题模型
     decision = decide(PolicyInput(
         intent=analysis.intent, action=action, bound=ctx.problem is not None,
         has_code=bool(ctx.source), has_failure=ctx.has_failure, diag_confidence=ctx.diag_confidence,
@@ -509,6 +510,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     draft, source, check_result, retries = _produce(ctx, decision, flow, text, history, prior, prior_ref,
                                                     decision.kind, visible_titles, reflect, retro_hist,
                                                     plan_step[1] if plan_step else None)
+    reply_model = llm.last_model.get() if source == "llm" else ""
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
         stuck_point.given_code, stuck_point.key_line = draft.code, draft.key_line or 1
     actions = list(draft.actions)
@@ -565,7 +567,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         reply={**content, "flow": flow}, reply_source=source, check_result=check_result, retries=retries,
         round_status=rnd.status, end_reason=rnd.end_reason, quiz_triggered=False,
         stuck_point_id=stuck_point.id if stuck_point is not None else None,
-        prompt_version=config.PROMPT_VERSION, model_version=config.DEEPSEEK_MODEL if source == "llm" else "",
+        prompt_version=config.PROMPT_VERSION, model_version=reply_model,
         workflow_version=config.WORKFLOW_VERSION, duration_ms=int((time.monotonic() - t0) * 1000), created_at=now))
     llm.flush_records(s)
     s.flush()

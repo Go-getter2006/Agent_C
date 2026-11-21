@@ -1,12 +1,59 @@
 from __future__ import annotations
 
 import json
+import base64
+
+import httpx
+import pytest
 
 from app import config, db, llm
 from app import models as m
 from app.catalog import ProblemInfo
 from app.chat import context, reply, teaching, workflow
 from app.chat.policy import Decision, PolicyInput, decide
+
+
+@pytest.mark.parametrize("reject_image", [False, True])
+def test_vision_reply_transports_public_page_and_selected_judge_run(ctx, fake, monkeypatch, reject_image):
+    from app import pdftext
+    from tests.test_pdftext import make_pdf
+    from tests.test_xdoj_sync import full_sync
+
+    fake.problem_files[406] = (make_pdf(["Sample output", "PUBLIC_PAGE"], image=True), "application/pdf")
+    full_sync(ctx)
+    calls = []
+    def post(url, *, json, **kwargs):
+        calls.append(json)
+        if reject_image and len(calls) == 1:
+            return httpx.Response(400)
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"before":"先检查计算表达式。"}'}}]})
+
+    with db.session_scope() as s:
+        who = fake.submissions[537101].user_id
+        bound = context.build(s, who, (ctx.server_id, 406), None, "看图", "", None)
+        context.tutor_context(s, bound, db.now())
+        png = pdftext.page_png(bound.document, 1)
+        monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "local-test")
+        monkeypatch.setattr(config, "DEEPSEEK_VISION_MODEL", "deepseek-flash")
+        monkeypatch.setattr(httpx, "post", post)
+        draft = reply.generate_llm(bound, Decision("R00", "H1", "甲", "help"), "help", "看图", [])
+        assert draft.before == "先检查计算表达式。"
+        assert calls[0]["model"] == "deepseek-flash"
+        content = calls[0]["messages"][1]["content"]
+        assert base64.b64decode(content[2]["image_url"]["url"].split(",")[1]) == png
+        assert "第 1 页" in content[1]["text"]
+        prompt = content[0]["text"]
+        assert who not in prompt and "a*b+1" in prompt and "PUBLIC_PAGE" in prompt
+        cases = json.loads(prompt.split("【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n")[1].split("\n\n")[0])["testCases"]
+        assert [(c["standardInput"], c["standardOutput"], c["programOutput"]) for c in cases] == [
+            ("1 1\n", "2\n", None), ("2 3\n", "5\n", "7\n")]
+        assert cases[1]["firstDiffLine"] == 1
+        if reject_image:
+            assert len(calls) == 2 and calls[1]["model"] == config.DEEPSEEK_MODEL
+            fallback = calls[1]["messages"][1]["content"]
+            assert isinstance(fallback, str) and "没有附上可用的题面页图" in fallback and "a*b+1" in fallback
+        else:
+            assert len(calls) == 1
 
 
 def test_teaching_prompt_is_editable_without_restarting(tmp_path, monkeypatch):

@@ -6,7 +6,7 @@
 1. 抽文字：PDF 自带的文字层用两种办法各抽一遍（pdfplumber 按行、PDFium），挑乱码少的；
    编码错位（UTF-8 被当成 Latin-1 之类）程序能还原的先还原。
 2. 示意图：PDF 里的图片、成片的线条（画出来的示意图）从页面渲染图上裁下来存成 PNG，文字里在那个位置写 [图1]。
-   这只是把那块区域截下来给学生看，不识别图里的字。大模型看不到图，提示词里告诉它那是图。
+   文字整理不识别图里的字；作业引导需要看图时可附上题面原页。
 3. 大模型整理（`tidy`）：修上面那些抽取问题，分出题目描述、输入、输出、样例；不许加原文没有的内容。
    程序核对：数字只能来自原文、原文的数字基本都在（样例不能丢）、[图N] 都在、汉字绝大多数来自原文（原文不是乱码时）、
    长度相当。不合格重写一次，还不行就用程序抽的文字。
@@ -22,7 +22,11 @@ from __future__ import annotations
 import io
 import logging
 import re
+import threading
 import unicodedata
+from functools import wraps
+
+from .statement_sections import bound_samples, heading, sample_section, samples
 
 log = logging.getLogger("pdftext")
 
@@ -33,7 +37,7 @@ STATUS_NAMES = {
     "unreadable": "PDF 打不开", "failed": "没有内容",
 }
 # 整理要求的版本：改了 _SYSTEM 要求的格式就改这里（latex-1：公式写成 $...$）
-TIDY_VERSION = "latex-1"
+TIDY_VERSION = "samples-2"
 # 交给大模型整理过的题面可能停在这些状态（核对不过的仍是 layer / garbled）
 _TIDIED = frozenset({"layer", "garbled", "llm", "llm_guess"})
 # 现在的程序给 PDF 写的状态；不在这里面的（以前直接抽文字的 ok、OCR 那一版的状态……）都要重新抽一遍
@@ -43,6 +47,18 @@ MAX_PAGES = 6
 MAX_FIGURES = 8
 RENDER_SCALE = 2.0  # 裁示意图用：144 dpi
 FIG_MARK = re.compile(r"\[图(\d+)\]")
+IMAGE_PLACEHOLDER = re.compile(r"[\[【［]\s*(?:图片|图像|插图|image)\s*[\]】］]", re.I)
+
+# PDFium 不支持同进程多线程同时打开或渲染文档（聊天和题面页面可同时请求）。
+_pdf_lock = threading.RLock()
+
+
+def _serialized(fn):
+    @wraps(fn)
+    def run(*args, **kwargs):
+        with _pdf_lock:
+            return fn(*args, **kwargs)
+    return run
 
 
 def is_pdf(content_type: str, data: bytes | None) -> bool:
@@ -121,10 +137,18 @@ def fix_mojibake(text: str) -> str:
 
 def _tidy_spaces(text: str) -> str:
     """抽取常见的毛病：汉字之间被插了空格（“输 入 一 个”）、全角空格、行尾空格。"""
-    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\u3000", " ")
-    text = re.sub(r"(?<=[\u4e00-\u9fff，。；：！？（）、]) (?=[\u4e00-\u9fff，。；：！？（）、])", "", text)
-    text = re.sub(r"[ \t]+(?=[，。；：！？、）])|(?<=（)[ \t]+", "", text)   # 中文标点前后的空格
-    return "\n".join(line.rstrip() for line in text.split("\n")).strip()
+    lines = []
+    sample = group = ""
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        mark = heading(line)
+        if mark:
+            sample, group = sample_section(mark[0], group)
+        if not sample:
+            line = line.replace("\u3000", " ")
+            line = re.sub(r"(?<=[\u4e00-\u9fff，。；：！？（）、]) (?=[\u4e00-\u9fff，。；：！？（）、])", "", line)
+            line = re.sub(r"[ \t]+(?=[，。；：！？、）])|(?<=（)[ \t]+", "", line).rstrip()
+        lines.append(line)
+    return "\n".join(lines).strip("\n")
 
 
 # ------------------------------------------------------------ 文字层和示意图
@@ -205,6 +229,7 @@ def _symbol_translation(chars: list[dict]) -> dict[int, str]:
     return {0xF0E8: "→"} if fonts == {"wingdings"} else {}
 
 
+@_serialized
 def read_pdf(data: bytes) -> tuple[str, list[dict]] | None:
     """抽 PDF：返回 (原文，带 [图N] 占位, 示意图 [{seq, page, png, width, height}])。打不开返回 None。
 
@@ -291,6 +316,7 @@ _SYSTEM = """你在整理一道 C 语言程序设计题的题面。下面的文�
 - 按原文分成这几部分（原文没有的部分就不写）：题目描述、输入格式、输出格式、样例输入、样例输出、样例说明、提示；每部分标题单独一行；
 - 输入示例1、输出示例1等编号形式统一写成“样例输入 1”“样例输出 1”，标题后换行再写数据。样例输出只含输出数据；样例说明、推导、提示必须另起标题和正文，不能混进样例代码块；输出格式不能包住后面的样例；
 - 样例的输入、输出逐行照抄，一个字符都不能改，保留原来的换行；
+- “测试用例 3”是新一组的标题。保留编号、缩进和图标记，图形样例不要改写成文字或 [图片]；
 - 不许增加原文没有的内容；不许改数字；不许解释题目、不许给思路和代码；
 - 题目描述、输入输出格式、提示里的数学式子（范围、上下标、幂、分式、求和、取模）写成 LaTeX，用 $ 包起来，
   比如 $1 \\le n \\le 10^{5}$、$a_i$、$10^{9}+7$、$\\frac{a}{b}$；单独成行的长式子用 $$...$$。$ 里不写汉字；
@@ -313,9 +339,7 @@ def check_tidy(raw: str, out: str, raw_garbled: bool) -> str | None:
     """大模型整理的结果和原文对不对得上。对不上返回原因（程序核对，不靠大模型自己说）。"""
     if not out.strip():
         return "是空的"
-    from .statement_sections import samples
-    original_samples = samples(raw)
-    if original_samples and original_samples != samples(out):
+    if not _samples_preserved(raw, out):
         return "样例输入输出被修改、丢失或与说明混在一起"
     if sorted(FIG_MARK.findall(raw)) != sorted(FIG_MARK.findall(out)):
         return "[图N] 的标记丢了或多了"
@@ -346,6 +370,12 @@ def check_tidy(raw: str, out: str, raw_garbled: bool) -> str | None:
     return None
 
 
+def _samples_preserved(raw: str, out: str) -> bool:
+    original = samples(raw)
+    return ((not original or original == samples(out))
+            and IMAGE_PLACEHOLDER.findall(raw) == IMAGE_PLACEHOLDER.findall(out))
+
+
 def tidy(raw: str, status: str) -> tuple[str, str] | None:
     """交给大模型整理。返回 (文字, 状态 llm / llm_guess)；没有大模型或核对不过返回 None（沿用程序抽的文字）。"""
     return _tidy(raw, status)[0]
@@ -363,7 +393,7 @@ def _tidy(raw: str, status: str) -> tuple[tuple[str, str] | None, bool]:
     raw_garbled = status == "garbled"
 
     def validate(d: dict) -> str:
-        text = str(d.get("text") or "").strip()
+        text = str(d.get("text") or "").strip("\r\n")
         problem = check_tidy(raw, text, raw_garbled)
         if problem:
             raise ValueError(problem)
@@ -440,21 +470,32 @@ def retidy(s, server_id: int, problem_id: int) -> bool | None:
 
     row = s.get(m.ProblemText, (server_id, problem_id))
     if (row is None or row.tidied_at is None or row.tidy_version == TIDY_VERSION
-            or row.extract_status not in _TIDIED or not llm.available()):
+            or row.extract_status not in _TIDIED):
         return False
     was_usable = row.extract_status in USABLE
     before = problem_content_hash(s, server_id, problem_id)
     source = "garbled" if row.extract_status in ("garbled", "llm_guess") else "layer"
-    got, again = _tidy(row.raw_text or row.extracted_text or "", source)
+    raw = row.raw_text or row.extracted_text or ""
+    saved_samples_changed = source == "layer" and not _samples_preserved(raw, row.extracted_text or "")
+    if row.tidy_version == "latex-1" and source == "layer":
+        # 新要求只涉及样例。原样例完好就沿用排版，受损时退回已保存的可读原文。
+        got = (raw, "layer") if saved_samples_changed else None
+        again = False
+    else:
+        if not llm.available():
+            return None
+        got, again = _tidy(raw, source)
     if again:
         return None
+    if got is None and saved_samples_changed:
+        got = raw, "layer"
     row.tidied_at, row.tidy_version = db.now(), TIDY_VERSION
     if got is None or got == (row.extracted_text or "", row.extract_status):
         return False
     row.extracted_text, row.extract_status = got
     log.info("题目 %s 的题面按新要求重整：%s", problem_id, STATUS_NAMES.get(got[1], got[1]))
     label = current_problem_label(s, server_id, problem_id)
-    if not was_usable:
+    if not was_usable or saved_samples_changed and label is not None:
         enqueue(s, server_id, "label_problem", problem_id, 2)
     elif label is not None and label.content_hash == before:
         label.content_hash = problem_content_hash(s, server_id, problem_id)
@@ -470,9 +511,14 @@ def usable_text(row) -> str:
     """题面文字（ProblemText 行）；乱码、没整理出来的返回空串。"""
     if row is None or (row.extract_status or "") not in USABLE:
         return ""
-    return row.extracted_text or ""
+    text = row.extracted_text or ""
+    if row.extract_status == "llm" and row.tidy_version != TIDY_VERSION and row.raw_text:
+        if not _samples_preserved(row.raw_text, text):
+            return row.raw_text
+    return text
 
 
+@_serialized
 def page_count(row) -> int:
     """题面 PDF 有几页（最多 MAX_PAGES）；不是 PDF 返回 0。"""
     if row is None or not is_pdf(row.content_type, (row.file_bytes or b"")[:5]):
@@ -492,11 +538,12 @@ def page_count(row) -> int:
 _page_cache: dict[tuple, bytes] = {}
 
 
+@_serialized
 def page_png(row, n: int) -> bytes | None:
     """题面 PDF 的第 n 页渲染成 PNG，裁掉四周的空白（右栏窄，留白太多字就小了）。"""
     if not 1 <= n <= page_count(row):
         return None
-    key = (row.server_id, row.problem_id, row.file_hash, n)
+    key = (row.server_id, row.problem_id, row.file_hash or hash(row.file_bytes), n)
     if key in _page_cache:
         return _page_cache[key]
     import pypdfium2 as pdfium
@@ -504,7 +551,10 @@ def page_png(row, n: int) -> bytes | None:
 
     doc = pdfium.PdfDocument(row.file_bytes)
     try:
-        img = doc[n - 1].render(scale=RENDER_SCALE).to_pil().convert("RGB")
+        page = doc[n - 1]
+        # 特大页面也限制渲染像素；这张图也用在窄栏和视觉模型请求里。
+        scale = min(RENDER_SCALE, 2400 / max(page.get_size()))
+        img = page.render(scale=scale).to_pil().convert("RGB")
     finally:
         doc.close()
     box = ImageChops.difference(img, Image.new("RGB", img.size, "white")).getbbox()
@@ -519,11 +569,46 @@ def page_png(row, n: int) -> bytes | None:
     return _page_cache[key]
 
 
+def needs_original_pages(text: str) -> bool:
+    return not text.strip() or bool(IMAGE_PLACEHOLDER.search(text)) or any(not body.strip() for _, body in samples(text))
+
+
+def needs_vision(text: str, question: str = "") -> bool:
+    return bool(needs_original_pages(text) or FIG_MARK.search(text)
+                or re.search(r"如图|见图|下图|图示|示意图|图片|图案|图形", text)
+                or re.search(r"看图|这张图|图中|图里|如图|图示|示意图|图片|图案|图形|(?:输出|输入)(?:样例|示例)|(?:样例|示例)(?:输入|输出)", question))
+
+
+def guide_pages(row, text: str, question: str = "") -> list[tuple[int, bytes]]:
+    """仅针对已经绑定的公开题面。原页保留样例标题和图的位置，不猜占位符属于哪张图。"""
+    from . import config
+
+    if row is None or config.DEEPSEEK_VISION_MODEL.lower() in ("", "off") or not needs_vision(text, question):
+        return []
+    pages = []
+    for number in range(1, page_count(row) + 1):
+        try:
+            png = page_png(row, number)
+        except Exception as exc:
+            log.warning("题面第 %d 页未能渲染：%s", number, type(exc).__name__)
+            continue
+        if png and len(png) > 5 * 1024 * 1024:
+            from PIL import Image
+            with Image.open(io.BytesIO(png)) as img:
+                img.thumbnail((1280, 1280))
+                buf = io.BytesIO()
+                img.save(buf, "PNG")
+                png = buf.getvalue()
+        if png:
+            pages.append((number, png))
+    return pages
+
+
 def for_llm(text: str) -> str:
-    """发给大模型的题面：有示意图时说明 [图N] 是什么（大模型看不到图）。"""
-    if text and FIG_MARK.search(text):
-        return text + "\n（题面里的 [图N] 是示意图的位置，你看不到图；不要编造图里的内容）"
-    return text
+    body = bound_samples(text)
+    if text and needs_vision(text):
+        return body + "\n（图标记和空样例不代表实际输出。只有本次附带的题面页图可用来看图，缺图或看不清时不要猜。）"
+    return body
 
 
 def redo_stored(s, limit: int = 2) -> int:
@@ -559,11 +644,13 @@ def redo_stored(s, limit: int = 2) -> int:
             if prepare(s, server_id, problem_id):
                 enqueue(s, server_id, "label_problem", problem_id, 2)
             done += 1
-    if llm.available() and done < limit:
-        stale = s.execute(select(T.server_id, T.problem_id).where(
+    if done < limit:
+        query = select(T.server_id, T.problem_id).where(
             T.tidied_at.is_not(None), T.extract_status.in_(sorted(_TIDIED)),
             or_(T.tidy_version.is_(None), T.tidy_version != TIDY_VERSION))
-            .order_by(T.server_id, T.problem_id).limit(limit - done)).all()
+        if not llm.available():
+            query = query.where(T.tidy_version == "latex-1", T.extract_status.in_(("llm", "layer")))
+        stale = s.execute(query.order_by(T.server_id, T.problem_id).limit(limit - done)).all()
         for server_id, problem_id in stale:
             if retidy(s, server_id, problem_id) is None:
                 break   # 大模型没连上：这一轮停下，下一轮再试

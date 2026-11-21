@@ -1,5 +1,15 @@
 [
   {
+    "name": "bracketed group with local input and output headings",
+    "text": "输出样例 2：\n  x  x\n【测试用例３】\n输入：3\n输出：\n  *\n ***\n样例说明\n结束。",
+    "samples": ["  x  x", "3", "  *\n ***"]
+  },
+  {
+    "name": "numbered test group ends preceding output and keeps figure in output three",
+    "text": "输出样例2：\n  * *\n***\n测 试 用 例 ３：\n输入样例3：\n5\n输出样例3：[图1]\n样例说明：图中各行左对齐。",
+    "samples": ["  * *\n***", "5", "[图1]"]
+  },
+  {
     "name": "weekday numbered samples with ordinary spaces",
     "text": "输入示例1：\n2020 11 5\n输出示例 1：\nThursday\n输入示例2\n2021 6 2\n输出示例2\nWednesday",
     "samples": ["2020 11 5", "Thursday", "2021 6 2", "Wednesday"]

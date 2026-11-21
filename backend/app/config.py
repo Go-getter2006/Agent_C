@@ -66,6 +66,8 @@ SESSION_HOURS = _env_int("SESSION_HOURS", 12)
 DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
 DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_VISION_MODEL = _env("DEEPSEEK_VISION_MODEL", "deepseek-flash" if DEEPSEEK_BASE_URL in (
+    "https://api.deepseek.com", "https://api.deepseek.com/v1") else "").strip()
 # 每百万 token 的价格（元），用于记录费用；按实际计费标准填写。
 LLM_PRICE_IN = _env_float("LLM_PRICE_IN", 2.0)
 LLM_PRICE_OUT = _env_float("LLM_PRICE_OUT", 8.0)
@@ -121,7 +123,7 @@ TAXONOMY_VERSION = "0.2"      # 知识点表、技能表。0.2（2026-11-21）�
 RELABEL_SKILLS = frozenset({"C06.03.01", "C06.06.03", "C07.02.01", "C07.02.02"})
 ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
 LABELER_VERSION = "2026-11-20a"   # 次技能只列题目专门要求的
-PROMPT_VERSION = "2026-11-18d"
+PROMPT_VERSION = "2026-11-21a"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
 WORKFLOW_VERSION = "2026-11-18a"
 # 2026-11-20：次技能分“有测试点专门考”和“顺带用到”，见 MASTERY 里的说明（SECONDARY_SPLIT_VERSION）

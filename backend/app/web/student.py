@@ -258,7 +258,8 @@ def problem_detail(key: str, user: m.User = Depends(student), s: Session = Depen
         .order_by(m.ProblemFigure.seq)).all()
     statement = pdftext.usable_text(text)
     # 文字整理不出来（乱码、还没整理）时，直接把 PDF 的页面显示出来（渲染成图），不用学生点开 PDF
-    pages = pdftext.page_count(text) if not statement else 0
+    missing_figure = {int(n) for n in pdftext.FIG_MARK.findall(statement)} - {n for n, _, _ in figures}
+    pages = pdftext.page_count(text) if missing_figure or pdftext.needs_original_pages(statement) else 0
     return {"key": info.key, "title": info.title, "brief": info.brief,
             "homeworkKey": catalog.homework_key(info.server_id, contest),
             "statement": statement,

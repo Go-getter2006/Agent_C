@@ -23,7 +23,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import db, llm, pdftext
+from .. import config, db, llm, pdftext
 from .. import models as m
 from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, skill_name
 
@@ -55,9 +55,11 @@ def picked(text: str, n: int) -> list[int] | None:
 
 
 # ------------------------------------------------------------ 步骤（按题共用）
-def _hash(statement: str, label: m.ProblemLabel | None) -> str:
-    key = json.dumps([statement, label.primary_skill if label else "", list(label.secondary_skills or []) if label else []],
-                     ensure_ascii=False)
+def _hash(statement: str, label: m.ProblemLabel | None, visual_key: str = "") -> str:
+    inputs = [statement, label.primary_skill if label else "", list(label.secondary_skills or []) if label else []]
+    if visual_key:
+        inputs.append(visual_key)
+    key = json.dumps(inputs, ensure_ascii=False)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -70,7 +72,7 @@ _SYSTEM = """你是 C 语言课程的助教。一名学生还没开始做下面�
 只输出 JSON：{"steps":[{"title":"…","how":"…","kp":"…"}]}"""
 
 
-def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests: list[dict]) -> list[dict] | None:
+def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests: list[dict], document=None) -> list[dict] | None:
     from .validate import _leaks
 
     names = [v for k, v in KNOWLEDGE_POINTS.items() if k.startswith(course)]
@@ -92,26 +94,39 @@ def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests:
     skills = "、".join(skill_name(c) for c in ([label.primary_skill, *(label.secondary_skills or [])] if label else []))
     user = ("【题面】\n" + pdftext.for_llm(statement)[:2500] + ("\n【这道题考的技能】" + skills if skills else "")
             + "\n【知识点表】" + "、".join(names))
+    pages = pdftext.guide_pages(document, statement)
+    if not statement and not pages:
+        return None
     try:
-        return llm.call_json("plan_steps", course_prompt(_SYSTEM, course), user, validate, retries=1, max_tokens=500)
+        return llm.call_json("plan_steps", course_prompt(_SYSTEM, course), user, validate, retries=1, max_tokens=500,
+                             pages=pages, text_fallback=False)
     except llm.LLMUnavailable:
         return None
 
 
+def _key(s: Session, server_id: int, problem_id: int, statement: str, label: m.ProblemLabel | None):
+    """(题面和标注的哈希, 文字整理不出来、要看 PDF 页面图吗, 题面行)。"""
+    document = s.get(m.ProblemText, (server_id, problem_id))
+    visual = document is not None and pdftext.needs_vision(statement) and pdftext.is_pdf(document.content_type, document.file_bytes)
+    h = _hash(statement, label, f"{document.file_hash}:{config.DEEPSEEK_VISION_MODEL}" if visual else "")
+    return h, visual, document
+
+
 def steps_for(s: Session, server_id: int, problem_id: int, statement: str, label: m.ProblemLabel | None,
               course: str, tests: list[dict]) -> list[dict] | None:
-    """这道题的解题步骤：大模型按题面分好、存过且题面没变就直接用（所有学生共用）；没有就现在生成一次存起来。
-    大模型给不出合格的步骤、或者没配大模型，返回 None（不出流程图）。刚试过没成的一小时内不再试。"""
-    h = _hash(statement, label)
+    """这道题的解题步骤：大模型按题面（文字整理不出来的 PDF 题面看页面图）分好、存过且题面没变就直接用
+    （所有学生共用）；没有就现在生成一次存起来。大模型给不出合格的步骤、或者没配大模型，返回 None（不出流程图）。
+    刚试过没成的一小时内不再试。"""
+    h, visual, document = _key(s, server_id, problem_id, statement, label)
     row = s.get(m.ProblemPlan, (server_id, problem_id))
     fresh = row is not None and row.content_hash == h and row.version == VERSION
     if fresh and row.source == "llm" and row.steps:
         return list(row.steps)
     if fresh and row.source == "failed" and db.as_utc(row.created_at) > db.now() - dt.timedelta(hours=1):
         return None
-    if not statement or not llm.available():
+    if not (statement or visual) or not llm.available():
         return None
-    steps = _llm_steps(statement, label, course, tests)
+    steps = _llm_steps(statement, label, course, tests, document)
     if row is None:
         row = m.ProblemPlan(server_id=server_id, problem_id=problem_id)
         s.add(row)
@@ -147,11 +162,12 @@ def prepare_assigned(s: Session, limit: int = 2) -> int:
         if done >= limit:
             break
         statement = pdftext.usable_text(s.get(m.ProblemText, (server_id, problem_id)))
-        if not statement:
-            continue
         label = current_problem_label(s, server_id, problem_id)
+        h, visual, _doc = _key(s, server_id, problem_id, statement, label)
+        if not statement and not visual:
+            continue
         row = s.get(m.ProblemPlan, (server_id, problem_id))
-        if row is not None and row.content_hash == _hash(statement, label) and row.version == VERSION \
+        if row is not None and row.content_hash == h and row.version == VERSION \
                 and (row.source == "llm" or db.as_utc(row.created_at) > db.now() - dt.timedelta(hours=1)):
             continue
         steps_for(s, server_id, problem_id, statement, label, catalog.server_course(s, server_id),
@@ -185,7 +201,7 @@ def guide_template(steps: list[dict], i: int, tries: int) -> str:
 
 
 def guide(steps: list[dict], i: int, tries: int, said: str, statement: str, course: str,
-          tests: list[dict]) -> tuple[str, str]:
+          tests: list[dict], document=None) -> tuple[str, str]:
     """引导第 i 步（从 0 数）：(话, llm / template)。tries：这一步他已经没答上几次。"""
     from .validate import _leaks
 
@@ -211,7 +227,8 @@ def guide(steps: list[dict], i: int, tries: int, said: str, statement: str, cour
                                               else "\n【说明】他前面没答上，讲得更具体一点" if tries else "")
             + ("\n【他刚才说的】\n" + llm.strip_identity(said) if said else ""))
     try:
-        return llm.call_json("plan_guide", course_prompt(_GUIDE, course), user, validate, retries=1, max_tokens=300), "llm"
+        return llm.call_json("plan_guide", course_prompt(_GUIDE, course), user, validate, retries=1, max_tokens=300,
+                             pages=pdftext.guide_pages(document, statement, said)), "llm"
     except llm.LLMUnavailable:
         return fallback, "template"
 

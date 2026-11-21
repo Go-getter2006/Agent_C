@@ -103,9 +103,9 @@ def assemble_submission(s: Session, server_id: int, submission_id: int, include_
         }
         if as_b64:
             item["base64"] = True
+        if program_output is not None and std_out is not None and not as_b64 and not item["outputTruncated"]:
+            item["firstDiffLine"] = first_diff_line(std_out, program_output)
         if max_output_chars is not None:
-            if program_output is not None and std_out is not None:
-                item["firstDiffLine"] = first_diff_line(std_out, program_output)
             for key in ("standardInput", "standardOutput", "programOutput"):
                 item[key], clipped = _clip(item[key], max_output_chars)
                 if clipped:

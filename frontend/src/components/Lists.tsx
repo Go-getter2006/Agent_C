@@ -181,12 +181,13 @@ function MathText({ text }: { text: string }) {
   );
 }
 
-function WithFigures({ text, byN }: { text: string; byN: Map<number, Figure> }) {
+function WithFigures({ text, byN, sample = false }: { text: string; byN: Map<number, Figure>; sample?: boolean }) {
   const parts = text.split(/\[图(\d+)\]/);
   return (
     <>
       {parts.map((part, i) => {
         if (i % 2 === 0) {
+          if (sample) return <Fragment key={i}>{part}</Fragment>;
           // 图是单独一块：紧挨着图的那个换行去掉，免得多出空行
           let s = part;
           if (i > 0) s = s.replace(/^\n/, "");
@@ -194,7 +195,7 @@ function WithFigures({ text, byN }: { text: string; byN: Map<number, Figure> }) 
           return s ? <MathText key={i} text={s} /> : null;
         }
         const f = byN.get(Number(part));
-        return f ? <FigureImg key={`f${f.n}`} f={f} /> : null;
+        return f ? <FigureImg key={i} f={f} /> : <Fragment key={i}>（题面图片未取得）</Fragment>;
       })}
     </>
   );
@@ -216,11 +217,11 @@ function Statement({ text, figures, pages, onDocument }: { text: string; figures
         {onDocument && <button type="button" className="btn btn-sm" onClick={onDocument}>原始 PDF</button>}
       </div>
       {!text.trim() && pages.length === 0 && <p className="note">题面正在整理，也可以查看原始 PDF。</p>}
-      {text.trim() ? (
+      {text.trim() && !pages.length ? (
         <div className="stmt">
           {statementBlocks(text).map((b, i) =>
             b.kind === "h" ? <h3 key={i} className="stmt-h">{b.text}</h3>
-              : b.kind === "sample" ? <pre key={i} className="stmt-sample">{b.text}</pre>
+              : b.kind === "sample" ? <pre key={i} className="stmt-sample"><WithFigures text={b.text} byN={byN} sample /></pre>
                 : <p key={i} className="stmt-p"><WithFigures text={b.text} byN={byN} /></p>)}
           {figures.filter((f) => !mentioned.has(f.n)).map((f) => <FigureImg key={`f${f.n}`} f={f} />)}
         </div>

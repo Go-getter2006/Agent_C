@@ -6,11 +6,13 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import re
 import threading
 import time
+from contextvars import ContextVar
 from typing import Callable, TypeVar
 
 import httpx
@@ -23,6 +25,7 @@ T = TypeVar("T")
 
 # 测试时可以换成假的后端：fn(messages, json_mode, max_tokens, temperature) -> (text, tokens_in, tokens_out)
 _backend: Callable | None = None
+last_model: ContextVar[str] = ContextVar("last_successful_llm_model", default="")
 
 
 class LLMUnavailable(RuntimeError):
@@ -40,8 +43,8 @@ def available() -> bool:
     return _backend is not None or bool(config.DEEPSEEK_API_KEY)
 
 
-def _http_backend(messages, json_mode: bool, max_tokens: int, temperature: float):
-    payload = {"model": config.DEEPSEEK_MODEL, "messages": messages, "temperature": temperature,
+def _http_backend(messages, json_mode: bool, max_tokens: int, temperature: float, *, model: str | None = None):
+    payload = {"model": model or config.DEEPSEEK_MODEL, "messages": messages, "temperature": temperature,
                "max_tokens": max_tokens, "stream": False}
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
@@ -60,12 +63,13 @@ _pending: list[dict] = []
 _pending_lock = threading.Lock()
 
 
-def _record(prompt_id: str, ok: bool, attempts: int, started: float, tin: int, tout: int, error: str = "") -> None:
+def _record(prompt_id: str, ok: bool, attempts: int, started: float, tin: int, tout: int, error: str = "",
+            model: str | None = None) -> None:
     """先记在内存里，由调用方在自己的事务里写库（flush_records），避免另开连接和正在进行的事务互相等待。"""
     cost = (tin * config.LLM_PRICE_IN + tout * config.LLM_PRICE_OUT) / 1_000_000
     with _pending_lock:
         _pending.append(dict(
-            ts=db.now(), prompt_id=prompt_id, prompt_version=config.PROMPT_VERSION, model=config.DEEPSEEK_MODEL,
+            ts=db.now(), prompt_id=prompt_id, prompt_version=config.PROMPT_VERSION, model=model or config.DEEPSEEK_MODEL,
             ok=ok, attempts=attempts, duration_ms=int((time.monotonic() - started) * 1000),
             tokens_in=tin, tokens_out=tout, cost_yuan=round(cost, 6), error=error[:250]))
 
@@ -80,32 +84,54 @@ def flush_records(s) -> int:
 
 
 def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict], T],
-              retries: int = 1, max_tokens: int = 800) -> T:
+              retries: int = 1, max_tokens: int = 800, *, pages: list[tuple[int, bytes]] | None = None,
+              text_fallback: bool = True) -> T:
     """要求输出 JSON，并用 validate 校验（不合格就抛 ValueError）。不合格时带着原因重试。"""
     if not available():
         raise LLMUnavailable("没有配置大模型")
-    backend = _backend or _http_backend
     if "json" not in system.lower():
         system += "\n只输出一个 JSON 对象，不要输出别的内容。"
+    if pages and config.DEEPSEEK_VISION_MODEL.lower() not in ("", "off"):
+        parts = [{"type": "text", "text": user}]
+        for number, png in pages:
+            data = base64.b64encode(png).decode("ascii")
+            parts.extend([{"type": "text", "text": f"公开题面第 {number} 页（图文按原位置）；精确输出以评测记录为准。"},
+                          {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}", "detail": "high"}}])
+        try:
+            return _json_request(prompt_id, system, parts, validate, retries, max_tokens, config.DEEPSEEK_VISION_MODEL)
+        except LLMUnavailable:
+            if not text_fallback:
+                raise
+            user += "\n本次没有附上可用的题面页图。只根据文字和已有评测证据回答，不能推测图案。"
+    return _json_request(prompt_id, system, user, validate, retries, max_tokens, config.DEEPSEEK_MODEL)
+
+
+def _json_request(prompt_id, system, user, validate, retries, max_tokens, model):
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     started, tin, tout, last, invalid = time.monotonic(), 0, 0, "", False
     for attempt in range(1, retries + 2):
         try:
-            text, a, b = backend(messages, True, max_tokens, 0.0)
+            if _backend:
+                text, a, b = _backend(messages, True, max_tokens, 0.0)
+            else:
+                text, a, b = _http_backend(messages, True, max_tokens, 0.0, model=model)
             tin, tout = tin + a, tout + b
             data = json.loads(text)
             if not isinstance(data, dict):
                 raise ValueError("输出不是 JSON 对象")
             result = validate(data)
-            _record(prompt_id, True, attempt, started, tin, tout)
+            _record(prompt_id, True, attempt, started, tin, tout, model=model)
+            last_model.set(model)
             return result
         except ValueError as exc:
             last, invalid = f"校验不通过：{exc}", True
             messages = messages[:2] + [{"role": "user", "content": f"上一次的输出不合格（{exc}）。请严格按要求重新输出。"}]
         except Exception as exc:  # 网络、接口错误
             last, invalid = f"{type(exc).__name__}", False
+            if isinstance(user, list):
+                break  # 视觉接口不可用，本次仍可用普通模型分析代码与评测证据
             time.sleep(0.5 * attempt)
-    _record(prompt_id, False, retries + 1, started, tin, tout, last)
+    _record(prompt_id, False, attempt, started, tin, tout, last, model=model)
     err = LLMUnavailable(last)
     err.invalid = invalid
     raise err
@@ -114,7 +140,7 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
 def evidence_for_model(evidence: dict, user_id: str = "", name: str = "") -> dict:
     """保留诊断所需的题面和评测证据，姓名、学号等身份字段不进入模型上下文。源码由调用方单独编号。"""
     fields = ("testcaseId", "runId", "result", "resultCode", "passed", "runTimeMs", "memoryKb",
-              "standardInput", "standardOutput", "programOutput", "outputTruncated", "firstDiffLine")
+              "standardInput", "standardOutput", "programOutput", "outputTruncated", "firstDiffLine", "base64")
     return {
         "problemText": pdftext.for_llm(strip_identity(evidence.get("problemText") or "", user_id, name)),
         "judgement": evidence.get("judgement"),
