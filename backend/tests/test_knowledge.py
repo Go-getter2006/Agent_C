@@ -1,11 +1,13 @@
 """知识问答：多个问答主题；不自动绑到作业题上，学生选了“结合当前题”才带上；各看各的、按课程分开。"""
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app import db
+from app import db, llm
 from app import models as m
 from app.web.app import create_app
 from app.web.student import topic_title
@@ -43,6 +45,43 @@ def test_topic_title():
     assert topic_title("为什么 5 / 2 存进 double 还是 2？后面还有") == "为什么 5 / 2 存进 double 还是 2"
     assert topic_title("数组下标到底是从 0 还是从 1 开始的呢呢呢呢") == "数组下标到底是从 0 还是从 1 开始…"
     assert topic_title("   ") == "新的问答"
+
+
+def test_knowledge_code_block_is_renderable_on_send_and_reopen(client, monkeypatch):
+    login(client)
+    before = "用 `struct` 定义结构体。"
+    after = "用 `.` 访问成员。"
+    lines = ["struct Student { int age; };", "struct Student s = {18};"]
+    fenced = [before, "```c", *lines, "```", after]
+    calls = []
+
+    def answer(*args):
+        calls.append(args)
+        return json.dumps({"before": "\n".join(fenced), "code": None}), 10, 10
+
+    monkeypatch.setattr(llm, "_backend", answer)
+    sent = client.post("/api/threads/new/messages", json={"text": "什么是结构体？"})
+    assert sent.status_code == 200
+    key = sent.json()["thread"]
+    blocks = sent.json()["messages"][-1]["blocks"]
+    assert blocks == [
+        {"t": "p", "text": before},
+        {"t": "code", "caption": "示例", "start": 1, "lines": lines, "mark": []},
+        {"t": "p", "text": after},
+    ]
+    assert len(calls) == 1
+
+    # 模拟修复前已保存的回复，旧围栏和每行代码各自存成段落。
+    msg_id = sent.json()["messages"][-1]["id"]
+    old_blocks = [{"t": "p", "text": line} for line in fenced]
+    with db.session_scope() as s:
+        msg = s.get(m.ChatMessage, msg_id)
+        assert msg.content["blocks"] == blocks
+        msg.content = {**msg.content, "blocks": old_blocks}
+    assert client.get(f"/api/threads/{key}").json()["messages"][-1]["blocks"] == blocks
+    assert len(calls) == 1
+    with db.session_scope() as s:
+        assert s.get(m.ChatMessage, msg_id).content["blocks"] == old_blocks
 
 
 def test_topics_are_separate_threads_and_do_not_bind_homework(client):

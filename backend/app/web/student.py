@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from .. import accounts, catalog, changes, config, db, llm, pdftext, progress, quiz, review
 from .. import models as m
-from ..chat import workflow
+from ..chat import reply, workflow
 from ..chat.text import dedent, quote_range
 from ..taxonomy import KNOWLEDGE_POINTS, UI_EVENTS, course_of, kp_of_skill
 from ..xdoj import api as sync_api
@@ -144,8 +144,11 @@ def _contextual_blocks(s: Session, msg: m.ChatMessage) -> list[dict]:
 
 def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
     content = msg.content or {}
+    blocks = _contextual_blocks(s, msg)
+    if msg.role == "agent" and msg.problem_id is None:
+        blocks = reply.restore_knowledge_code(blocks)
     out = {"id": msg.id, "role": msg.role, "kind": msg.kind, "time": msg.created_at.isoformat(),
-           "blocks": _contextual_blocks(s, msg), "actions": content.get("actions", []) if with_actions else []}
+           "blocks": blocks, "actions": content.get("actions", []) if with_actions else []}
     if msg.failure_submission_id is not None and msg.notice_read_at is None:
         out["unreadNotice"] = True
     if msg.kind == "quiz" and msg.quiz_attempt_id:
@@ -589,11 +592,19 @@ def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(stu
 
 
 @router.get("/quiz/{attempt_id}/recap")
-def quiz_recap(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+def quiz_recap(attempt_id: int, response: Response, user: m.User = Depends(student),
+               s: Session = Depends(get_session)) -> dict:
     """做完以后的回顾：他以前在这里出过的错（程序整理）和智能体的分析。第一次要时生成，之后用存的。"""
     from .. import recap
 
-    return {"recap": recap.for_attempt(s, _attempt(s, user, attempt_id))}
+    attempt = _attempt(s, user, attempt_id)
+    already_saved = attempt.recap is not None
+    result = recap.for_attempt(s, attempt)
+    if not already_saved and attempt.recap is not None:
+        s.commit()  # 先持久化，客户端拿到的才是后续可复用的回顾。
+    response.headers["Cache-Control"] = "private, max-age=300" if attempt.recap is not None else "no-store"
+    response.headers["Vary"] = "Cookie"
+    return {"recap": result}
 
 
 @router.post("/quiz/{attempt_id}/viewed")
@@ -713,8 +724,11 @@ def review_attempts(user: m.User = Depends(student), s: Session = Depends(get_se
 def review_attempt(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     """一道做完的复习题：题和反馈（和当时看到的一样），之后可以接着就这道题提问。"""
     a = _finished_review(s, user, attempt_id)
+    view = quiz.view(s, a)
+    if a.recap is not None:
+        view["recap"] = a.recap or None
     return {"attemptId": a.id, "title": KNOWLEDGE_POINTS.get(kp_of_skill(a.skill_code), "复习题"),
-            "time": (a.finished_at or a.created_at).isoformat(), "quiz": quiz.view(s, a)}
+            "time": (a.finished_at or a.created_at).isoformat(), "quiz": view}
 
 
 @router.post("/review/{item_id}/request")

@@ -132,7 +132,7 @@ function ReviewChat({ quiz, lead, layout, onChange, onNext, nextLabel, onAsked }
   onNext?: () => void; nextLabel?: string; onAsked?: () => void;
 }) {
   const done = quiz.state === "done" && quiz.result?.outcome !== "skipped";
-  const recap = useRecap(quiz.attemptId, done);   // 解释之后智能体的回顾（第一次要时生成）
+  const recap = useRecap(quiz.attemptId, done, quiz.recap);
   const [turns, setTurns] = useState<ReviewTurn[]>([]);
   const [text, setText] = useState("");
   const [asking, setAsking] = useState<string | null>(null);
