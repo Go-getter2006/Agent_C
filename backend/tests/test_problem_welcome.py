@@ -13,6 +13,34 @@ from app.xdoj import endpoints, sync_meta, sync_submissions
 UID = "2500000001"
 
 
+def test_reading_empty_homework_thread_only_reads_messages(ctx, clock, monkeypatch):
+    monkeypatch.setattr("app.config.AUTH_MODE", "dev")
+    sync_meta.sync_metadata(ctx)
+    key = f"p{ctx.server_id}-406"
+    url = f"/api/threads/{key}"
+
+    def triggers():
+        with db.session_scope() as s:
+            return s.scalars(select(m.Trigger.id).where(m.Trigger.kind == "student_active").order_by(m.Trigger.id)).all()
+
+    with TestClient(create_app()) as client:
+        assert client.post("/api/auth/login", json={"loginName": UID, "password": "test-pass"}).status_code == 200
+        assert client.get("/api/homeworks").status_code == 200
+        before = triggers()
+        assert before
+        response = client.get(url)
+        assert response.status_code == 200 and response.json() == {"messages": []}
+        assert triggers() == before
+
+        row = endpoints.SubmissionRow(990000, UID, "", 406, 501, 31, clock.now(), "C", "答案错误", 0)
+        with db.session_scope() as s:
+            assert sync_submissions._store_submission(s, ctx, row, False) == 1
+        messages = client.get(url).json()["messages"]
+        assert len(messages) == 1 and messages[0]["role"] == "agent" and messages[0]["unreadNotice"]
+        assert client.get("/api/status").json()["unread"]["problems"][key] == messages[0]["id"]
+        assert triggers() == before
+
+
 def test_sync_writes_once_and_only_acknowledges_the_visible_notice(ctx, clock, monkeypatch):
     monkeypatch.setattr("app.config.AUTH_MODE", "dev")
     sid = ctx.server_id

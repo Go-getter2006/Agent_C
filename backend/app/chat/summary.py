@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import catalog, changes, db, llm
+from .. import catalog, changes, db, llm, pdftext
 from .. import models as m
 from ..taxonomy import course_prompt, error_name
 from .proactive import _course, fix_excerpt
@@ -43,7 +43,8 @@ _SYSTEM = """你是 C 语言课程的助教。一名学生一道题前面没通�
 要求：只说思路和写法，不要贴大段代码；不要提测试数据、具体的输入输出；不要提学号、姓名；用“你”称呼他。"""
 
 
-def _compare_llm(before: list[str], after: list[str], tests: list[dict], course: str) -> list[str] | None:
+def _compare_llm(before: list[str], after: list[str], tests: list[dict], course: str, statement: str = "",
+                 problems: list[str] | None = None, who: tuple[str, str] = ("", "")) -> list[str] | None:
     from .validate import _leaks
 
     def validate(d: dict) -> list[str]:
@@ -58,8 +59,10 @@ def _compare_llm(before: list[str], after: list[str], tests: list[dict], course:
             raise ValueError("不能出现测试数据")
         return parts
 
-    user = ("【原来的代码】\n" + llm.strip_identity("\n".join(before)) +
-            "\n\n【通过的代码】\n" + llm.strip_identity("\n".join(after)))
+    user = (("【题目】\n" + pdftext.for_llm(llm.strip_identity(statement, *who))[:1500] + "\n\n" if statement else "")
+            + ("【原来没过时程序标出的问题】" + "、".join(problems) + "\n\n" if problems else "")
+            + "【原来的代码】\n" + llm.strip_identity("\n".join(before), *who) +
+            "\n\n【通过的代码】\n" + llm.strip_identity("\n".join(after), *who))
     try:
         return llm.call_json("summary_compare", course_prompt(_SYSTEM, course), user, validate, retries=1, max_tokens=400)
     except llm.LLMUnavailable:
@@ -96,10 +99,12 @@ def on_pass(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> m.
         if llm.available():
             from ..chat.context import Ctx, tutor_context
 
-            ctx = Ctx(user_id=sub.user_id, course=_course(s, sub.server_id))
+            student = s.get(m.Student, sub.user_id)
+            ctx = Ctx(user_id=sub.user_id, user_name=student.name if student else "", course=_course(s, sub.server_id))
             ctx.problem = catalog.problem_info(s, sub.server_id, sub.problem_id)
             tutor_context(s, ctx, now)
-            compared = _compare_llm(first_lines or [], ac_lines or [], ctx.all_tests, ctx.course)
+            compared = _compare_llm(first_lines or [], ac_lines or [], ctx.all_tests, ctx.course, ctx.statement,
+                                    names[:3], (ctx.user_id, ctx.user_name))
         if compared:
             before, after, diff, question = compared
             blocks += [{"t": "p", "text": f"看你大幅改了代码（改了 {whole.changed} 行），换了一种做法："},
@@ -183,8 +188,10 @@ def reflect_template(facts: ReflectFacts | None) -> str:
     return "好，把这一点记下来。以后遇到类似的情况，先想想这里。"
 
 
-def reflect_reply(facts: ReflectFacts | None, text: str, tests: list[dict], course: str) -> tuple[str, str]:
-    """回顾的回复：(文字, llm / template)。大模型不合格或没有时用模板。"""
+def reflect_reply(facts: ReflectFacts | None, text: str, tests: list[dict], course: str, statement: str = "",
+                  recent: str = "", who: tuple[str, str] = ("", "")) -> tuple[str, str]:
+    """回顾的回复：(文字, llm / template)。大模型不合格或没有时用模板。
+    statement：题面；recent：最近的对话（含通过后的总结）；who：(学号, 姓名)，发出去之前去掉。"""
     from .validate import _leaks
 
     if facts is None or not llm.available():
@@ -200,9 +207,11 @@ def reflect_reply(facts: ReflectFacts | None, text: str, tests: list[dict], cour
             raise ValueError("不能贴代码、不能出现测试数据")
         return out
 
-    user = ("【前面没过时的问题】" + ("、".join(facts.names) or "（没有标出来）")
-            + "\n【他最后改的几行】\n" + (llm.strip_identity("\n".join(facts.fix)) or "（没有）")
-            + "\n【他的回答】\n" + llm.strip_identity(text))
+    user = (("【题目】\n" + pdftext.for_llm(llm.strip_identity(statement, *who))[:1200] + "\n" if statement else "")
+            + "【前面没过时的问题】" + ("、".join(facts.names) or "（没有标出来）")
+            + "\n【他最后改的几行】\n" + (llm.strip_identity("\n".join(facts.fix), *who) or "（没有）")
+            + (f"\n【最近的对话】\n{recent}" if recent else "")
+            + "\n【他的回答】\n" + llm.strip_identity(text, *who))
     try:
         return llm.call_json("reflect_reply", course_prompt(_REFLECT_SYSTEM, course), user, validate,
                              retries=1, max_tokens=200), "llm"

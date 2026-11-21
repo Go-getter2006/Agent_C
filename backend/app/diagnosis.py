@@ -30,7 +30,7 @@ from .quiz import challenge_state, revealing_stem
 from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill, kp_rank
 
 VERSION = "dims-2"   # 定义改了就改版本号（研究导出里带上，docs/研究数据与指标.md）。dims-2：修改的分母含运行过样例的第一稿
-CHALLENGE_VERSION = "challenge-1"   # 追问的说法和坚持、改判的算法
+CHALLENGE_VERSION = "challenge-2"   # 追问的说法、坚持和改判的算法、追不追问怎么定（2：一半随机）
 
 
 @dataclass

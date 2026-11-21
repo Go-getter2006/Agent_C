@@ -21,17 +21,26 @@ UID = "2500000001"
 def test_review_pick_and_quiz_plan_are_recorded(demo):
     with db.session_scope() as s:
         before = s.scalar(select(m.DecisionLog.id).order_by(m.DecisionLog.id.desc())) or 0   # 演示数据入库时也记过
+        # 演示环境没有大模型：只让题库里有题的复习项到期，抽到哪一项都出得了题（选哪项是随机的）
+        bank = set(s.scalars(select(m.QuizItem.skill_code).where(m.QuizItem.verified.is_(True))).all())
+        for item in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == UID)).all():
+            if item.skill_code not in bank:
+                item.due_at = db.now() + dt.timedelta(days=30)
         assert review.prepare(s, UID, "C") == "ready"
         new = select(m.DecisionLog).where(m.DecisionLog.id > before)
         pick = s.scalars(new.where(m.DecisionLog.kind == "review_pick")).one()
         attempt = s.scalars(select(m.QuizAttempt).where(m.QuizAttempt.reason == "review",
                                                         m.QuizAttempt.state != "done")).one()
-        assert pick.rule == "evidence-priority-1" and pick.probability == 1.0
+        # 后验抽样（thompson-1）：每个候选当时被选中的概率都记下，加起来是 1；选中的那个的概率就是记录的概率
+        assert pick.rule == "thompson-1" and 0 < pick.probability <= 1
         assert pick.ref["attempt"] == attempt.id and pick.chosen == f"review:{pick.ref['reviewItem']}"
         ranks = [c["rank"] for c in pick.candidates]
         assert ranks == list(range(1, len(ranks) + 1)) and len(ranks) >= 1
         first = pick.candidates[0]
-        assert {"skill", "origin", "weak", "importance", "score", "overdueDays", "halfLife"} <= set(first)
+        assert {"skill", "origin", "weak", "betaA", "betaB", "score", "overdueDays", "halfLife", "pickProbability"} <= set(first)
+        draw = pick.context["draws"][-1]
+        assert abs(sum(draw["probabilities"]) - 1) < 1e-6 and draw["chosen"] == pick.ref["reviewItem"]
+        assert pick.probability == draw["p"]
         assert pick.context["chosenRank"] >= 1 and pick.context["versions"]["decisions"] == "decision-1"
 
         plan = s.scalars(new.where(m.DecisionLog.kind == "quiz_plan")).one()

@@ -81,12 +81,23 @@ def reference_solution(s: Session, server_id: int, problem_id: int) -> str | Non
     statement = pdftext.usable_text(s.get(m.ProblemText, (server_id, problem_id)))
     if not statement:
         return None
+    samples = []
+    for c in s.scalars(select(m.Testcase).where(m.Testcase.server_id == server_id, m.Testcase.problem_id == problem_id)
+                       .order_by(m.Testcase.testcase_id).limit(3)).all():
+        if c.input_bytes is None or c.output_bytes is None:
+            continue
+        given, want = decode_bytes(c.input_bytes, c.input_encoding)[0], decode_bytes(c.output_bytes, c.output_encoding)[0]
+        if len(given) <= 400 and len(want) <= 400:
+            samples.append({"standardInput": given, "standardOutput": want})
+    server = s.get(m.Server, server_id)
     try:
         code = llm.call_json(
             "reference_solution",
-            "你是 C 语言课程的助教。根据题面写一份正确、朴素的 C 程序，只用标准库。"
-            '输出 JSON：{"code":"完整的 C 源码"}',
-            pdftext.for_llm(statement),
+            course_prompt("你是 C 语言课程的助教。根据题面写一份正确、朴素的 C 程序，只用标准库；"
+                          "输入输出格式以给出的测试点为准（程序会拿全部测试点验证）。"
+                          '输出 JSON：{"code":"完整的 C 源码"}', server.course if server else "C"),
+            "【题面】\n" + pdftext.for_llm(statement)
+            + ("\n\n【几组测试点】\n" + json.dumps(samples, ensure_ascii=False) if samples else ""),
             lambda d: str(d["code"]) if isinstance(d.get("code"), str) and "main" in d["code"] else (_ for _ in ()).throw(ValueError("没有给出完整程序")),
             retries=1, max_tokens=1500)
     except llm.LLMUnavailable:

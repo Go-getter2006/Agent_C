@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import re
 
@@ -85,6 +86,10 @@ class Material:
             self.help = max([HELP_ORDER.get(x, -1) for x in before], default=-1)
         self.recalled = s.scalar(select(m.StuckPoint.id).where(
             m.StuckPoint.round_id == rnd.id, m.StuckPoint.resolution == "recalled")) is not None
+        student = s.get(m.Student, rnd.user_id)
+        self.user_name = student.name if student else ""
+        self.problem = catalog.problem_info(s, rnd.server_id, rnd.problem_id) \
+            if rnd.server_id is not None and rnd.problem_id is not None else None
 
     def _passed_after(self, s: Session) -> bool:
         if self.rnd.problem_id is None:
@@ -127,15 +132,18 @@ confidence 是你对这个判断有多大把握（0 到 1）；不要输出学�
 
 
 def dialogue(mat: Material, skill: str, root_error: str) -> tuple[list[str], list[tuple[str, str]]]:
-    """评估用的材料：已知情况、对话（最后 16 条，去掉学号姓名）。"""
+    """评估用的材料：已知情况、对话（最后 16 条，带消息里的代码块，去掉学号姓名）。"""
+    from .chat.talk import message_for_model
+
     lines = []
     for msg in mat.messages:
         if msg.kind != "text":
             continue
-        text = llm.strip_identity(_text(msg))[:400]
+        text = llm.strip_identity(message_for_model(msg), mat.rnd.user_id, mat.user_name)[:800]
         if text.strip():
             lines.append(("学生" if msg.role == "student" else "助手", text))
-    facts = [f"这次评估的技能：{skill_name(skill)}（属于“{KNOWLEDGE_POINTS.get(kp_of_skill(skill), '')}”）",
+    facts = [f"这道题：{mat.problem.title}（{mat.problem.brief}）" if mat.problem else "",
+             f"这次评估的技能：{skill_name(skill)}（属于“{KNOWLEDGE_POINTS.get(kp_of_skill(skill), '')}”）",
              "这是题目通过以后的回顾：助手问他当时卡住的关键是什么，下面是他的回答" if mat.reflect else "",
              f"程序诊断的错误：{error_name(root_error)}" if root_error else "",
              f"这道题后来{'通过了' if mat.passed else '还没有通过'}",
@@ -167,7 +175,7 @@ def _llm_level(mat: Material, skill: str, root_error: str) -> tuple[int | None, 
             raise ValueError("confidence 要是 0 到 1 的数")
         if not 0 <= conf <= 1:
             raise ValueError("confidence 要在 0 到 1 之间")
-        miscon = llm.strip_identity(str(d.get("misconception") or "").strip())[:60]
+        miscon = llm.strip_identity(str(d.get("misconception") or "").strip(), mat.rnd.user_id, mat.user_name)[:60]
         return level, evidence, miscon, conf
 
     return llm.call_json("assess_understanding", course_prompt(_SYSTEM, course_of(skill)), user, validate,
@@ -303,8 +311,20 @@ def assess_code(s: Session, sub: m.Submission, use_llm: bool = True) -> m.AgentA
                  f"他交了 {len(ep.failed) + 1} 次才通过；没通过时的问题：{'、'.join(dict.fromkeys(errs)) or '没标出来'}",
                  f"同一个错误紧接着又出现 {ep.same_repeats} 次；不到一分钟就重交 {ep.rapid} 次",
                  f"这次评估的技能：{skill_name(skill)}（属于“{KNOWLEDGE_POINTS.get(kp_of_skill(skill), '')}”）"]
-        user = ("【已知情况】\n" + "\n".join(f for f in facts if f) + "\n\n【改动：从最后一次没通过的代码到通过的代码】\n" +
-                llm.strip_identity("\n".join(diff)))
+        from . import pdftext
+        from .xdoj.assemble import assemble_submission
+
+        student = s.get(m.Student, sub.user_id)
+        name = student.name if student else ""
+        text = s.get(m.ProblemText, (sub.server_id, sub.problem_id))
+        statement = pdftext.for_llm(pdftext.usable_text(text))[:1500] if text is not None else ""
+        cases = llm.failed_cases(assemble_submission(s, sub.server_id, ep.failed[-1].submission_id,
+                                                     include_problem_text=False), sub.user_id, name)
+        user = ("【已知情况】\n" + "\n".join(f for f in facts if f)
+                + (f"\n\n【题目】\n{statement}" if statement else "")
+                + ("\n\n【最后一次没通过时没过的测试点（只用来判断改动是不是对着原因）】\n"
+                   + json.dumps(cases, ensure_ascii=False) if cases else "")
+                + "\n\n【改动：从最后一次没通过的代码到通过的代码】\n" + llm.strip_identity("\n".join(diff), sub.user_id, name))
 
         def validate(d: dict) -> tuple[int | None, list[str], str, float]:
             level = d.get("level")
@@ -325,7 +345,7 @@ def assess_code(s: Session, sub: m.Submission, use_llm: bool = True) -> m.AgentA
                 raise ValueError("confidence 要是 0 到 1 的数")
             if not 0 <= conf <= 1:
                 raise ValueError("confidence 要在 0 到 1 之间")
-            return level, evidence, llm.strip_identity(str(d.get("misconception") or "").strip())[:60], conf
+            return level, evidence, llm.strip_identity(str(d.get("misconception") or "").strip(), sub.user_id, name)[:60], conf
 
         try:
             level, evidence, miscon, conf = llm.call_json(

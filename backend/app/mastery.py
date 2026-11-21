@@ -25,6 +25,14 @@ v2（默认）：在 v1 上加四处改动。
        它只改变估计值，不算“练过”（不计入作答次数、不改变“最近一次是不是独立做对”），
        所以只聊过、没做过题的技能不会因此有档位；会做但讲不清的，估计值和区间下限会被拉低，不容易到“已掌握”。
        v1 是原来的基线，不用这类证据；图模型也不用。v2 可以用 include_agent=False 去掉它，做消融对照。
+
+2026-11-21 起（MASTERY_VERSION 2026-11-21）：
+    - 掌握分 = (1 + S) / (2 + S + F)，只看他自己的证据（不掺图先验）。档位只由掌握分定：75 分以上已掌握，
+      50 分以上基本掌握，以下待加强；没有作答是还没练到。不再另看区间下限、“最近一次是不是独立做对”，
+      分数和档位总是一致。p（带图先验）照旧，给准备度、图模型、研究对照用。
+    - 每类证据的系数、半衰期的起点和增长率不再是写死的数：每周用数据学一次（app/learn.py），学完冻结，
+      下一周都用这一版（Params，版本记在 mastery_params）。先验就是原来的经验值，数据少时不动。
+      每条证据记成一项“贡献”（类别键、会还是不会、基数、距今天数），S、F 由这一周的参数算出来。
 """
 from __future__ import annotations
 
@@ -38,9 +46,51 @@ from sqlalchemy.orm import Session
 
 from . import config, db
 from . import models as m
-from .taxonomy import LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_WEAK, kp_of_skill
+from .taxonomy import LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_WEAK, course_of, kp_of_skill
 
 Z80 = 1.2816  # 80% 双侧区间
+
+
+@dataclass
+class Params:
+    """掌握程度里要学的参数（app/learn.py 每周学一次）：每类证据的系数（键见 SkillState.contrib，默认 1），
+    半衰期的起点 h0 和增长率 g。PRIOR 就是原来的经验值。"""
+    version: str = "prior"
+    scales: dict[str, float] = field(default_factory=dict)
+    h0: float = 0.0
+    g: float = 0.0
+
+    def scale(self, key: str) -> float:
+        return self.scales.get(key, 1.0)
+
+    def half_life(self, exponent: int) -> float:
+        cfg = config.MASTERY_V2
+        h0 = self.h0 or cfg["half_life_base"]
+        g = self.g or cfg["half_life_growth"]
+        return max(cfg["half_life_min"], min(cfg["half_life_max"], h0 * g ** exponent))
+
+
+PRIOR = Params()
+_ACTIVE: dict[str, tuple[float, Params]] = {}
+
+
+def active_params(s: Session, course: str) -> Params:
+    """这门课这一周用的参数（mastery_params 里最新的一版），没有就用经验值。进程里缓存 5 分钟。"""
+    import time
+
+    hit = _ACTIVE.get(course)
+    if hit is not None and time.monotonic() - hit[0] < 300:
+        return hit[1]
+    row = s.scalars(select(m.MasteryParams).where(m.MasteryParams.course == course)
+                    .order_by(m.MasteryParams.fitted_at.desc(), m.MasteryParams.id.desc()).limit(1)).first()
+    prm = PRIOR if row is None else Params(row.version, dict((row.params or {}).get("scales", {})),
+                                            float((row.params or {}).get("h0", 0.0)), float((row.params or {}).get("g", 0.0)))
+    _ACTIVE[course] = (time.monotonic(), prm)
+    return prm
+
+
+def forget_active_params() -> None:
+    _ACTIVE.clear()
 AGENT_EVENTS = frozenset({"agent_understanding"})   # 智能体评估记下的证据
 V2_ONLY_EVENTS = AGENT_EVENTS | {"submit_failed"}    # v1（附件一的基线）不用的证据
 
@@ -66,6 +116,10 @@ class SkillState:
     # 最近一条“直接”证据：顺带用到的次技能的通过（problem_skills）不算正面也不算反面，不改变它们
     last_direct_ts: dt.datetime | None = None
     last_kind: str = ""              # independent 独立做对 / helped 靠提示或示例才过 / failed 没过 / copied 疑似雷同
+    # v2：每条证据的“贡献”(类别键, 会还是不会, 基数, 距今天数)；S、F = Σ 基数 × 这类的系数 × 0.5^(天数/半衰期)
+    contrib: list = field(default_factory=list, repr=False)
+    hl_exp: int = 0                  # 半衰期的指数：间隔开的独立成功天数 − 1 − 失败次数
+    params_version: str = ""
 
     @property
     def p(self) -> float:
@@ -86,32 +140,29 @@ class SkillState:
 
     @property
     def score(self) -> float:
-        """教师端的“掌握分”：只看他自己的证据（做题、会话、小题），用很轻的先验 Beta(0.5, 0.5)，不掺图先验。
-        档位仍按 p 和区间定（谨慎）；分数要能把“做得好”和“做得一般”的同学分开，所以不往 0.5 拉。"""
-        return (0.5 + self.s) / (1.0 + self.s + self.f)
+        """掌握分：(1 + S) / (2 + S + F)，只看他自己的证据（做题、会话、小题），不掺图先验。
+        起点 Beta(1, 1)：一次独立做对 67 分，连对两次 75 分，一次没过 33 分。档位就按它定。"""
+        return (1.0 + self.s) / (2.0 + self.s + self.f)
 
     @property
     def level(self) -> str:
         if self.model == "v1":
             return level_of(self.p, self.s + self.f, self.raw, self.last_independent_success)
-        return level_v2(self.p, self.interval[0], self.events, self.raw, self.last_independent_success,
-                        self.s, self.f_raw, self.recurred)
+        return level_from_score(self.score, self.events, self.raw)
 
 
-def level_v2(p: float, lower: float, events: int, raw: float, last_independent_success: bool,
-             s: float = 0.0, f_raw: float = 0.0, recurred: bool = False) -> str:
-    """定档。“待加强”必须有还没改对的失败：只因为证据少、先验拉着，或者交了几次自己改对了，都不算待加强。
-    改对过又犯（别的题上改对过，新的题上又错、还没改对）一定是待加强。"""
+def level_from_score(score: float | None, events: int, raw: float) -> str:
+    """档位只看掌握分（四舍五入到整数分，和页面上显示的一样）：75 以上已掌握，50 以上基本掌握，以下待加强。
+    没有作答（或证据量太小）是还没练到。"""
     cfg = config.MASTERY_V2
-    if events == 0 or raw < cfg["min_raw"]:
+    if score is None or events == 0 or raw < cfg["min_raw"]:
         return LEVEL_NONE
-    if lower >= cfg["mastered_lower"] and last_independent_success:
+    points = round(score * 100)
+    if points >= cfg["mastered_score"]:
         return LEVEL_MASTERED
-    if f_raw <= 0:
-        return LEVEL_BASIC if s >= cfg["min_current_success"] else LEVEL_NONE
-    if p < cfg["weak_below"] or recurred:
-        return LEVEL_WEAK
-    return LEVEL_BASIC
+    if points >= cfg["basic_score"]:
+        return LEVEL_BASIC
+    return LEVEL_WEAK
 
 
 def level_of(p: float, evidence: float, raw: float, last_independent_success: bool) -> str:
@@ -151,19 +202,22 @@ def _rows(s: Session, user_id: str, at: dt.datetime) -> list[m.SkillEvidence]:
 
 
 def skill_states(s: Session, user_id: str, at: dt.datetime | None = None, decay: bool = True,
-                 model: str | None = None, with_predicted: bool = False, include_agent: bool = True) -> dict[str, SkillState]:
+                 model: str | None = None, with_predicted: bool = False, include_agent: bool = True,
+                 params: Params | None = None, graph_prior: bool = True) -> dict[str, SkillState]:
     """每个有证据的技能的状态。model 不填就用 config.MASTERY_MODEL。
 
     with_predicted（只对 v2）：把没有证据、但能由先修推出来的技能也带上（predicted=True），用于数据结构准备度。
     include_agent（只对 v2）：用不用智能体评估的证据。
+    params（只对 v2）：用哪一版参数；不填用每门课这一周的（active_params）。PRIOR 是经验值（对照用）。
+    graph_prior（只对 v2）：算不算图先验（每周学参数时只要贡献，不算它）。
     """
     model = model or config.MASTERY_MODEL
-    memo = s.info.get(MEMO) if at is None else None
+    memo = s.info.get(MEMO) if at is None and params is None and graph_prior else None
     key = ("skill", user_id, decay, model, with_predicted, include_agent)
     if memo is not None and key in memo:
         return memo[key]
     if model == "v2":
-        out = _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted, include_agent)
+        out = _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted, include_agent, params, graph_prior)
     else:
         out = _skill_states_v1(s, user_id, at or db.now(), decay)
     if memo is not None:
@@ -248,13 +302,29 @@ def topo_order() -> list[str]:
     return _TOPO
 
 
-def half_life_days(rows: list[m.SkillEvidence]) -> float:
-    """证据半衰期：间隔开的独立成功（按北京时间的不同日期计）每多一天乘 growth，每次失败除以 growth。"""
-    cfg = config.MASTERY_V2
+def half_life_exponent(rows: list[m.SkillEvidence]) -> int:
+    """半衰期的指数：间隔开的独立成功（按北京时间的不同日期计）多一天加 1，每次失败减 1。"""
     days = {r.ts.astimezone(db.BEIJING).date() for r in rows if r.success and r.independent and r.weight > 0 and (r.reliability is None or r.reliability >= 1)}
     fails = sum(1 for r in rows if not r.success and r.weight > 0)
-    h = cfg["half_life_base"] * cfg["half_life_growth"] ** (max(0, len(days) - 1) - fails)
-    return max(cfg["half_life_min"], min(cfg["half_life_max"], h))
+    return max(0, len(days) - 1) - fails
+
+
+def half_life_days(rows: list[m.SkillEvidence], params: Params | None = None) -> float:
+    """证据半衰期：起点 h0 乘增长率 g 的指数次方（指数见 half_life_exponent），夹在上下限之间。"""
+    return (params or PRIOR).half_life(half_life_exponent(rows))
+
+
+def apply_params(st: SkillState, params: Params, decay: bool = True) -> None:
+    """按这一版参数由贡献算出 S、F。"""
+    h = params.half_life(st.hl_exp)
+    st.half_life, st.params_version = h, params.version
+    st.s = st.f = 0.0
+    for key, success, base, age in st.contrib:
+        w = base * params.scale(key) * (0.5 ** (age / h) if decay else 1.0)
+        if success:
+            st.s += w
+        else:
+            st.f += w
 
 
 def attempt_history(s: Session, user_id: str, at: dt.datetime) -> dict[tuple[int, int], list[tuple[int, str, str | None]]]:
@@ -303,10 +373,20 @@ def resolved_by(row: m.SkillEvidence, history: dict[tuple[int, int], list[tuple[
 
 
 def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
-                     with_predicted: bool, include_agent: bool = True) -> dict[str, SkillState]:
+                     with_predicted: bool, include_agent: bool = True, params: Params | None = None,
+                     graph_prior: bool = True) -> dict[str, SkillState]:
     from .cross import weighted_parents
 
     cfg = config.MASTERY_V2
+    by_course: dict[str, Params] = {}
+
+    def params_for(code: str) -> Params:
+        if params is not None:
+            return params
+        c = course_of(code)
+        if c not in by_course:
+            by_course[c] = active_params(s, c)
+        return by_course[c]
     history = attempt_history(s, user_id, at)
     by_skill: dict[str, list[m.SkillEvidence]] = {}
     for r in _rows(s, user_id, at):
@@ -318,8 +398,7 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
     out: dict[str, SkillState] = {}
     for code, rows in by_skill.items():
         st = SkillState(code, model="v2")
-        h = half_life_days([r for r in rows if r.event_type not in AGENT_EVENTS])
-        st.half_life = h
+        st.hl_exp = half_life_exponent([r for r in rows if r.event_type not in AGENT_EVENTS])
         pass_keys = {r.source_key for r in rows if r.success and r.event_type.startswith("pass")}
         episodes = Counter(r.source_key.rsplit(":", 1)[0] for r in rows if r.event_type == "submit_failed")
         credited_fixes = set()
@@ -327,13 +406,9 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
         for r in rows:
             days = max(0.0, (at - r.ts).total_seconds() / 86400.0)
             w = r.weight * (r.reliability if r.reliability is not None else 1.0) * cfg["event_scale"].get(r.event_type, 1.0)
-            if decay:
-                w *= 0.5 ** (days / h)
+            sign = "+" if r.success else "-"
             if r.event_type in AGENT_EVENTS:   # 智能体评估：只改估计值，不算练过
-                if r.success:
-                    st.s += w
-                else:
-                    st.f += w
+                st.contrib.append((r.event_type + sign, bool(r.success), w, days))
                 continue
             fixed_by = resolved_by(r, history) if r.event_type == "submit_failed" else None
             if fixed_by in weak_passes:
@@ -341,14 +416,15 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
             if fixed_by is not None:
                 # 后来改对了：失败只算一小部分；这次通过没有记到这个技能上（错在别的技能），改对它算一次会
                 repeated = episodes[r.source_key.rsplit(":", 1)[0]] >= 2
-                st.f += w * cfg["repeated_fail_factor" if repeated else "resolved_fail_factor"]
+                st.contrib.append(("submit_failed:repeated-" if repeated else "submit_failed:resolved-", False,
+                                   w * cfg["repeated_fail_factor" if repeated else "resolved_fail_factor"], days))
                 if fixed_by not in pass_keys and fixed_by not in credited_fixes:
-                    st.s += w * cfg["resolved_fix_credit"]
+                    st.contrib.append(("fix_credit+", True, w * cfg["resolved_fix_credit"], days))
                     credited_fixes.add(fixed_by)
             elif r.success:
-                st.s += w
+                st.contrib.append((r.event_type + sign, True, w, days))
             else:
-                st.f += w
+                st.contrib.append((r.event_type + sign, False, w, days))
                 st.f_raw += r.weight   # 还没改对的失败
                 problem = ":".join((r.source_key or "").split(":")[1:3]) if r.event_type == "submit_failed" else ""
                 if problem:
@@ -366,7 +442,10 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                 st.last_direct_ts = r.ts
                 st.last_kind = kind_of(r, weak_passes, fixed_by is not None)
                 st.last_independent_success = st.last_kind == "independent"
+        apply_params(st, params_for(code), decay)
         out[code] = st
+    if not graph_prior:
+        return out
 
     # 图先验：按先修顺序走一遍，先修（有证据或能推出来的）的均值决定起点
     parents, strength = weighted_parents(s)
@@ -404,21 +483,8 @@ class KpState:
     skills: list[SkillState] = field(default_factory=list)
     lower: float = 0.0
     predicted: bool = False
-    score: float | None = None   # 教师端的掌握分（0~1），见 SkillState.score；推出来的没有
+    score: float | None = None   # 掌握分（0~1），见 SkillState.score；推出来的没有。v2 的档位就按它定
     last_kind: str = ""          # 这个知识点上最近一条直接证据是哪种（SkillState.last_kind）
-
-    @property
-    def why(self) -> str:
-        """分数显示成绿色（和教师端分数徽章一样，四舍五入后 75 以上）、却不是“已掌握”时，说为什么（老师看的）。"""
-        if self.level != LEVEL_BASIC or self.score is None or round(self.score * 100) < 75:
-            return ""
-        if self.last_kind == "failed":
-            return "最近一次在这里没过"
-        if self.last_kind == "helped":
-            return "最近一次靠提示或示例才过"
-        if self.last_kind == "copied":
-            return "最近一次通过和同学代码雷同"
-        return "做得还不够多，还不能确定"
 
 
 def kp_states(s: Session, user_id: str, model: str | None = None, with_predicted: bool = False) -> dict[str, KpState]:
@@ -460,8 +526,9 @@ def _kp_states(s: Session, user_id: str, model: str, with_predicted: bool) -> di
         kp.last_kind = latest.last_kind
         if model == "v2":
             kp.lower = (sum((x.s + x.f) * x.interval[0] for x in real) / total) if total > 0 else min(x.interval[0] for x in real)
-            kp.level = level_v2(kp.p, kp.lower, sum(x.events for x in real), kp.raw, latest.last_independent_success,
-                                sum(x.s for x in real), sum(x.f_raw for x in real), any(x.recurred for x in real))
+            if kp.score is None:   # 证据都衰减没了：按各技能的分数平均
+                kp.score = sum(x.score for x in real) / len(real)
+            kp.level = level_from_score(kp.score, sum(x.events for x in real), kp.raw)
         else:
             kp.level = level_of(kp.p, kp.evidence, kp.raw, latest.last_independent_success)
     return out

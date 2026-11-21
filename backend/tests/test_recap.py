@@ -98,8 +98,24 @@ def _endpoint(client):
         item = s.scalars(select(m.QuizItem).where(m.QuizItem.skill_code == "C06.03.02", m.QuizItem.has_bug.is_(True))).first()
         a = quiz.new_attempt(s, UID, item, "review")
         aid = a.id
-    assert client.get(f"/api/quiz/{aid}/recap").json() == {"recap": None}       # 还没做完：不回顾
+    incomplete = client.get(f"/api/quiz/{aid}/recap")
+    assert incomplete.json() == {"recap": None}       # 还没做完：不回顾
+    assert incomplete.headers["cache-control"] == "no-store"
     client.post(f"/api/quiz/{aid}/judge", json={"hasBug": False})
     client.post(f"/api/quiz/{aid}/challenge", json={"keep": True})
-    rc = client.get(f"/api/quiz/{aid}/recap").json()["recap"]
+    response = client.get(f"/api/quiz/{aid}/recap")
+    rc = response.json()["recap"]
     assert rc and any(x["title"] == "成绩最高分" for x in rc["items"])
+    assert response.headers["cache-control"] == "private, max-age=300"
+    assert response.headers["vary"] == "Cookie"
+    with db.session_scope() as s:
+        assert s.get(m.QuizAttempt, aid).recap == rc
+
+    # 另一浏览器重新登录，复习历史从服务器拿回回顾，不需要先请求 recap。
+    from fastapi.testclient import TestClient
+    from app.web.app import create_app
+
+    other_browser = TestClient(create_app())
+    assert other_browser.post("/api/auth/login", json={"loginName": UID, "password": "test-pass"}).status_code == 200
+    assert other_browser.get(f"/api/review/attempts/{aid}").json()["quiz"]["recap"] == rc
+    assert other_browser.get(f"/api/quiz/{aid}/recap").json()["recap"] == rc

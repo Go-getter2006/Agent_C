@@ -214,7 +214,7 @@ export default function Workbench() {
   if (passed) {
     emptyTitle = "这道题已经通过了";
     emptyText = "可以回顾怎么改对的，也可以接着问。";
-  } else if (!latest) {
+  } else if (d && !latest) {
     emptyTitle = "这道题还没提交";
     emptyText = "可以先问题意。交过一次后，能看到你的代码和没过的测试点。";
   }
@@ -290,7 +290,7 @@ export default function Workbench() {
           {isProblem ? (
             <Thread threadKey={key!} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
               latestNotice={status?.unread?.problems[key!]} onNoticeRead={reloadStatus}
-              emptyReady={!!d || !!row?.last} waitingContext={!!picked && !d} context={context} onActivity={refresh} />
+              pollHistory={false} waitingContext={!!picked && !d} context={context} onActivity={refresh} />
           ) : (
             <HomeworkIntro noHomework={!current && !hwLoading && homeworks.length === 0} />
           )}

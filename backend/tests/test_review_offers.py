@@ -93,6 +93,21 @@ def test_failures_are_prioritized_over_spot_checks(database):
         assert review.due_items(s,UID,now,"C")[0].id==wrong.id
 
 
+def test_lower_score_is_more_likely_drawn(database):
+    """后验抽样本身：掌握分低的被抽中的概率大，分高的也不是 0（抽查要排在错误后面，由 spot_only 分层，见上一个测试）。"""
+    now=db.now()
+    with db.session_scope() as s:
+        wrong,_=setup(s,now)
+        mastery.record_stuck(s,UID,wrong.skill_code,1,"stuck:1",ts=now-dt.timedelta(days=3))
+        spot=review.enqueue(s,UID,"C02.01.02","spot_check",at=now-dt.timedelta(days=60))
+        mastery.add_evidence(s,UID,"C02.01.02","pass_first_try",True,1.0,"pass:9:1",now-dt.timedelta(days=60),True)
+        due=review.due_items(s,UID,now,"C",candidates=True)
+        states=mastery.skill_states(s,UID,at=now,model="v2")
+        probs=dict(zip([r.id for r in due],review.lowest_probabilities([review.beta_of(states.get(r.skill_code)) for r in due])))
+        assert probs[wrong.id]>probs[spot.id]>0
+        assert review.spot_only(spot,states.get(spot.skill_code)) and not review.spot_only(wrong,states.get(wrong.skill_code))
+
+
 def test_fixed_submission_retains_review_and_upgrades_reason(database):
     now=db.now()
     with db.session_scope() as s:
@@ -235,3 +250,8 @@ def test_review_ranks_evidence_above_age_and_waits_before_rechecking(database):
             weak.id, repeated.id, verify.id, oldest.id]
         assert not review.item_view(s, UID, recent, now)["dueNow"]
         assert "雷同" not in review.ORIGIN_TEXT[verify.origin]
+        # 真正先出哪个由后验抽样定：有卡住证据的掌握分最低，被抽中的概率最大
+        due = review.due_items(s, UID, now, "C", candidates=True)
+        states = mastery.skill_states(s, UID, at=now, model="v2")
+        probs = review.lowest_probabilities([review.beta_of(states.get(r.skill_code)) for r in due])
+        assert max(zip(probs, [r.id for r in due]))[1] == weak.id

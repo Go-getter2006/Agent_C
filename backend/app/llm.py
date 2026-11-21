@@ -154,6 +154,23 @@ def evidence_for_model(evidence: dict, user_id: str = "", name: str = "") -> dic
     }
 
 
+def failed_cases(evidence: dict, user_id: str = "", name: str = "", limit: int = 3, chars: int = 400) -> list[dict]:
+    """没通过的测试点（只给大模型分析用，回复里不能出现）：结果、输入、期望输出、他的输出；过长的截断。"""
+    def cut(v):
+        return v if not isinstance(v, str) or len(v) <= chars else v[:chars] + f"…（共 {len(v)} 字）"
+
+    rows = [t for t in evidence_for_model(evidence, user_id, name)["testCases"] if t.get("passed") is False][:limit]
+    keys = ("result", "standardInput", "standardOutput", "programOutput", "firstDiffLine", "outputTruncated")
+    return [{k: cut(row[k]) for k in keys if k in row} for row in rows]
+
+
+def numbered(source: str, user_id: str = "", name: str = "", limit: int = 80) -> str:
+    """带行号的源码（去掉学号姓名），最多 limit 行。"""
+    lines = strip_identity(source or "", user_id, name).replace("\r\n", "\n").split("\n")
+    out = "\n".join(f"{i + 1:>3}| {x}" for i, x in enumerate(lines[:limit]))
+    return out + (f"\n（后面还有 {len(lines) - limit} 行）" if len(lines) > limit else "")
+
+
 # ------------------------------------------------------------ 去掉身份信息
 _COMMENT_RE = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/")
 _IDENTITY_HINT = re.compile(r"\d{6,}|姓名|学号|班级|作者|name|author|student|@", re.I)

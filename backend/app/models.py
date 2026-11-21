@@ -817,6 +817,27 @@ class PredictionLog(Base):
     p_v2_base: Mapped[float | None] = mapped_column(Float, nullable=True)
     features: Mapped[dict] = mapped_column(JSON, default=dict)
     model_version: Mapped[str] = mapped_column(String(24), default="")
+    # 掌握分（档位就按它定）：这一周学到的参数算的，和经验值参数算的，同时记下来比谁准（app/learn.py）
+    p_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p_score_fixed: Mapped[float | None] = mapped_column(Float, nullable=True)
+    params_version: Mapped[str] = mapped_column(String(24), default="")
+
+
+class MasteryParams(Base):
+    """每周学一次的掌握程度参数（app/learn.py）：每类证据的系数、半衰期的起点和增长率。学完冻结，下一周都用这一版。
+    learned 为假表示数据不够、用的还是经验值。nll_prior / nll_fit：拟合用的那些机会上，经验值和新参数的平均对数损失。"""
+
+    __tablename__ = "mastery_params"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    course: Mapped[str] = mapped_column(String(8), index=True)
+    version: Mapped[str] = mapped_column(String(24), unique=True)
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    nll_prior: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nll_fit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    learned: Mapped[bool] = mapped_column(Boolean, default=False)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    fitted_at: Mapped[Dt] = _ts()
 
 
 # ============================================================ 智能体评估、多维画像

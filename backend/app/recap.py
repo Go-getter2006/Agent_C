@@ -215,15 +215,33 @@ def analyze(s: Session, attempt: m.QuizAttempt, facts: dict) -> str:
         blocks.append(line)
     outcome = {"right": "答对了", "right_judge": "判断对了", "right_second": "看了提示（或被追问后）才改对",
                "right_bypass": "改对了", "wrong_fix": "看出有错但没改对", "wrong_judge": "判断错了"}.get(attempt.outcome or "", "")
+    did = []
+    if attempt.judged_has_bug is not None:
+        did.append(f"先判断这段代码{'有问题' if attempt.judged_has_bug else '满足要求'}")
+    reply_ev = next((e for e in (attempt.events or []) if e.get("kind") == "challenge_reply"), None)
+    if reply_ev is not None:
+        did.append("被追问以后" + ("坚持原来的判断" if reply_ev.get("keep") else "改判为有问题"))
+    if attempt.first_lines:
+        did.append("选的位置：第 " + "、".join(str(x) for x in attempt.first_lines) + " 行")
+    if attempt.hints:
+        did.append(f"看了 {attempt.hints} 次提示")
+    start = item.start_line if item and item.start_line else 1
+    shown = "\n".join(f"{start + i:>3}| {x}" for i, x in enumerate((item.shown_code if item else "").split("\n")))
     user = (f"【这道小题】{item.stem if item else ''}\n考的是：{skill_name(attempt.skill_code)}\n"
-            f"【小题的代码】\n{item.shown_code if item else ''}\n【他这次】{outcome}\n"
+            f"【小题的代码】\n{shown}\n"
+            + (f"【错在哪几行】{'、'.join(str(start + x - 1) for x in (item.bug_lines or []))}\n" if item and item.has_bug else
+               "【这段代码本来是对的】\n")
+            + f"【他这次】{outcome}" + ("；" + "；".join(did) if did else "") + "\n"
+            + (f"【他的首稿】\n{attempt.first_fix}\n" if attempt.first_fix else "")
             + (f"【小题的解释】{item.explanation}\n" if item and item.explanation else "")
             + "【他以前在这里出过的错】\n" + "\n\n".join(blocks))
 
     def validate(d: dict) -> str:
         text = str(d.get("analysis") or "").strip()
-        if not text or len(text) > 200:
-            raise ValueError("空的或太长")
+        if not text:
+            raise ValueError("analysis 是空的")
+        if len(text) > 260:   # 要求 200 字以内，稍微超一点不算错
+            raise ValueError(f"太长了（{len(text)} 字），要 200 字以内")
         if "```" in text or _leaks(text, tests):
             raise ValueError("不能贴代码块、不能出现测试数据")
         return text

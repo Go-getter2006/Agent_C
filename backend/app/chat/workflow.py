@@ -14,6 +14,7 @@ from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
 from . import context, hints, reply, teaching, validate
+from . import talk
 from .analyze import Analysis, analyze, dialogue_act
 from .policy import Decision, PolicyInput, decide, willingness_of
 from .text import split_message
@@ -161,7 +162,7 @@ def _reflect_round(s: Session, user_id: str, thread: tuple[int, int], now: dt.da
 
 
 def _plan_next(s: Session, ctx: context.Ctx, state: dict, pick: list[int] | None, analysis: Analysis,
-               said: str, course: str) -> tuple[dict, str, str]:
+               said: str, course: str, history: list[tuple[str, str]] | None = None) -> tuple[dict, str, str]:
     """流程图往下走一步：(新的状态, 话, 帮助级别)。
     选了卡在哪几步：从第一步开始讲；回答了这一步：答上了换下一步，没答上讲具体一点，两次没答上讲清楚再往下走。"""
     from . import plan as plan_mod
@@ -169,35 +170,42 @@ def _plan_next(s: Session, ctx: context.Ctx, state: dict, pick: list[int] | None
     steps = state["steps"]
     tests = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)
     st = {**state, "picking": False, "done": list(state.get("done", []))}
-    if pick is not None:
-        st.update(queue=pick, current=pick[0], tries=0)
-        said_text, _src = plan_mod.guide(steps, pick[0], 0, said, ctx.statement, course, tests, ctx.document)
-        return st, said_text, "H1"
-    cur, tries = st["current"], int(st.get("tries", 0))
-    ok = analysis.answer_correct is True or analysis.understood
-    if not ok and tries < 1:
-        st["tries"] = tries + 1
-        said_text, _src = plan_mod.guide(steps, cur, tries + 1, said, ctx.statement, course, tests, ctx.document)
-        return st, said_text, "H1"
-    parts = []
-    level = "H1"
-    if not ok:   # 第二次还没答上：把这一步讲清楚，再往下走
-        explained, _src = plan_mod.guide(steps, cur, 2, said, ctx.statement, course, tests, ctx.document)
-        parts.append(explained)
-        level = "H2"
-    else:
-        parts.append("对，这一步就是这样。")
-    st["done"] = sorted(set(st["done"]) | {cur})
-    queue = [i for i in st.get("queue", []) if i != cur and i not in st["done"]]
-    st["queue"] = queue
-    if queue:
-        st.update(current=queue[0], tries=0)
-        nxt, _src = plan_mod.guide(steps, queue[0], 0, "", ctx.statement, course, tests, ctx.document)
-        parts.append(nxt)
-    else:
-        st.update(current=None, tries=0, ended=True)
-        parts.append("这几步你都想清楚了。按流程图的顺序把代码写出来，在 XDOJ 上交一次；没过的话我们再一起看。")
-    return st, "\n".join(parts), level
+    situation = [x for x in [
+        f"他在这道题考的知识点上：{ctx.profile_note}" if ctx.profile_note else "",
+        ("学情里薄弱的地方：" + "；".join(ctx.learning)) if ctx.learning else "",
+        ("在别的题上卡过：" + "；".join(ctx.struggles)) if ctx.struggles else ""] if x]
+    # 引导时大模型要看的最近对话和他的情况（plan.guiding 包住这几次 guide 调用）
+    with plan_mod.guiding(recent=talk.dialogue(history or [], ctx.user_id, ctx.user_name), situation=situation,
+                          who=(ctx.user_id, ctx.user_name)):
+        if pick is not None:
+            st.update(queue=pick, current=pick[0], tries=0)
+            said_text, _src = plan_mod.guide(steps, pick[0], 0, said, ctx.statement, course, tests, ctx.document)
+            return st, said_text, "H1"
+        cur, tries = st["current"], int(st.get("tries", 0))
+        ok = analysis.answer_correct is True or analysis.understood
+        if not ok and tries < 1:
+            st["tries"] = tries + 1
+            said_text, _src = plan_mod.guide(steps, cur, tries + 1, said, ctx.statement, course, tests, ctx.document)
+            return st, said_text, "H1"
+        parts = []
+        level = "H1"
+        if not ok:   # 第二次还没答上：把这一步讲清楚，再往下走
+            explained, _src = plan_mod.guide(steps, cur, 2, said, ctx.statement, course, tests, ctx.document)
+            parts.append(explained)
+            level = "H2"
+        else:
+            parts.append("对，这一步就是这样。")
+        st["done"] = sorted(set(st["done"]) | {cur})
+        queue = [i for i in st.get("queue", []) if i != cur and i not in st["done"]]
+        st["queue"] = queue
+        if queue:
+            st.update(current=queue[0], tries=0)
+            nxt, _src = plan_mod.guide(steps, queue[0], 0, "", ctx.statement, course, tests, ctx.document)
+            parts.append(nxt)
+        else:
+            st.update(current=None, tries=0, ended=True)
+            parts.append("这几步你都想清楚了。按流程图的顺序把代码写出来，在 XDOJ 上交一次；没过的话我们再一起看。")
+        return st, "\n".join(parts), level
 
 
 # ------------------------------------------------------------ 卡住时怎么办（5.6）
@@ -246,7 +254,7 @@ def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool 
 def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history: list[tuple[str, str]],
              prior: m.StuckPoint | None, prior_ref: str, kind: str,
              visible_titles: dict[str, str], reflect=None, retro_hist=None,
-             plan_text: str | None = None) -> tuple[validate.Draft, str, dict, int]:
+             plan_text: str | None = None, retro_fail: str = "") -> tuple[validate.Draft, str, dict, int]:
     testcases = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)   # 全部测试点都不能出现在回复里
 
     def run_check(d: validate.Draft) -> list[str]:
@@ -263,7 +271,9 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
     if flow == "retro":   # 已经通过的题回头问：按每一次提交回答（chat/retro.py）
         from . import retro
 
-        said, source = retro.reply(retro_hist or [], text, testcases, ctx.course)
+        said, source = retro.reply(retro_hist or [], text, testcases, ctx.course, statement=ctx.statement,
+                                   recent=talk.dialogue(history, ctx.user_id, ctx.user_name), failure=retro_fail,
+                                   who=(ctx.user_id, ctx.user_name))
         draft = validate.Draft(before=said)
         problems = run_check(draft)
         if problems and source == "llm":
@@ -274,7 +284,9 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
     if flow == "reflect":   # 通过后的回顾：接着他说的回一两句（chat/summary.py）
         from . import summary
 
-        said, source = summary.reflect_reply(reflect, text, testcases, ctx.course)
+        said, source = summary.reflect_reply(reflect, text, testcases, ctx.course, statement=ctx.statement,
+                                             recent=talk.dialogue(history, ctx.user_id, ctx.user_name),
+                                             who=(ctx.user_id, ctx.user_name))
         draft = validate.Draft(before=said)
         problems = run_check(draft)
         if problems and source == "llm":
@@ -380,6 +392,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
                                 role="student", kind="text", content={"blocks": blocks}, created_at=now)
     s.add(student_msg)
     s.flush()
+    # 给大模型看的最近对话（含消息里的代码块）；他刚发的这条单独给
+    history = talk.history(thread_messages(s, user_id, thread, course, topic)[-(talk.TURNS + 1):], exclude=student_msg.id)
 
     # 第 3~5 步 取证、诊断、状态
     ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course, knowledge=knowledge, pin=pin)
@@ -412,8 +426,14 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         if plan_guiding:
             step = plan_state["steps"][plan_state["current"]]
             direction = (step.get("how") or step["title"]) + (f"（关键知识点：{step['kp']}）" if step.get("kp") else "")
-        analysis = analyze(prose or text, bool(pasted), awaiting, last_agent_text, direction, options,
-                           bound=ctx.problem is not None, course=course)
+        shown = talk.message_for_model(last_agent) if last_agent is not None and last_agent.kind == "text" else ""
+        analysis = analyze(llm.strip_identity(prose or text, user_id, ctx.user_name), bool(pasted), awaiting,
+                           llm.strip_identity(shown, user_id, ctx.user_name),
+                           direction, options,
+                           bound=ctx.problem is not None, course=course,
+                           recent=talk.dialogue(history[:-1] if last_agent is not None and history
+                                                and history[-1][0] == "agent" else history,
+                                                ctx.user_id, ctx.user_name, limit=6, per=400))
         if analysis.intent == "REPLY" and awaiting and analysis.answer_correct is None and not analysis.understood \
                 and not plan_guiding:
             analysis.answer_correct = bool(hints.answered(text, hint))  # 判不了按没答对处理：多帮一点比错夸要稳妥
@@ -450,7 +470,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         n_steps = len(plan_state["steps"]) if plan_state else 0
         pick = plan_mod.picked(prose, n_steps) if plan_state is not None and plan_state.get("picking") else None
         if pick is not None or plan_guiding:
-            plan_step = _plan_next(s, ctx, plan_state, pick, analysis, prose, course)
+            plan_step = _plan_next(s, ctx, plan_state, pick, analysis, prose, course, history)
             decision = Decision("R00", plan_step[2], "甲", "plan_step")
             flow = "plan_step"
         elif ctx.problem is not None and ctx.submission is None and plan_mod.wants_plan(prose, analysis.intent):
@@ -501,15 +521,17 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         info = catalog.problem_info(s, sid, pid)
         if info is not None:
             visible_titles[info.title] = info.brief
-    history = [(x.role, message_text(x)) for x in thread_messages(s, user_id, thread, course, topic)[-6:] if x.kind == "text"]
-    retro_hist = None
+    retro_hist, retro_fail = None, ""
     if flow == "retro" and ctx.problem is not None:
         from . import retro
 
         retro_hist = retro.history(s, user_id, ctx.problem.server_id, ctx.problem.problem_id)
+        retro_fail = retro.last_failure(s, user_id, ctx.problem.server_id, ctx.problem.problem_id, ctx.user_name) \
+            if llm.available() else ""
     draft, source, check_result, retries = _produce(ctx, decision, flow, text, history, prior, prior_ref,
                                                     decision.kind, visible_titles, reflect, retro_hist,
-                                                    plan_step[1] if plan_step else None)
+                                                    plan_step[1] if plan_step else None,
+                                                    retro_fail if flow == "retro" else "")
     reply_model = llm.last_model.get() if source == "llm" else ""
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
         stuck_point.given_code, stuck_point.key_line = draft.code, draft.key_line or 1

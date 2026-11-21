@@ -114,32 +114,31 @@ def test_kp_level_is_evidence_weighted(database):
 
 
 # ------------------------------------------------------------ v2
-def test_v2_weak_needs_failure_evidence(database):
+def test_v2_level_is_the_score_band(database):
+    """档位只看掌握分 (1+S)/(2+S+F)：75 以上已掌握，50 以上基本掌握，以下待加强；分数是多少就是多少。"""
     now = db.now()
     with db.session_scope() as s:
-        # 只有一点成功证据：不会因为先验被拉着就定成“待加强”
         mastery.add_evidence(s, UID, "C01.02.03", "pass_after_h0_h1", True, 0.5, "x", now, True)
         st = mastery.skill_states(s, UID, model="v2")["C01.02.03"]
-        assert st.p < 0.6 and st.level == LEVEL_BASIC
-        # 有失败证据而且估计低：待加强
+        assert round(st.score * 100) == 60 and st.level == LEVEL_BASIC
         mastery.add_evidence(s, UID, SKILL, "stuck_first", False, 1.0, "y", now)
-        assert mastery.skill_states(s, UID, model="v2")[SKILL].level == LEVEL_WEAK
-        # 很久以前的一次成功：衰减后不够了，算“还没练到”（不是待加强）
+        st = mastery.skill_states(s, UID, model="v2")[SKILL]
+        assert round(st.score * 100) == 33 and st.level == LEVEL_WEAK
+        # 很久以前的一次成功：衰减以后分数接近 50，就是基本掌握（不另外标“太久没练”）
         mastery.add_evidence(s, UID, "C03.01.01", "pass_first_try", True, 1.0, "z", now - dt.timedelta(days=200), True)
-        assert mastery.skill_states(s, UID, model="v2")["C03.01.01"].level == LEVEL_NONE
+        st = mastery.skill_states(s, UID, model="v2")["C03.01.01"]
+        assert 50 <= round(st.score * 100) < 52 and st.level == LEVEL_BASIC
 
 
-def test_v2_mastered_needs_narrow_interval(database):
+def test_v2_one_pass_is_67_two_passes_are_75(database):
     now = db.now() - dt.timedelta(hours=1)
     with db.session_scope() as s:
-        for i in range(2):
-            mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, f"p{i}", now, True)
+        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p0", now, True)
         st = mastery.skill_states(s, UID, at=now, model="v2")[SKILL]
-        assert st.level == LEVEL_BASIC and st.interval[0] < 0.5, "两次成功，区间下限还不够高"
-        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p2", now, True)
-        assert mastery.skill_states(s, UID, at=now, model="v1")[SKILL].level == LEVEL_MASTERED
-        # 三道题都一次做对：已掌握（以前要五道，几乎没人能到）
-        assert mastery.skill_states(s, UID, at=now, model="v2")[SKILL].level == LEVEL_MASTERED
+        assert round(st.score * 100) == 67 and st.level == LEVEL_BASIC
+        mastery.add_evidence(s, UID, SKILL, "pass_first_try", True, 1.0, "p1", now, True)
+        st = mastery.skill_states(s, UID, at=now, model="v2")[SKILL]
+        assert round(st.score * 100) == 75 and st.level == LEVEL_MASTERED
 
 
 def test_v2_half_life_grows_with_spaced_success(database):
@@ -223,23 +222,19 @@ def test_secondary_skills_tested_or_incidental(database):
         assert mastery.reweigh_passes(s) == 0
 
 
-def test_incidental_passes_do_not_block_mastered(database):
-    """顺带用到的次技能的通过不算正面也不算反面：做题多的同学，最近一条证据常常是这种，
-    不能因此一直到不了“已掌握”。分数高却不是已掌握时，给出原因。"""
+def test_level_always_matches_the_score(database):
+    """知识点的档位和它的掌握分一致：分数高就是已掌握，不再因为“最近一次没过”“证据少”另外压档。"""
     now = db.now()
     with db.session_scope() as s:
-        for i in range(6):   # 主技能独立做对 6 次
+        for i in range(6):   # 独立做对 6 次
             mastery.add_evidence(s, UID, "C03.01.01", "pass_first_try", True, 1.0, f"pass:1:{100 + i}",
                                  now - dt.timedelta(days=6 - i), independent=True)
-        # 之后又在别的题里顺带用到（不算独立成功）
-        mastery.add_evidence(s, UID, "C03.01.02", "pass_first_try", True, 0.2, "pass:1:200",
-                             now - dt.timedelta(hours=1), independent=False)
         kp = mastery.kp_states(s, UID, model="v2")["C03.01"]
-        assert kp.level == LEVEL_MASTERED and kp.last_kind == "independent" and kp.why == ""
-        # 最近一次直接证据是没过：基本掌握，并说明原因
+        assert kp.level == LEVEL_MASTERED
         mastery.add_evidence(s, UID, "C03.01.01", "submit_failed", False, 0.5, "fail:1:300:9000",
                              now - dt.timedelta(minutes=5))
         kp = mastery.kp_states(s, UID, model="v2")["C03.01"]
-        assert kp.level != LEVEL_MASTERED and kp.last_kind == "failed"
-        if kp.level == mastery.LEVEL_BASIC and kp.score is not None and round(kp.score * 100) >= 75:
-            assert kp.why == "最近一次在这里没过"
+        assert kp.last_kind == "failed" and round(kp.score * 100) >= 75 and kp.level == LEVEL_MASTERED
+        for code, k in mastery.kp_states(s, UID, model="v2").items():
+            assert k.level == mastery.level_from_score(k.score, 1, k.raw)
+

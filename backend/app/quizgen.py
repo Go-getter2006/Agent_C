@@ -41,7 +41,7 @@ from .labeling.labeler import current_problem_label
 from .quizbank import PLACEHOLDER
 from .sandbox import run_program
 from .sandbox.precheck import check_editable_code, check_reference_solution
-from .taxonomy import LEVEL_NONE, LEVEL_WEAK, SKILLS, course_of, course_prompt, skill_name
+from .taxonomy import LEVEL_NONE, LEVEL_WEAK, SKILLS, course_of, course_prompt, error_name, skill_name
 from .xdoj.assemble import source_text
 from .xdoj.util import decode_bytes
 
@@ -643,6 +643,26 @@ _SYSTEM = """你在给一名学 C 语言课程的大学生出一道很短的检�
 不用 system、文件、网络；不出现题号；不用 emoji。"""
 
 
+def _own_mistake(s: Session, user_id: str, skill: str) -> str:
+    """他以前在这个技能上写错的地方：最近一次有行号的标注，摘出前后两行（去掉学号姓名）。出题时参考易错点，不照抄。"""
+    row = s.execute(
+        select(m.SubmissionLabel.server_id, m.SubmissionLabel.submission_id, m.SubmissionLabel.line)
+        .join(m.Submission, (m.Submission.server_id == m.SubmissionLabel.server_id)
+              & (m.Submission.submission_id == m.SubmissionLabel.submission_id))
+        .where(m.Submission.user_id == user_id, m.SubmissionLabel.skill_code == skill,
+               m.SubmissionLabel.is_current.is_(True), m.SubmissionLabel.line.is_not(None))
+        .order_by(m.Submission.submission_id.desc()).limit(1)).first()
+    if row is None:
+        return ""
+    lines = (source_text(s, row.server_id, row.submission_id) or "").replace("\r\n", "\n").split("\n")
+    if not 1 <= row.line <= len(lines):
+        return ""
+    a, b = max(0, row.line - 3), min(len(lines), row.line + 2)
+    student = s.get(m.Student, user_id)
+    return llm.strip_identity("\n".join(f"{i + 1:>3}| {lines[i]}" for i in range(a, b)), user_id,
+                              student.name if student else "")
+
+
 def from_llm(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | None:
     if not llm.available():
         return None
@@ -670,7 +690,12 @@ def from_llm(s: Session, plan: Plan, rng: random.Random) -> m.QuizItem | None:
             raise ValueError("代码里有不允许的内容")
         return d
 
-    user = (f"【技能】{plan.skill} {skill_name(plan.skill)}\n【他犯过的错误类型】{'、'.join(plan.errors) or '没有记录'}\n"
+    mistake = _own_mistake(s, plan.user_id, plan.skill)
+    errors = [n for n in dict.fromkeys(error_name(c) for c in plan.errors) if n]
+    user = (f"【技能】{skill_name(plan.skill)}\n【他在这个技能上现在是】{plan.level}\n"
+            f"【他犯过的错误】{'、'.join(errors) or '没有记录'}\n"
+            + (f"【他以前在这里写错的地方（只参考易错点，不照抄、不复用原题）】\n{mistake}\n" if mistake else "")
+            + ("【他的作答习惯】常常很有把握却答错\n" if plan.overconfident else "") +
             f"【这道题的代码要{'有一处错' if plan.has_bug else '是对的，但带一个容易被误认为错的写法'}】\n"
             f"【题型】{'判断对错' if plan.quiz_type == 'JUDGE' else '判断对错，有错的话自己改'}\n"
             f"【他代码里的变量名】{json.dumps(names, ensure_ascii=False)}\n【场景】{scene or '自选一个和这个技能有关的日常场景'}")
