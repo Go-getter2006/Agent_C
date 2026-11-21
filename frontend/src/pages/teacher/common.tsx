@@ -1,6 +1,6 @@
 // 教师端共用：导航、班级选择、页面骨架、几个对照表。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ClipboardCheck, Database, FileDown, GitCompare, History, LayoutDashboard, LifeBuoy, Link2, TriangleAlert, Users, Waypoints } from "lucide-react";
+import { ChevronDown, ClipboardCheck, Database, Download, FileDown, GitCompare, History, LayoutDashboard, LifeBuoy, Link2, TriangleAlert, Users, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { Empty, Loading, Problem } from "../../components/ui";
@@ -17,7 +17,7 @@ export const NAV: NavItem[] = [
   { to: "/teacher/models", label: "模型检验", icon: GitCompare, section: "研究" },
   { to: "/teacher/rating", label: "理解评估", icon: ClipboardCheck, section: "研究" },
   { to: "/teacher/help", label: "求助效果", icon: LifeBuoy, section: "研究" },
-  { to: "/teacher/logs", label: "日志申请", icon: FileDown, section: "数据" },
+  { to: "/teacher/logs", label: "日志导出", icon: FileDown, section: "数据" },
   { to: "/teacher/sources", label: "数据源", icon: Database, section: "数据" },
 ];
 
@@ -38,6 +38,8 @@ export interface ClassInfo {
   name: string;
   server: string;
   students: number;
+  /** 几个班合起来看时，是哪几个班 */
+  members?: string[];
 }
 
 export interface SkillRef {
@@ -62,11 +64,36 @@ export const Code = ({ children }: { children: ReactNode }) => <span className="
 
 // ---------- 班级：几个页面共用同一个选择，记在本机 ----------
 const CLASS_KEY = "pda.teacher.class";
+const MULTI_KEY = "pda.teacher.classes";   // 开发者多选的几个班
+
+/** 班级编号 c服务器-班 → [服务器, 班]。 */
+const parseKey = (key: string) => {
+  const m = /^c(\d+)-(\d+)$/.exec(key);
+  return m ? [Number(m[1]), Number(m[2])] as const : null;
+};
+
+/** 同一台服务器上的几个班合成一个编号：c4-31_32_35（后端当成一个班算，学生、题目取并集）。 */
+export function groupClasses(picked: ClassInfo[]): ClassInfo | null {
+  if (picked.length === 0) return null;
+  if (picked.length === 1) return picked[0];
+  const ids = picked.map((c) => parseKey(c.key));
+  if (ids.some((x) => !x) || new Set(ids.map((x) => x![0])).size !== 1) return picked[0];
+  const names = picked.map((c) => c.name);
+  return {
+    key: `c${ids[0]![0]}-${ids.map((x) => x![1]).join("_")}`,
+    name: names.length <= 3 ? names.join("、") : `${names.length} 个班`,
+    server: picked[0].server,
+    students: picked.reduce((n, c) => n + c.students, 0),   // 一个人在两个班里时会多算，只做显示
+    members: picked.map((c) => c.key),
+  };
+}
 
 interface ClassesValue {
   classes: ClassInfo[];
   current: ClassInfo | null;
   pick: (key: string) => void;
+  /** 开发者：几个班一起看（同一台服务器） */
+  pickMany: (keys: string[]) => void;
   loading: boolean;
   error: string | null;
   role: string;
@@ -76,7 +103,7 @@ interface ClassesValue {
   tick: number;
 }
 
-const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, loading: true, error: null, role: "teacher", course: "C", reload: () => undefined, tick: 0 });
+const ClassesContext = createContext<ClassesValue>({ classes: [], current: null, pick: () => undefined, pickMany: () => undefined, loading: true, error: null, role: "teacher", course: "C", reload: () => undefined, tick: 0 });
 
 /** 教师端只在这一个地方定时问“数据变没变”（/api/teacher/version）：页面看得见时每分钟一次（还没有班级时 15 秒），
  *  切回这个标签页马上问一次；变了才让页面重取。返回两个计数：data（任何数据）、classes（班级和名单）。 */
@@ -118,27 +145,109 @@ export function ClassesProvider({ children }: { children: ReactNode }) {
       return null;
     }
   });
+  const [many, setMany] = useState<string[]>(() => {
+    try {
+      const v = JSON.parse(window.localStorage.getItem(MULTI_KEY) ?? "[]");
+      return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  });
   const classes = list.data?.classes ?? [];
-  const current = classes.find((c) => c.key === picked) ?? classes[0] ?? null;
+  const role = list.data?.role ?? "teacher";
+  const chosen = isDeveloper(role) ? classes.filter((c) => many.includes(c.key)) : [];
+  const current = (chosen.length > 1 ? groupClasses(chosen) : null)
+    ?? classes.find((c) => c.key === (chosen.length === 1 ? chosen[0].key : picked)) ?? classes[0] ?? null;
   const pick = useCallback((key: string) => {
     setPicked(key);
+    setMany([]);
     try {
       window.localStorage.setItem(CLASS_KEY, key);
+      window.localStorage.removeItem(MULTI_KEY);
     } catch {
       /* 存不了也不影响使用 */
     }
   }, []);
-  const value = useMemo(() => ({ classes, current, pick, loading: list.loading && !list.data, error: list.error,
-    role: list.data?.role ?? "teacher", course: list.data?.course ?? "C", reload: list.reload, tick: ticks.data }),
-  [classes, current, pick, list.loading, list.data, list.error, list.reload, ticks.data]);
+  const pickMany = useCallback((keys: string[]) => {
+    setMany(keys);
+    if (keys.length) setPicked(keys[0]);
+    try {
+      window.localStorage.setItem(MULTI_KEY, JSON.stringify(keys));
+      if (keys.length) window.localStorage.setItem(CLASS_KEY, keys[0]);
+    } catch {
+      /* 存不了也不影响使用 */
+    }
+  }, []);
+  const value = useMemo(() => ({ classes, current, pick, pickMany, loading: list.loading && !list.data, error: list.error,
+    role, course: list.data?.course ?? "C", reload: list.reload, tick: ticks.data }),
+  [classes, current, pick, pickMany, list.loading, list.data, list.error, list.reload, ticks.data, role]);
   return <ClassesContext.Provider value={value}>{children}</ClassesContext.Provider>;
 }
 
 export const useClasses = () => useContext(ClassesContext);
 
+/** 开发者的班级选择：勾几个班一起看，或者全选（同一台服务器上的班）。 */
+function MultiClassPicker() {
+  const { classes, current, pickMany } = useClasses();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const selected = current?.members ?? (current ? [current.key] : []);
+  const server = (key: string) => parseKey(key)?.[0];
+  const groups = useMemo(() => {
+    const out = new Map<number, ClassInfo[]>();
+    classes.forEach((c) => { const sv = server(c.key) ?? -1; out.set(sv, [...(out.get(sv) ?? []), c]); });
+    return [...out.values()];
+  }, [classes]);
+  const toggle = (c: ClassInfo) => {
+    const same = selected.filter((k) => server(k) === server(c.key));   // 不同服务器的班不能合在一起
+    const next = same.includes(c.key) ? same.filter((k) => k !== c.key) : [...same, c.key];
+    const ordered = classes.filter((x) => next.includes(x.key)).map((x) => x.key);
+    if (ordered.length) pickMany(ordered);
+  };
+  return (
+    <div className="class-pick class-multi" ref={box}>
+      <Users size={16} aria-hidden="true" />
+      <button type="button" className="field class-multi-btn" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>{current ? `${current.name}（${current.students} 人）` : "选班级"}</span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="class-menu" role="group" aria-label="选几个班一起看">
+          {groups.map((list) => {
+            const all = list.every((c) => selected.includes(c.key));
+            return (
+              <div key={list[0].key} className="class-menu-group">
+                <label className="check class-menu-all">
+                  <input type="checkbox" checked={all} onChange={() => pickMany(all ? [list[0].key] : list.map((c) => c.key))} />
+                  全选{groups.length > 1 && list[0].server ? `（${list[0].server}）` : ""}<span className="note">{list.length} 个班</span>
+                </label>
+                {list.map((c) => (
+                  <label key={c.key} className="check">
+                    <input type="checkbox" checked={selected.includes(c.key)} onChange={() => toggle(c)} />
+                    {c.name}<span className="note">{c.students} 人</span>
+                  </label>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ClassPicker() {
-  const { classes, current, pick } = useClasses();
+  const { classes, current, pick, role } = useClasses();
   if (classes.length === 0) return null;
+  if (isDeveloper(role)) return <MultiClassPicker />;
   return (
     <label className="class-pick">
       <span className="sr-only">班级</span>
@@ -159,10 +268,22 @@ interface PageProps {
   tools?: ReactNode;
   crumb?: ReactNode;
   wide?: boolean;
+  /** 开发者：这一页的数据能导出（/api/teacher/export/页面）；csv 表示有主表、也能导 CSV */
+  exportPage?: { page: string; csv?: boolean };
   children: (cls: ClassInfo | null) => ReactNode;
 }
 
-export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide = false, children }: PageProps) {
+function ExportLinks({ page, csv, cls }: { page: string; csv?: boolean; cls: ClassInfo }) {
+  const url = (fmt: string) => `/api/teacher/export/${page}?key=${encodeURIComponent(cls.key)}&format=${fmt}`;
+  return (
+    <span className="export-links">
+      <a className="btn btn-sm" href={url("json")} download><Download size={15} aria-hidden="true" />导出</a>
+      {csv && <a className="btn btn-sm" href={url("csv")} download>CSV</a>}
+    </span>
+  );
+}
+
+export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide = false, exportPage, children }: PageProps) {
   const { current, loading, error, course, role } = useClasses();
   return (
     <Shell nav={navFor(course, role)} kind="teacher">
@@ -176,6 +297,7 @@ export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide =
             </div>
             <div className="page-tools">
               {tools}
+              {exportPage && current && isDeveloper(role) && <ExportLinks {...exportPage} cls={current} />}
               {withClass && <ClassPicker />}
             </div>
           </div>

@@ -1,8 +1,9 @@
-// 提交记录：这个班在 XDOJ 上的每一次提交，最近的在前。按学生、题目、结果筛；点一条就地展开他的代码
-// （标出程序标的出错行）、标的错误、没过的测试点（老师可以看输入输出，学生端看不到）。
+// 提交记录：这个班在 XDOJ 上的每一次提交，最近的在前。按学生、题目、结果筛；点一条就地展开：
+// 左边他的代码（标出程序标的出错行）、标的错误；右边每组测试点的输入、标准输出、他的输出
+// （没过的展开、高亮第一处不一样的行；通过的收起）。只给老师看，学生端看不到测试点。
 import { Fragment, useState } from "react";
 import { Link } from "react-router-dom";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleCheck, CircleX, FileInput, FileOutput } from "lucide-react";
 import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, Loading, Problem, ResultPill } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
@@ -20,10 +21,70 @@ interface Page {
   problems: { problemId: number; title: string }[];
   results: { key: string; label: string }[];
 }
+interface Case {
+  no: number; result: string; passed: boolean | null; timeMs: number | null;
+  input: string | null; expected: string | null; output: string | null;
+  firstDiffLine: number | null; truncated: boolean; binary: boolean;
+}
 interface Detail {
   lines: string[]; marks: number[]; compileOutput: string;
   labels: { name: string; skill: string; line: number | null }[];
-  failed: { result?: string; standardInput?: string | null; standardOutput?: string | null; programOutput?: string | null }[];
+  cases: Case[];
+}
+
+/** 输入、输出：和代码块一个样子（标题条、行号），mark 那一行高亮。 */
+function IoBlock({ caption, text, mark, icon: Icon, note }: {
+  caption: string; text: string | null; mark?: number | null; icon: typeof FileInput; note?: string;
+}) {
+  const lines = text === null ? [] : text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n");
+  return (
+    <div className="code io-block">
+      <div className="code-cap"><span><Icon aria-hidden="true" />{caption}</span>{note && <span className="note">{note}</span>}</div>
+      {text === null ? <p className="io-empty">没取到</p> : text === "" ? <p className="io-empty">（空）</p> : (
+        <div className="code-body" tabIndex={0} role="group" aria-label={caption}>
+          <div className="code-lines">
+            {lines.map((line, i) => (
+              <div key={i} className={mark === i + 1 ? "code-line marked" : "code-line"}>
+                <span className="code-no">{i + 1}</span>
+                <span className="code-text">{line || " "}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CaseCard({ c }: { c: Case }) {
+  const failed = c.passed === false;
+  const [open, setOpen] = useState(failed);
+  const head = (
+    <>
+      {failed ? <CircleX size={15} aria-hidden="true" /> : <CircleCheck size={15} aria-hidden="true" />}
+      <strong>第 {c.no} 组</strong>
+      <span>{c.result || (c.passed ? "通过" : "")}</span>
+      {c.timeMs !== null && <span className="note">{c.timeMs} ms</span>}
+      {failed && c.firstDiffLine && <span className="note">第 {c.firstDiffLine} 行开始不一样</span>}
+    </>
+  );
+  return (
+    <section className={failed ? "tcase tcase-fail" : "tcase"}>
+      <button type="button" className="tcase-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {open ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}{head}
+      </button>
+      {open && (c.binary ? <p className="note">这组数据不是文字，不显示。</p> : (
+        <div className="tcase-body">
+          <IoBlock caption="输入" text={c.input} icon={FileInput} />
+          <IoBlock caption="标准输出" text={c.expected} icon={FileOutput} mark={failed ? c.firstDiffLine : null} />
+          {c.passed ? <p className="note">他的输出和标准输出一样。</p> : (
+            <IoBlock caption="他的输出" text={c.output} icon={FileOutput} mark={c.firstDiffLine}
+              note={c.truncated ? "太长，截断了" : undefined} />
+          )}
+        </div>
+      ))}
+    </section>
+  );
 }
 
 function SubmissionDetail({ skey }: { skey: string }) {
@@ -33,30 +94,19 @@ function SubmissionDetail({ skey }: { skey: string }) {
   if (!d) return <Loading what="正在取代码" lines={3} />;
   return (
     <div className="tsub-detail">
-      {d.labels.length > 0 && (
-        <ul className="tsub-labels">
-          {d.labels.map((l, i) => <li key={i}><strong>{l.name}</strong>{l.skill && <span className="note"> · {l.skill}</span>}{l.line ? <span className="note"> · 第 {l.line} 行</span> : null}</li>)}
-        </ul>
-      )}
-      {d.lines.length > 0 ? <CodeBlock caption="他的代码" lines={d.lines} mark={d.marks} /> : <p className="note">代码还没取到。</p>}
-      {d.compileOutput && <pre className="tsub-compile">{d.compileOutput}</pre>}
-      {d.failed.length > 0 && (
-        <div className="table-scroll">
-          <table className="table tsub-cases">
-            <thead><tr><th scope="col">没过的测试点</th><th scope="col">输入</th><th scope="col">期望输出</th><th scope="col">他的输出</th></tr></thead>
-            <tbody>
-              {d.failed.map((c, i) => (
-                <tr key={i}>
-                  <td>{c.result ?? ""}</td>
-                  <td><pre>{c.standardInput ?? "（没取到）"}</pre></td>
-                  <td><pre>{c.standardOutput ?? "（没取到）"}</pre></td>
-                  <td><pre>{c.programOutput ?? "（没取到）"}</pre></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <div className="tsub-left">
+        {d.labels.length > 0 && (
+          <ul className="tsub-labels">
+            {d.labels.map((l, i) => <li key={i}><strong>{l.name}</strong>{l.skill && <span className="note"> · {l.skill}</span>}{l.line ? <span className="note"> · 第 {l.line} 行</span> : null}</li>)}
+          </ul>
+        )}
+        {d.lines.length > 0 ? <CodeBlock caption="他的代码" lines={d.lines} mark={d.marks} /> : <p className="note">代码还没取到。</p>}
+      </div>
+      <div className="tsub-right" aria-label="测试点">
+        {d.compileOutput && <pre className="tsub-compile">{d.compileOutput}</pre>}
+        {d.cases.map((c) => <CaseCard key={c.no} c={c} />)}
+        {d.cases.length === 0 && !d.compileOutput && <p className="note">还没有测试点的结果。</p>}
+      </div>
     </div>
   );
 }

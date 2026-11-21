@@ -443,8 +443,9 @@ def test_log_request_scoped_audited_and_minimal(client, demo):
     # 作废之后不能再下载；记录还在（审计）
     client.post(f"/api/teacher/logs/{req['id']}/revoke")
     assert client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": req["token"]}).status_code == 410
-    listed = client.get("/api/teacher/logs").json()["requests"]
-    assert [x["status"] for x in listed][:2] == ["ready", "revoked"] and listed[1]["downloads"] == 1
+    with db.session_scope() as s:   # 页面上不再列申请记录，库里照样记着（审计）
+        listed = s.scalars(select(m.LogRequest).order_by(m.LogRequest.id.desc())).all()
+        assert [x.status for x in listed][:2] == ["ready", "revoked"] and listed[1].downloads == 1
 
 
 def test_research_export_keeps_student_ids(client, demo):
@@ -492,15 +493,15 @@ def test_other_teacher_cannot_get_logs_of_my_students(client, demo):
 
 def test_log_request_rules(client, demo):
     dev(client)
-    base = {"ids": UID, "dateFrom": "2026-11-01", "dateTo": "2026-11-30", "kinds": ["submission"], "purpose": "期中前看看"}
-    assert client.post("/api/teacher/logs", json={**base, "purpose": ""}).status_code == 400          # 要写用途
+    base = {"ids": UID, "dateFrom": "2026-11-01", "dateTo": "2026-11-30", "kinds": ["submission"]}
+    assert client.post("/api/teacher/logs", json=base).status_code == 200          # 只有开发者用，用途可以不写
     assert client.post("/api/teacher/logs", json={**base, "kinds": []}).status_code == 400
     assert client.post("/api/teacher/logs", json={**base, "dateFrom": "2025-01-01"}).status_code == 400  # 超过 366 天
     assert client.post("/api/teacher/logs", json={**base, "classKeys": ["c1-32"], "ids": ""}).status_code == 200
     assert client.post("/api/teacher/logs", json={**base, "classKeys": ["c9-99"]}).status_code == 403
-    for _ in range(19):
-        client.post("/api/teacher/logs", json=base)
-    assert client.post("/api/teacher/logs", json=base).status_code == 400    # 每天最多 20 次
+    for _ in range(25):   # 不再限每天几次
+        assert client.post("/api/teacher/logs", json=base).status_code == 200
+    assert "requests" not in client.get("/api/teacher/logs").json()   # 没有申请记录了
     client.post("/api/auth/logout")
     login(client, UID)
     assert client.get("/api/teacher/logs").status_code == 403                # 学生不能申请

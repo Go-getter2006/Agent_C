@@ -16,7 +16,11 @@ interface SourcesData {
   sources: SourceRow[]; interval: number;
   known: { code: string; name: string; course: string; baseUrl: string | null; basis: string }[];
   daemon: { running: boolean; lastBeat: string | null; activity: string };
-  candidates: { kind: string; name: string; description: string; nearest: string[]; time: string }[];
+  candidates: {
+    name: string; description: string; count: number; students: number; names: number;
+    problems: { title: string; count: number }[]; moreProblems: number;
+    nearest: { code: string; name: string }[]; first: string; last: string;
+  }[];
   libraries: { errors: number; skills: number; knowledge: number; errorVersion: string; taxonomyVersion: string };
 }
 
@@ -60,11 +64,21 @@ export default function Sources() {
       })}
 
       {d.candidates.length > 0 && (
-        <Card title="候选的新错误类型" sub="自动标注时库里没有合适编码的情况" bodyClass="">
+        <Card title="错误库里没有的错误" sub="自动标注时找不到合适编码的，相近的归在一起；次数多的值得加进错误库" bodyClass="">
           <div className="table-scroll">
             <table className="table">
-              <thead><tr><th scope="col">候选名称</th><th scope="col">描述</th><th scope="col">最接近的现有编码</th><th scope="col">时间</th></tr></thead>
-              <tbody>{d.candidates.map((c, i) => <tr key={i}><td className="cell-title">{c.name}</td><td>{c.description}</td><td><Code>{c.nearest.join("、")}</Code></td><td className="nowrap muted">{shortTime(c.time)}</td></tr>)}</tbody>
+              <thead><tr><th scope="col">错误</th><th scope="col" className="num">次数</th><th scope="col" className="num">学生</th>
+                <th scope="col">出现在</th><th scope="col">现在被归到</th><th scope="col">最近</th></tr></thead>
+              <tbody>{d.candidates.map((c, i) => (
+                <tr key={i}>
+                  <td><span className="cell-title">{c.name}</span><span className="cell-sub">{c.description}{c.names > 1 ? `（${c.names} 种叫法）` : ""}</span></td>
+                  <td className="num">{c.count}</td>
+                  <td className="num">{c.students}</td>
+                  <td>{c.problems.map((p) => `${p.title}${p.count > 1 ? ` ×${p.count}` : ""}`).join("、")}{c.moreProblems ? ` 等 ${c.problems.length + c.moreProblems} 道` : ""}</td>
+                  <td>{c.nearest.map((n) => <span key={n.code} className="cand-near"><Code>{n.code}</Code> {n.name}</span>)}</td>
+                  <td className="nowrap muted">{shortTime(c.last)}</td>
+                </tr>
+              ))}</tbody>
             </table>
           </div>
         </Card>

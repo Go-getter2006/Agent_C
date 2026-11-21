@@ -96,8 +96,13 @@ def test_class_submissions_and_detail(client, demo):
     assert mine["items"] and all(x["userId"] == UID and x["result"] in ("WA", "PE", "OLE") for x in mine["items"])
     one = next(x for x in mine["items"] if x["labels"])
     d = client.get(f"/api/teacher/submissions/{one['key']}").json()
-    assert d["lines"] and d["labels"] and d["failed"]
-    assert all({"standardInput", "standardOutput"} <= set(c) for c in d["failed"])   # 老师可以看没过的测试点
+    assert d["lines"] and d["labels"] and d["cases"]
+    # 每组测试点：输入、标准输出、他的输出（没过的才有他的输出；通过的和标准输出一样）；第几组和列表的格子一样
+    assert [c["no"] for c in d["cases"]] == list(range(1, len(d["cases"]) + 1))
+    assert all({"input", "expected", "output", "passed", "result", "firstDiffLine"} <= set(c) for c in d["cases"])
+    bad = [c for c in d["cases"] if c["passed"] is False]
+    assert bad and all(c["input"] is not None and c["expected"] is not None for c in bad)
+    assert all(c["output"] is None for c in d["cases"] if c["passed"])
     assert client.get(f"/api/teacher/classes/{key}/submissions", params={"student": "9999999999"}).status_code == 404
     # 别的老师看不到
     with db.session_scope() as s:
@@ -137,3 +142,80 @@ def test_stale_result_first_then_background_refresh(client, demo):
     cache.wait_idle()
     after = client.get(f"/api/teacher/classes/{key}/overview").json()
     assert "refreshing" not in after and after["kpis"]["submissions"] == first["kpis"]["submissions"] + 2
+
+
+# ------------------------------------------------------------ 开发者：几个班一起看、每一页都能导出
+def _dev(client):
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login", json={"loginName": "dev-test", "password": "dev-pass"})
+
+
+def test_developer_sees_several_classes_together(client, demo):
+    """开发者勾几个班（同一台服务器）当一个班看：学生、题目取并集；不在名下的班不行；单个班照旧。"""
+    sid = demo["server_id"]
+    one, two, both = f"c{sid}-31", f"c{sid}-32", f"c{sid}-31_32"
+    _dev(client)
+    a = client.get(f"/api/teacher/classes/{one}/students").json()
+    b = client.get(f"/api/teacher/classes/{two}/students").json()
+    ab = client.get(f"/api/teacher/classes/{both}/students").json()
+    ids = {r["userId"] for r in ab["students"]}
+    assert ids == {r["userId"] for r in a["students"]} | {r["userId"] for r in b["students"]}
+    assert len(ids) == len(ab["students"])                                    # 两个班都有的人只算一次
+    assert ab["class"]["name"] == f'{a["class"]["name"]}、{b["class"]["name"]}'
+    assert all(r["className"] in (a["class"]["name"], b["class"]["name"]) for r in ab["students"])
+    assert a["students"][0]["className"] is None                              # 单个班不标
+    ov = client.get(f"/api/teacher/classes/{both}/overview").json()
+    assert ov["class"]["students"] == len(ids)
+    for page in ("help", "graph", "rating", "knowledge-map", "misconceptions", "submissions"):
+        assert client.get(f"/api/teacher/classes/{both}/{page}").status_code == 200, page
+    assert client.get(f"/api/teacher/classes/c{sid}-31_99/overview").status_code == 404   # 有一个不在名下
+    # 从几个班一起看的学生列表点进学生明细
+    assert client.get(f"/api/teacher/students/{UID}", params={"classKey": both}).status_code == 200
+
+
+def test_every_page_can_be_exported_by_developer(client, demo):
+    key = f"c{demo['server_id']}-31_32"
+    assert client.get("/api/teacher/export/students", params={"key": key}).status_code == 403   # 老师不能导
+    _dev(client)
+    for page in ("overview", "students", "submissions", "misconceptions", "map", "models", "rating", "help"):
+        r = client.get(f"/api/teacher/export/{page}", params={"key": key})
+        assert r.status_code == 200 and "attachment" in r.headers["content-disposition"], page
+        js = r.json()
+        assert js["data"] and js["class"]["classes"] == [f"c{demo['server_id']}-31", f"c{demo['server_id']}-32"], page
+    csv = client.get("/api/teacher/export/students", params={"key": key, "format": "csv"})
+    head = csv.content.decode("utf-8-sig").splitlines()[0]
+    assert "userId" in head and "className" in head
+    subs = client.get("/api/teacher/export/submissions", params={"key": key, "format": "csv"}).content.decode("utf-8-sig")
+    assert UID in subs and len(subs.splitlines()) > 100
+    assert client.get("/api/teacher/export/models", params={"key": key, "format": "csv"}).status_code == 400
+    assert client.get("/api/teacher/export/nothing", params={"key": key}).status_code == 404
+
+
+def test_help_page_compares_asked_and_silent(client, demo):
+    _dev(client)
+    d = client.get(f"/api/teacher/classes/c{demo['server_id']}-31/help").json()
+    u = d["usage"]
+    assert u["students"] >= u["used"] >= u["askedHomework"] >= u["stuck"] >= 0
+    av = d["askVsSilent"]
+    assert av["version"] == "ask-silent-1" and av["threshold"] == 3
+    for g in (av["asked"], av["silent"]):
+        assert set(g) == {"cases", "students", "passed", "medianTries"}
+        assert g["passed"] is None or g["passed"]["d"] == g["cases"]
+    assert av["asked"]["cases"] + av["silent"]["cases"] > 0
+    assert all("silentPassed" in r for r in d["rows"])
+
+
+def test_candidate_errors_are_grouped(client, demo):
+    """错误库里没有的错误：叫法不同的同一种错误归在一起，给次数、学生、题目、现在被归到的编码的名字。"""
+    sid = demo["server_id"]
+    with db.session_scope() as s:
+        for i, name in enumerate(["源文件编码与评测环境不一致导致中文输出乱码", "源文件编码不匹配导致中文输出乱码",
+                                  "源文件编码与评测环境不一致导致中文乱码", "数组下标从1开始越界"]):
+            s.add(m.LabelCandidate(kind="error", name=name, description="d", nearest=["IO04", "IO05"] if i < 3 else ["CE01"],
+                                   server_id=sid, submission_id=1000 + i, problem_id=406, user_id=f"25000000{i:02d}"))
+    _dev(client)
+    groups = client.get("/api/teacher/sources").json()["candidates"]
+    assert [g["count"] for g in groups][:2] == [3, 1]
+    top = groups[0]
+    assert top["students"] == 3 and top["names"] == 3 and top["problems"][0]["count"] == 3
+    assert [n["code"] for n in top["nearest"]] == ["IO04", "IO05"] and all(n["name"] for n in top["nearest"])

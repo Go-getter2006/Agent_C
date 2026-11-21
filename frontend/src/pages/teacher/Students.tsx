@@ -9,7 +9,7 @@ import { shortTime } from "../../lib/time";
 import { ScoreBadge, useClasses, type ClassInfo } from "./common";
 
 interface StudentRow {
-  userId: string; name: string; tried: number; passed: number; submissions: number; avgToPass: number | null;
+  userId: string; name: string; className?: string | null; tried: number; passed: number; submissions: number; avgToPass: number | null;
   weak: number; mastered: number; stuck: number; stubborn: number; rounds: number; lastActive: string | null;
   orderPct: number | null; copies: number; activeDays: number;
   score: number | null; quality: number | null; coveredTopics: number; totalTopics: number; coveredProblems: number;
@@ -42,7 +42,7 @@ export default function Students({ cls }: { cls: ClassInfo }) {
     const needle = q.trim();
     const list = (data.data?.students ?? []).filter((s) => !needle || s.name.includes(needle) || s.userId.includes(needle));
     list.sort((a, b) => {
-      const x = a[sort.key], y = b[sort.key];
+      const x = a[sort.key] ?? null, y = b[sort.key] ?? null;
       if (x === y) return a.userId < b.userId ? -1 : 1;
       if (x === null) return 1;
       if (y === null) return -1;
@@ -90,7 +90,7 @@ export default function Students({ cls }: { cls: ClassInfo }) {
                     <Avatar name={r.name || "?"} />
                     <span>
                       <span className="cell-title">{r.name || "（没有姓名）"}</span>
-                      <span className="cell-sub">{r.userId}</span>
+                      <span className="cell-sub">{r.userId}{r.className ? ` · ${r.className}` : ""}</span>
                     </span>
                   </Link>
                 </td>

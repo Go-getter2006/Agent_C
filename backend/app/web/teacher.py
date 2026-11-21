@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import datetime as dt
 import functools
+import re
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -178,7 +180,44 @@ def in_course(code: str | None, course: str) -> bool:
     return bool(code) and course_of(code) == course
 
 
-def _class(s: Session, user: m.User, key: str) -> m.XClass:
+@dataclass(frozen=True)
+class ClassGroup:
+    """开发者一次选的几个班（同一台服务器）：当成一个班算，学生、布置的题、作业取并集。
+    编号写成 c服务器-班_班_班（如 c4-31_32_35），单个班还是 c4-31。"""
+    server_id: int
+    class_ids: tuple[int, ...]
+    class_name: str
+
+    @property
+    def class_id(self) -> int:   # 只用来拼编号
+        return self.class_ids[0]
+
+
+_GROUP_KEY = re.compile(r"c(\d+)-(\d+(?:_\d+)+)")
+
+
+def class_ids(cls) -> tuple[int, ...]:
+    """一个班或几个班（ClassGroup）的班号。查名单、作业用 .in_(class_ids(cls))。"""
+    return getattr(cls, "class_ids", None) or (cls.class_id,)
+
+
+def split_class_key(key: str) -> list[str]:
+    """几个班的编号拆成一个个班的编号。"""
+    mt = _GROUP_KEY.fullmatch(key or "")
+    return [class_key(int(mt.group(1)), int(x)) for x in mt.group(2).split("_")] if mt else [key]
+
+
+def _class(s: Session, user: m.User, key: str):
+    mt = _GROUP_KEY.fullmatch(key or "")
+    if mt:   # 几个班一起看（开发者多选、全选）
+        mine = {(c.server_id, c.class_id): c for c in my_classes(s, user)}
+        server_id = int(mt.group(1))
+        ids = tuple(dict.fromkeys(int(x) for x in mt.group(2).split("_")))
+        picked = [mine.get((server_id, i)) for i in ids]
+        if any(c is None for c in picked):
+            raise HTTPException(status_code=404, detail="选的班里有不在你名下的。")
+        names = [c.class_name for c in picked]
+        return ClassGroup(server_id, ids, "、".join(names) if len(names) <= 3 else f"{len(names)} 个班")
     parsed = catalog.parse_key(key, "c")
     found = next((c for c in my_classes(s, user) if parsed == (c.server_id, c.class_id)), None)
     if found is None:
@@ -210,20 +249,32 @@ def _rebuilder(fn, kwargs: dict, user_id: int):
     return rebuild
 
 
-def class_students(s: Session, cls: m.XClass) -> list[m.Student]:
-    return list(s.scalars(
+def class_students(s: Session, cls) -> list[m.Student]:
+    """一个班（或几个班合起来）的学生，按学号排，同一个人只出现一次。"""
+    rows = s.scalars(
         select(m.Student).join(m.Enrollment, m.Enrollment.user_id == m.Student.user_id)
-        .where(m.Enrollment.server_id == cls.server_id, m.Enrollment.class_id == cls.class_id,
-               m.Enrollment.status == "active").order_by(m.Student.user_id)).all())
+        .where(m.Enrollment.server_id == cls.server_id, m.Enrollment.class_id.in_(class_ids(cls)),
+               m.Enrollment.status == "active").order_by(m.Student.user_id)).all()
+    return list(dict.fromkeys(rows))
 
 
-def class_problems(s: Session, cls: m.XClass) -> list[tuple[int, int]]:
+def class_problems(s: Session, cls) -> list[tuple[int, int]]:
     rows = s.execute(
         select(m.ContestProblem.server_id, m.ContestProblem.problem_id)
         .join(m.ContestClass, (m.ContestClass.server_id == m.ContestProblem.server_id)
               & (m.ContestClass.contest_id == m.ContestProblem.contest_id))
-        .where(m.ContestClass.server_id == cls.server_id, m.ContestClass.class_id == cls.class_id)).all()
+        .where(m.ContestClass.server_id == cls.server_id, m.ContestClass.class_id.in_(class_ids(cls)))).all()
     return list(dict.fromkeys((r[0], r[1]) for r in rows))
+
+
+def class_contests(s: Session, cls) -> list[m.Contest]:
+    """布置给这个班（几个班时取并集）的作业，截止晚的在前。"""
+    rows = s.scalars(
+        select(m.Contest).join(m.ContestClass, (m.ContestClass.server_id == m.Contest.server_id)
+                               & (m.ContestClass.contest_id == m.Contest.contest_id))
+        .where(m.ContestClass.server_id == cls.server_id, m.ContestClass.class_id.in_(class_ids(cls)))
+        .order_by(m.Contest.end_time.desc())).all()
+    return list(dict.fromkeys(rows))
 
 
 def assigned_topics(s: Session, problems, course: str) -> dict:
@@ -260,8 +311,9 @@ def assignment_mastery(topics, submissions, states) -> dict:
 
 
 def _student_in_my_classes(s: Session, user: m.User, user_id: str, class_key_filter: str | None = None) -> tuple[m.Student, m.XClass]:
+    wanted = set(split_class_key(class_key_filter)) if class_key_filter else None   # 几个班一起看时是其中任何一个
     for cls in my_classes(s, user):
-        if class_key_filter and class_key(cls.server_id, cls.class_id) != class_key_filter:
+        if wanted is not None and class_key(cls.server_id, cls.class_id) not in wanted:
             continue
         e = s.scalar(select(m.Enrollment.id).where(
             m.Enrollment.user_id == user_id, m.Enrollment.server_id == cls.server_id,
@@ -367,11 +419,7 @@ def overview(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
               for code, n in err_count.most_common(10)]
     # 作业完成情况
     homeworks = []
-    contests = s.scalars(
-        select(m.Contest).join(m.ContestClass, (m.ContestClass.server_id == m.Contest.server_id)
-                               & (m.ContestClass.contest_id == m.Contest.contest_id))
-        .where(m.ContestClass.server_id == cls.server_id, m.ContestClass.class_id == cls.class_id)
-        .order_by(m.Contest.end_time.desc())).all()
+    contests = class_contests(s, cls)
     for c in contests:
         pids = catalog.contest_problem_ids(s, c.server_id, c.contest_id)
         done = started = 0
@@ -473,7 +521,8 @@ def submission_detail(skey: str, user: m.User = Depends(teacher), s: Session = D
     _student_in_my_classes(s, user, sub.user_id)
     if catalog.server_course(s, sub.server_id) != user.course:
         raise HTTPException(status_code=404, detail="没有这条提交。")
-    ev = assemble_submission(s, sub.server_id, sub.submission_id, include_problem_text=False)
+    ev = assemble_submission(s, sub.server_id, sub.submission_id, include_problem_text=False,
+                             max_output_chars=CASE_CHARS)
     labels = s.scalars(select(m.SubmissionLabel).where(
         m.SubmissionLabel.server_id == sub.server_id, m.SubmissionLabel.submission_id == sub.submission_id,
         m.SubmissionLabel.is_current.is_(True))).all()
@@ -482,7 +531,26 @@ def submission_detail(skey: str, user: m.User = Depends(teacher), s: Session = D
             "marks": sorted({lab.line for lab in labels if lab.line}),
             "labels": [{"name": error_name(lab.error_code), "skill": skill_name(lab.skill_code) if lab.skill_code else "",
                         "line": lab.line} for lab in labels if lab.error_code and lab.error_code != "OT99"],
-            "failed": llm.failed_cases(ev, limit=5, chars=600)}
+            "cases": _case_views(ev.get("testCases") or [])}
+
+
+CASE_CHARS = 4000   # 每个测试点的输入、输出最多给这么多字，再长截断
+
+
+def _case_views(cases: list[dict]) -> list[dict]:
+    """每个测试点（第几组和提交列表里的格子一样）：结果、输入、标准输出、他的输出、第一处不一样的行。
+    通过的测试点 XDOJ 不给程序输出（和标准输出一样），他的输出为 None。只给老师看，学生端没有。"""
+    out = []
+    for i, c in enumerate(cases, 1):
+        binary = bool(c.get("base64"))
+        out.append({"no": i, "result": c.get("result") or "", "passed": c.get("passed"),
+                    "timeMs": c.get("runTimeMs"),
+                    "input": None if binary else c.get("standardInput"),
+                    "expected": None if binary else c.get("standardOutput"),
+                    "output": None if binary else c.get("programOutput"),
+                    "firstDiffLine": c.get("firstDiffLine"), "truncated": bool(c.get("outputTruncated")),
+                    "binary": binary})
+    return out
 
 
 def _top(rows: list[dict], limit: int = 10) -> dict:
@@ -605,9 +673,7 @@ def _attention_groups(s: Session, data: "_ClassData", now: dt.datetime, stats: d
             if len(pids) >= 2:
                 recurring[uid].append((code, len(pids)))
     open_hw = []
-    for c in s.scalars(select(m.Contest).join(m.ContestClass, (m.ContestClass.server_id == m.Contest.server_id)
-                                              & (m.ContestClass.contest_id == m.Contest.contest_id))
-                       .where(m.ContestClass.server_id == data.cls.server_id, m.ContestClass.class_id == data.cls.class_id)).all():
+    for c in class_contests(s, data.cls):
         if c.end_time is None or c.end_time >= now:
             open_hw.append((c, catalog.contest_problem_ids(s, c.server_id, c.contest_id)))
 
@@ -717,6 +783,13 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
     copied = Counter(f.user_id for f in s.scalars(select(m.CodeFingerprint).where(
         m.CodeFingerprint.user_id.in_(data.ids), m.CodeFingerprint.server_id == cls.server_id,
         m.CodeFingerprint.suspicious.is_(True))).all()) if data.ids else Counter()
+    class_of: dict[str, str] = {}
+    if isinstance(cls, ClassGroup) and data.ids:   # 几个班一起看：每人标上哪个班
+        names = {c.class_id: c.class_name for c in my_classes(s, user) if c.server_id == cls.server_id}
+        for uid, cid in s.execute(select(m.Enrollment.user_id, m.Enrollment.class_id).where(
+                m.Enrollment.server_id == cls.server_id, m.Enrollment.class_id.in_(cls.class_ids),
+                m.Enrollment.user_id.in_(data.ids), m.Enrollment.status == "active")).all():
+            class_of.setdefault(uid, names.get(cid, ""))
     rows = []
     for st in data.students:
         per = data.subs[st.user_id]
@@ -733,7 +806,8 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
             "orderPct": round(sum(orders) / len(orders)) if orders else None,
             "copies": copied.get(st.user_id, 0),
             "activeDays": len({x.submit_time.astimezone(db.BEIJING).date() for k in tried for x in per[k] if x.submit_time}),
-            "userId": st.user_id, "name": st.name, "tried": len(tried), "passed": passed, "submissions": total,
+            "userId": st.user_id, "name": st.name, "className": class_of.get(st.user_id), "tried": len(tried),
+            "passed": passed, "submissions": total,
             "avgToPass": round(sum(tries) / len(tries), 1) if tries else None,
             "weak": levels.get("待加强", 0), "mastered": levels.get("已掌握", 0),
             "stuck": stuck.get(st.user_id, 0), "stubborn": stubborn.get(st.user_id, 0),
@@ -765,8 +839,19 @@ def help_effect(key: str, user: m.User = Depends(admin), s: Session = Depends(ge
     stuck_people = set().union(*(st.students for st in stats.values())) if stats else set()
     silent_people = {u for st in stats.values() for u in st.silent} - stuck_people
     data = _ClassData(s, cls)
+    ids = list(people)
+    # 用了多少：发过消息的（任何栏目）、在作业题上求助过的（通过后的回顾不算）
+    used = set(s.scalars(select(m.ChatMessage.user_id).where(
+        m.ChatMessage.user_id.in_(ids or [""]), m.ChatMessage.course == course, m.ChatMessage.role == "student",
+        m.ChatMessage.kind == "text").distinct()).all())
+    asked_hw = set(s.scalars(select(m.ChatRound.user_id).where(
+        m.ChatRound.user_id.in_(ids or [""]), m.ChatRound.course == course, m.ChatRound.problem_id.is_not(None),
+        m.ChatRound.end_reason != m.REFLECT_END).distinct()).all())
     return {"class": {"key": key, "name": cls.class_name}, "version": stuckstats.VERSION,
             "silentFails": stuckstats.SILENT_FAILS, "rows": rows,
+            "usage": {"students": len(people), "used": len(used), "askedHomework": len(asked_hw),
+                      "stuck": len(stuck_people), "silent": len({u for st in stats.values() for u in st.silent})},
+            "askVsSilent": stuckstats.ask_vs_silent(s, ids, problems),
             "totals": {"students": len(people), "stuck": len(stuck_people),
                        "episodes": sum(len(st.episodes) for st in stats.values()),
                        "recall": pooled("recall"), "passed": pooled("passed"), "transfer": pooled("transfer"),
@@ -1082,17 +1167,64 @@ def sources_list(user: m.User = Depends(admin), s: Session = Depends(get_session
     if user.role != "admin":
         q = q.where(m.DataSource.id.in_(accounts.teacher_source_ids(s, user) or [-1]))
     rows = [_source_view(s, src) for src in s.scalars(q).all()]
-    candidates = s.scalars(select(m.LabelCandidate).order_by(m.LabelCandidate.id.desc()).limit(30)).all() \
-        if user.role == "admin" else []
+    candidates = _candidate_groups(s, course_server_ids(s, user.course)) if user.role == "admin" else []
     from ..servers import KNOWN
 
     known = [{"code": k.code, "name": k.name, "course": k.course, "baseUrl": k.base_url, "basis": k.basis}
              for k in KNOWN.values() if k.course == user.course]
     return {"sources": rows, "interval": config.XDOJ_MIN_INTERVAL, "known": known, "daemon": _daemon_status(s),
-            "candidates": [{"kind": c.kind, "name": c.name, "description": c.description, "nearest": c.nearest,
-                            "time": c.created_at.isoformat()} for c in candidates],
+            "candidates": candidates,
             "libraries": {"errors": len(ERRORS), "skills": len(SKILLS), "knowledge": len(KNOWLEDGE_POINTS),
                           "errorVersion": config.ERROR_LIBRARY_VERSION, "taxonomyVersion": config.TAXONOMY_VERSION}}
+
+
+def _candidate_groups(s: Session, servers: list[int], limit: int = 30) -> list[dict]:
+    """自动标注时错误库里找不到合适编码的提交（标成 OT99，大模型顺带起了个名字，label_candidates）。
+    同一种错误每次起的名字不一样，按名字相近、最接近的现有编码相同归在一起：出现几次、几个学生、哪几道题。
+    次数多的值得加进错误库（加了以后重标）；只出现一两次的多半是个别情况。"""
+    import difflib
+
+    rows = s.scalars(select(m.LabelCandidate).where(
+        m.LabelCandidate.kind == "error", m.LabelCandidate.server_id.in_(servers or [-1]))
+        .order_by(m.LabelCandidate.id)).all()
+    norm = lambda x: re.sub(r"[\s，。、,.;；:：（）()\-—/]+", "", x or "")   # noqa: E731
+    groups: list[dict] = []
+    for c in rows:
+        name, codes = norm(c.name), frozenset(c.nearest or [])
+        best = None
+        for g in groups:
+            sim = difflib.SequenceMatcher(None, name, g["norm"]).ratio()
+            if sim >= 0.6 or (codes and codes == g["codes"] and sim >= 0.35):
+                best = g
+                break
+        if best is None:
+            best = {"norm": name, "codes": codes, "items": []}
+            groups.append(best)
+        best["items"].append(c)
+    titles: dict = {}
+
+    def title(server_id, problem_id) -> str:
+        if (server_id, problem_id) not in titles:
+            p = s.get(m.Problem, (server_id, problem_id)) if server_id and problem_id else None
+            titles[(server_id, problem_id)] = p.title if p else ""
+        return titles[(server_id, problem_id)]
+
+    out = []
+    for g in groups:
+        items = g["items"]
+        names = Counter(c.name for c in items)
+        problems = Counter((c.server_id, c.problem_id) for c in items if c.problem_id)
+        nearest = Counter(code for c in items for code in (c.nearest or []))
+        out.append({
+            "name": names.most_common(1)[0][0], "description": items[-1].description, "count": len(items),
+            "students": len({c.user_id for c in items if c.user_id}), "names": len(names),
+            "problems": [{"title": title(*k) or str(k[1]), "count": n} for k, n in problems.most_common(3)],
+            "moreProblems": max(0, len(problems) - 3),
+            "nearest": [{"code": code, "name": error_name(code)} for code, _n in nearest.most_common(2)],
+            "first": items[0].created_at.isoformat(), "last": items[-1].created_at.isoformat()})
+    out.sort(key=lambda g: g["last"], reverse=True)   # 次数一样的，最近出现的在前
+    out.sort(key=lambda g: -g["count"])
+    return out[:limit]
 
 
 def _daemon_status(s: Session) -> dict:
@@ -1322,6 +1454,70 @@ def cross_review(link_id: int, body: ReviewLinkBody, user: m.User = Depends(teac
     return cross.link_view(link)
 
 
+# ------------------------------------------------------------ 开发者：每一页的数据都能导出
+def _export_submissions(s: Session, user: m.User, key: str) -> dict:
+    """提交记录：这几个班的学生在这门课上的每一次提交（第几次、结果、每组测试点、标的错误）。"""
+    cls = _class(s, user, key)
+    people = class_students(s, cls)
+    rows = logs.collect(s, [p.user_id for p in people], dt.datetime(2000, 1, 1, tzinfo=db.UTC), db.now(),
+                        ["submission"], False, _course_of_class(s, cls))
+    return {"items": [{"userId": r.user_id, "name": r.name, "time": r.time.astimezone(db.BEIJING).isoformat(),
+                       "problemId": r.problem_id, "problem": r.problem, "submissionId": r.submission_id,
+                       "failedGroups": r.samples, "detail": r.detail, **r.data} for r in rows]}
+
+
+# 页面 → （名字、取数据、表格的主表在哪一项；没有主表的只能导 JSON）。和页面上看到的是同一份数据，
+# 不走页面缓存（导出要最新的）。
+EXPORT_PAGES = {
+    "overview": ("总览", lambda s, u, k: overview.__wrapped__(key=k, user=u, s=s), None),
+    "students": ("学生", lambda s, u, k: students.__wrapped__(key=k, user=u, s=s), "students"),
+    "submissions": ("提交记录", _export_submissions, "items"),
+    "misconceptions": ("误区", lambda s, u, k: misconception_list.__wrapped__(key=k, period="all", user=u, s=s), "items"),
+    "map": ("知识图谱", lambda s, u, k: knowledge_map.__wrapped__(key=k, student=None, user=u, s=s), "nodes"),
+    "models": ("模型检验", lambda s, u, k: graph.__wrapped__(key=k, user=u, s=s), None),
+    "rating": ("理解评估", lambda s, u, k: understanding_check(key=k, user=u, s=s), None),
+    "help": ("求助效果", lambda s, u, k: help_effect.__wrapped__(key=k, user=u, s=s), "rows"),
+}
+
+
+@router.get("/export/{page}")
+def export_page(page: str, key: str, format: str = "json", user: m.User = Depends(admin),
+                s: Session = Depends(get_session)):
+    """开发者：把一页的数据（这个班或选的几个班）导成 JSON，有主表的也能导成 CSV（Excel 能直接打开）。"""
+    import csv
+    import io
+    import json
+    from urllib.parse import quote
+
+    if page not in EXPORT_PAGES:
+        raise HTTPException(status_code=404, detail="这一页不能导出。")
+    title, fetch, table = EXPORT_PAGES[page]
+    cls = _class(s, user, key)
+    data = fetch(s, user, key)
+    stamp = db.now().astimezone(db.BEIJING).strftime("%Y%m%d-%H%M")
+    name = f"{title}-{cls.class_name}-{stamp}".replace("/", "-")
+    if format == "csv":
+        if table is None:
+            raise HTTPException(status_code=400, detail="这一页没有表格，只能导出 JSON。")
+        rows = data.get(table) or []
+        cols = list(dict.fromkeys(k for r in rows for k in r))
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(cols)
+        for r in rows:
+            w.writerow(["" if r.get(c) is None else json.dumps(r[c], ensure_ascii=False)
+                        if isinstance(r.get(c), (dict, list)) else r[c] for c in cols])
+        body, mime, ext = ("\ufeff" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8", "csv"
+    else:
+        payload = {"page": title, "class": {"key": key, "name": cls.class_name, "classes": split_class_key(key)},
+                   "course": user.course, "exportedAt": db.now().isoformat(), "versions": logs.versions(), "data": data}
+        body, mime, ext = json.dumps(payload, ensure_ascii=False, indent=1, default=str).encode("utf-8"), \
+            "application/json", "json"
+    return Response(content=body, media_type=mime,
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name + '.' + ext)}",
+                             "Cache-Control": "no-store"})
+
+
 # ------------------------------------------------------------ 按需申请学生日志（参考 DBEDU 的做法，见 app/logs.py）
 class LogBody(BaseModel):
     ids: str = ""
@@ -1346,15 +1542,10 @@ def _day(text: str, end: bool) -> dt.datetime:
 
 @router.get("/logs")
 def log_requests(user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
-    q = select(m.LogRequest).where(m.LogRequest.course == user.course).order_by(m.LogRequest.id.desc()).limit(50)
-    if user.role != "admin":
-        q = q.where(m.LogRequest.requester_id == user.id)
-    now = db.now()
+    """日志导出页要的：能导哪几类、有哪些班、限量。导出只有开发者一个人用，不再列申请记录（库里照样记一条）。"""
     return {"kinds": [{"code": k, "name": v} for k, v in logs.KINDS.items()],
             "classes": [{"key": class_key(c.server_id, c.class_id), "name": c.class_name} for c in my_classes(s, user)],
-            "requests": [logs.view(r, now) for r in s.scalars(q).all()],
-            "limits": {"ids": logs.MAX_IDS, "days": logs.MAX_DAYS, "daily": logs.DAILY_LIMIT, "ttlDays": logs.TTL_DAYS},
-            "admin": user.role == "admin"}
+            "limits": {"ids": logs.MAX_IDS, "days": logs.MAX_DAYS}}
 
 
 @router.post("/logs")
