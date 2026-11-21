@@ -791,3 +791,37 @@ def test_exam_report_requires_developer_and_explicit_time(client, demo):
     data = resp.json()
     assert data["pairedOpportunities"] == 0 and not data["rows"]
     assert data["students"] == len(data["noEvidenceStudents"]) > 0
+
+
+def test_exam_replay_uses_each_class_deadline_and_roster(client, demo):
+    sid = demo["server_id"]
+    first, second = f"c{sid}-31", f"c{sid}-32"
+    path = f"/api/teacher/classes/{first}_32/exam-replay"
+    early, late = "2001-01-01T08:00:00+08:00", "2001-01-01T14:00:00+08:00"
+    cutoff = dt.datetime.fromisoformat(early)
+    body = {"examTimes": {first: early, second: late}}
+    with db.session_scope() as s:
+        s.add(m.Enrollment(user_id=UID, class_id=32, server_id=sid))
+        for level, ts in [(3, cutoff - dt.timedelta(seconds=1)), (0, cutoff)]:
+            s.add(m.AgentAssessment(user_id=UID, course="C", skill_code="C01.01.01",
+                                    basis="chat", level=level, created_at=ts))
+    login(client, "demo-teacher")
+    assert client.post(path, json=body).status_code == 403
+    dev(client)
+
+    assert client.get(path, params={"exam": early}).status_code == 422
+    assert client.post(path, json={"examTimes": {first: early}}).status_code == 422
+    assert client.post(path, json={"examTimes": {**body["examTimes"], f"c{sid}-99": early}}).status_code == 422
+    assert client.post(path, json={"examTimes": {first: early, second: "2001-01-01T14:00"}}).status_code == 422
+
+    response = client.post(path, json=body)
+    assert response.status_code == 200 and "no-store" in response.headers["cache-control"]
+    a, b = response.json()["classReports"]
+    assert (a["classKey"], b["classKey"]) == (first, second)
+    assert a["computedAt"] == b["computedAt"]
+    assert dt.datetime.fromisoformat(a["cutoffExclusive"]) == cutoff
+    assert dt.datetime.fromisoformat(b["cutoffExclusive"]) == dt.datetime.fromisoformat(late)
+    assert set(a["roster"]) & set(b["roster"]) == {UID}
+    assert a["rows"][0]["studentId"] == b["rows"][0]["studentId"] == UID
+    assert a["rows"][0]["evidenceCounts"] == [0, 1, 0]
+    assert b["rows"][0]["evidenceCounts"] == [0, 2, 0]

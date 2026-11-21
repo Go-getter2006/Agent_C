@@ -153,9 +153,11 @@ const SERIES = [
 ];
 
 export default function Models({ cls }: { cls: ClassInfo }) {
-  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const { classes, tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
   const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key, tick], 0, false, `t:models:${cls.key}`, String(tick));
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  const [examTimes, setExamTimes] = useState<Record<string, string>>({});
+  const examClasses = cls.members ? classes.filter(c => cls.members?.includes(c.key)) : [cls];
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在取模型的结果" lines={5} /></div>;
@@ -263,7 +265,8 @@ export default function Models({ cls }: { cls: ClassInfo }) {
 
       <h2 className="sec-head">多维融合<span>每个维度的权重按数据学，每天夜里更新</span></h2>
       {d.replayCoverage && <p className="note">夜间预测按历史记录回算。{d.replayCoverage.legacy} 条旧记录缺少版本追踪，{d.replayCoverage.noHistoricalLabel} 条缺当时的题目标注，{d.replayCoverage.noArchivedWeights} 条缺当时的融合权重；后两项可重叠。</p>}
-      <ExamReplay key={cls.key} classKey={cls.key} />
+      <ExamReplay key={cls.key} classKey={cls.key} classes={examClasses} times={examTimes}
+        onTimeChange={(classKey, time) => setExamTimes(current => ({ ...current, [classKey]: time }))} />
       <FusionStats d={d} />
       <div className="sec-narrow">
         <FusionWeights d={d} />

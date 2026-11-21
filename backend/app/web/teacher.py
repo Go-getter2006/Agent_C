@@ -17,7 +17,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -1452,9 +1452,35 @@ def exam_replay(key: str, exam: dt.datetime, response: Response, user: m.User = 
     if exam.tzinfo is None:
         raise HTTPException(status_code=422, detail="考试时间需要包含时区。")
     cls = _class(s, user, key)
+    if isinstance(cls, ClassGroup):
+        raise HTTPException(status_code=422, detail="请为每个班级填写考试开始时间。")
     response.headers["Cache-Control"] = "private, no-store"
     report = research.exam_report(s, class_students(s, cls), cls.server_id, _course_of_class(s, cls), exam, db.now())
-    return {**report, "classes": split_class_key(key), "versions": logs.versions()}
+    return {**report, "classes": [key], "classKey": key, "className": cls.class_name, "versions": logs.versions()}
+
+
+class ExamReplayBody(BaseModel):
+    examTimes: dict[str, AwareDatetime]
+
+
+@router.post("/classes/{key}/exam-replay")
+def exam_replays(key: str, body: ExamReplayBody, response: Response, user: m.User = Depends(admin),
+                 s: Session = Depends(get_session)) -> dict:
+    """按班回算，各班使用自己的名单和截止时间。"""
+    cls = _class(s, user, key)
+    selected = {class_key(cls.server_id, class_id): class_id for class_id in class_ids(cls)}
+    if body.examTimes.keys() != selected.keys():
+        raise HTTPException(status_code=422, detail="请为所选的每个班级填写考试开始时间。")
+    response.headers["Cache-Control"] = "private, no-store"
+    computed = db.now()
+    course = _course_of_class(s, cls)
+    reports = []
+    for class_code, class_id in selected.items():
+        member = s.get(m.XClass, (cls.server_id, class_id))
+        report = research.exam_report(s, class_students(s, member), cls.server_id, course, body.examTimes[class_code], computed)
+        reports.append({"classKey": class_code, "className": member.class_name, **report})
+    return {"version": research.VERSION, "course": course, "computedAt": computed.isoformat(),
+            "classReports": reports, "versions": logs.versions()}
 
 
 # ------------------------------------------------------------ 研究 · 理解评估
