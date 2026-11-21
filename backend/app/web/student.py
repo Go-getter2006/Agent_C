@@ -501,6 +501,10 @@ class ConfidenceBody(BaseModel):
     elapsedMs: int | None = None
 
 
+class ChallengeBody(BaseModel):
+    keep: bool
+
+
 class JudgeBody(BaseModel):
     hasBug: bool
     confidence: str | None = None   # 独立作答：把握可选，放在确认判断旁边
@@ -561,7 +565,10 @@ def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(stu
     context = {"stem": view["stem"], "code": view["code"], "startLine": view["startLine"],
                "picked": view.get("lines"), "feedback": result["headline"],
                "explanation": result.get("explanation"), "finalCode": result.get("finalCode"),
-               "fix": result.get("fix"), "history": turns[-4:], "question": question}
+               "fix": result.get("fix"), "history": turns[-4:], "question": question,
+               # 反馈之后回顾的他以前在这里出过的错和智能体的分析（他可能接着问其中一道）
+               "pastMistakes": [f"{x['title']}：{x['text']}" for x in (a.recap or {}).get("items", [])],
+               "pastMistakesAnalysis": (a.recap or {}).get("analysis", "")}
 
     def answer(data: dict) -> str:
         value = data.get("answer")
@@ -578,6 +585,14 @@ def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(stu
         raise HTTPException(status_code=503, detail="复习答疑暂时连不上。你可以保留问题，稍后重试。")
     a.discussion = [*turns, {"id": body.requestId, "question": question, "answer": reply}]
     return {"turns": a.discussion}
+
+
+@router.get("/quiz/{attempt_id}/recap")
+def quiz_recap(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    """做完以后的回顾：他以前在这里出过的错（程序整理）和智能体的分析。第一次要时生成，之后用存的。"""
+    from .. import recap
+
+    return {"recap": recap.for_attempt(s, _attempt(s, user, attempt_id))}
 
 
 @router.post("/quiz/{attempt_id}/viewed")
@@ -598,10 +613,19 @@ def quiz_confidence(attempt_id: int, body: ConfidenceBody, user: m.User = Depend
 def quiz_judge(attempt_id: int, body: JudgeBody, user: m.User = Depends(student),
                s: Session = Depends(get_session)) -> dict:
     attempt = _attempt(s, user, attempt_id)
-    if attempt.protocol == 2:
+    if attempt.protocol >= 2:
         quiz.judge2(s, attempt, body.hasBug, body.confidence, body.elapsedMs)
     else:
         quiz.judge(s, attempt, body.hasBug)
+    return quiz.view(s, attempt)
+
+
+@router.post("/quiz/{attempt_id}/challenge")
+def quiz_challenge(attempt_id: int, body: ChallengeBody, user: m.User = Depends(student),
+                   s: Session = Depends(get_session)) -> dict:
+    """判断“满足要求”以后被追问：坚持（keep）或改判。"""
+    attempt = _attempt(s, user, attempt_id)
+    quiz.challenge_reply(s, attempt, body.keep)
     return quiz.view(s, attempt)
 
 
@@ -644,13 +668,6 @@ def quiz_run(attempt_id: int, body: RunBody, user: m.User = Depends(student),
              s: Session = Depends(get_session)) -> dict:
     attempt = _attempt(s, user, attempt_id)
     quiz.run_fix(s, attempt, body.code, body.choice)
-    return quiz.view(s, attempt)
-
-
-@router.post("/quiz/{attempt_id}/skip")
-def quiz_skip(attempt_id: int, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
-    attempt = _attempt(s, user, attempt_id)
-    quiz.skip(s, attempt)
     return quiz.view(s, attempt)
 
 

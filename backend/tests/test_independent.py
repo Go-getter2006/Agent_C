@@ -1,4 +1,5 @@
-"""复习提升的独立作答（界面改造方案第 4 节）：先判断 → 再选位置/依据 → 判断有问题的修改 → 反馈。需要 gcc。
+"""复习提升的独立作答（界面改造方案第 4 节）：先判断 → 判断有问题的选位置、修改；判断满足要求的智能体追问一句
+（坚持就出反馈，改判再去选位置、修改）→ 反馈。需要 gcc。
 
 - 第一步界面上不给能猜出答案的东西，反馈之前不下发错在哪、标准改法、解释；
 - 四种正误组合各走一遍，首次判断、首次选行、首稿各记一次；运行公开样例、看提示、重试按顺序记下；
@@ -40,7 +41,7 @@ def test_first_step_gives_nothing_away(bank):
     with db.session_scope() as s:
         a = attempt_for(s, "max-init-fix")
         v = quiz.view(s, a)
-        assert a.protocol == 2 and v["state"] == "judge" and v["judged"] is None and a.item_version
+        assert a.protocol == quiz.PROTOCOL == 3 and v["state"] == "judge" and v["judged"] is None and a.item_version
         assert "mark" not in v                         # 不标任何一行
         blob = repr(v)
         for secret in ("a[0]", "全是负数", "bugLines", "explanation", "fix", "result", "hasBug", "has_bug", "TY09", "C06"):
@@ -93,24 +94,85 @@ def test_missed_bug_ends_with_feedback_and_the_fix(bank):
     with db.session_scope() as s:
         a = attempt_for(s, "max-init-fix")
         quiz.judge2(s, a, False)
-        assert quiz.view(s, a)["state"] == "locate"   # 判断满足要求的也要给依据，界面不会因为提前结束而泄题
-        quiz.locate(s, a, [2])
+        v = quiz.view(s, a)
+        # 判断满足要求：智能体追问一句，不透露对错（界面不会因为提前结束而泄题）
+        assert v["state"] == "challenge" and v["challenge"] == {"text": quiz.CHALLENGE, "reply": None}
+        assert "result" not in v and "bugLines" not in repr(v) and v["current"] == "ok"
+        quiz.locate(s, a, [2])                       # 追问还没回答：不能选行
+        assert a.state == "challenge" and not a.first_lines
+        quiz.challenge_reply(s, a, keep=True)
         assert a.state == "done" and a.outcome == "wrong_judge" and a.locate_hit is None
         r = quiz.view(s, a)["result"]
-        assert r["headline"] == "这段代码其实有错" and "summary" not in r
+        assert r["headline"] == "这段代码其实有错" and "summary" not in r and r["challenge"] == "kept"
         assert r["fix"]["lines"][0] == "int max = a[0];" and r["bugLines"] == [1]
+        assert kinds(a) == ["prepared", "judge", "challenge", "challenge_reply", "feedback"]
 
 
 def test_correct_code_recognised_has_a_full_ending(bank):
     with db.session_scope() as s:
         a = attempt_for(s, "max-plain-judge")
         quiz.judge2(s, a, False)
-        quiz.locate(s, a, [2])
+        assert quiz.view(s, a)["challenge"]["text"] == quiz.CHALLENGE   # 正确的代码，追问的话一模一样
+        quiz.challenge_reply(s, a, keep=True)
+        quiz.challenge_reply(s, a, keep=False)       # 回答过了：再点不算
         assert a.outcome == "right_judge" and a.correct
         r = quiz.view(s, a)["result"]
-        assert r["headline"] == "你识别出了一段正确的代码"
-        assert r["lines"] == [2] and "summary" not in r
+        assert r["headline"] == "你识别出了一段正确的代码" and r["challenge"] == "kept"
+        assert r["lines"] == [] and "summary" not in r
         assert "fix" not in r and "bugLines" not in r
+
+
+def test_flip_after_the_challenge_then_fix(bank):
+    """有错的代码判断满足要求，被追问后改判：去选位置、修改。首次判断不改；改判后的选行和修改不算独立作答。"""
+    from app import diagnosis
+
+    with db.session_scope() as s:
+        a = attempt_for(s, "max-init-fix")
+        quiz.judge2(s, a, False)
+        quiz.challenge_reply(s, a, keep=False)
+        v = quiz.view(s, a)
+        assert a.state == "locate" and v["judged"] == "ok" and v["current"] == "bug"
+        assert v["challenge"]["reply"] == "flipped"
+        assert quiz.locate(s, a, [1]) is None and a.state == "edit" and a.locate_hit is None
+        quiz.submit_fix(s, a, FIX)
+        assert a.outcome == "right_second" and a.judged_has_bug is False and a.judge_correct is False
+        r = quiz.view(s, a)["result"]
+        assert r["headline"] == "追问以后你找到并改对了错误" and r["challenge"] == "flipped"
+        d = diagnosis.count([(a, s.get(m.QuizItem, a.item_id))])["C06.03"]
+        assert (d.judge.n, d.judge.d) == (0, 1) and (d.turned.n, d.turned.d) == (1, 1)
+        assert d.locate.d == 0 and d.edit.d == 0 and d.missed == 1      # 不进定位、修改
+        steps = diagnosis.evidence(s, a, s.get(m.QuizItem, a.item_id))["steps"]
+        assert [x["label"] for x in steps] == ["判断", "追问", "定位", "修改"]
+        assert "不算独立" in steps[2]["note"] and "不算独立" in steps[3]["note"]
+
+
+def test_correct_code_given_up_under_the_challenge(bank):
+    """本来正确的代码判断满足要求，被追问后改判：最后按判断错记；坚持率的分母里有它。"""
+    from app import diagnosis
+
+    with db.session_scope() as s:
+        a = attempt_for(s, "max-plain-judge")
+        quiz.judge2(s, a, False)
+        quiz.challenge_reply(s, a, keep=False)
+        quiz.locate(s, a, [1])
+        item = s.get(m.QuizItem, a.item_id)
+        quiz.submit_fix(s, a, item.shown_code)
+        assert a.outcome == "wrong_judge" and a.judge_correct is True
+        r = quiz.view(s, a)["result"]
+        assert r["headline"] == "这段代码本来是对的，你一开始的判断没错" and r["challenge"] == "flipped"
+        d = diagnosis.count([(a, item)])["C06.03"]
+        assert (d.judge_ok.n, d.judge_ok.d) == (1, 1) and (d.held.n, d.held.d) == (0, 1)
+
+
+def test_protocol_2_attempts_keep_choosing_the_basis(bank):
+    """以前出的题（protocol 2）判断满足要求的照旧选依据，不追问。"""
+    with db.session_scope() as s:
+        a = attempt_for(s, "max-plain-judge")
+        a.protocol = 2
+        quiz.judge2(s, a, False)
+        assert a.state == "locate" and "challenge" not in quiz.view(s, a)
+        quiz.locate(s, a, [2])
+        assert a.outcome == "right_judge" and quiz.view(s, a)["result"]["lines"] == [2]
 
 
 def test_correct_code_judged_wrong_can_be_kept_as_is(bank):
@@ -149,7 +211,7 @@ def test_review_page_prepares_one_ready_question(demo):
         assert review.prepare(s, UID, "C") == "ready" and review.ready_count(s, UID, "C") == 1   # 不重复备题
         pending = s.scalars(select(m.QuizAttempt).where(m.QuizAttempt.reason == "review",
                                                         m.QuizAttempt.state != "done")).all()
-        assert len(pending) == 1 and pending[0].protocol == 2
+        assert len(pending) == 1 and pending[0].protocol == quiz.PROTOCOL
 
 
 def test_one_item_that_cannot_be_made_does_not_block_the_rest(demo, monkeypatch):

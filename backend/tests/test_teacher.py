@@ -63,7 +63,7 @@ def test_class_overview_and_students(client, demo):
     assert 0 < len(focus) <= 6 and {"code", "name", "weak", "stuck", "silent", "error"} == set(focus[0])
     load = [f["weak"] + f["stuck"] + f["silent"] for f in focus]
     assert load == sorted(load, reverse=True) and all(x > 0 for x in load)
-    top = next(f for f in focus if f["code"] == "C06.03")   # 林晓等人在“最值、求和、统计”上待加强、卡住过
+    top = next(f for f in focus if f["code"] == "C06.03")   # 林晓等人在“求最值”上待加强、卡住过
     assert top["weak"] >= 1 and top["stuck"] >= 1 and top["error"]["name"]
     assert {"code", "name", "students", "count"} == set(ov["errors"][0])
     assert ov["errors"][0]["count"] >= ov["errors"][-1]["count"]
@@ -120,7 +120,7 @@ def test_stuck_list_and_graph_page(client, demo):
     # 研究 · 求助效果：按知识点的比例，不列学生
     help_ = client.get(f"/api/teacher/classes/{key}/help").json()
     row = next(r for r in help_["rows"] if r["code"] == "C06.03")   # 按知识点汇总
-    assert (row["name"], row["episodes"], row["repeat"]) == ("最值、求和、统计", 2, 1)
+    assert (row["name"], row["episodes"], row["repeat"]) == ("求最值", 2, 1)
     assert row["skills"][0]["code"] == "C06.03.02" and row["skills"][0]["episodes"] == 2
     assert row["passed"]["d"] >= 1 and help_["version"] == "stuck-kp-1"
     assert all(set(r) >= {"recall", "passed", "transfer", "silent"} for r in help_["rows"])
@@ -362,7 +362,7 @@ def test_knowledge_map_of_c_class_has_no_data_structures(client, demo):
     assert me["C06.03"]["student"]["level"] in ("基本掌握", "待加强")
     assert client.get(f"/api/teacher/classes/{key}/knowledge-map", params={"student": "2500000101"}).status_code == 404
     d = client.get(f"/api/teacher/classes/{key}/knowledge-map/C06.03").json()
-    assert d["name"] == "最值、求和、统计" and {p["title"] for p in d["problems"]} >= {"成绩最高分", "最大差值"}
+    assert d["name"] == "求最值" and {p["title"] for p in d["problems"]} >= {"成绩最高分", "最大差值"}
     assert not any(x["cross"] for x in client.get(f"/api/teacher/classes/{key}/knowledge-map/C10.01").json()["next"])
     assert client.get(f"/api/teacher/classes/{key}/knowledge-map/D02.02").status_code == 404
     detail = client.get(f"/api/teacher/students/{UID}").json()

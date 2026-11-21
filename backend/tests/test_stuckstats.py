@@ -38,8 +38,8 @@ def seed(s) -> None:
     s.flush()
     for uid in (A, B, C):
         s.add(m.Student(user_id=uid, name="生" + uid[-1]))
-    problem(s, 1, "C06.03.02")    # 最值、求和、统计
-    problem(s, 2, "C06.03.01")
+    problem(s, 1, "C06.03.02")    # 求最值
+    problem(s, 2, "C06.03.03")    # 同一个知识点（求最值）里的另一个技能
     problem(s, 3, "C06.03.02")
     problem(s, 4, "C05.03.01")    # for
     # A：在题 1 卡住两次（第二次自己想起来），之后又交两次通过；之后新做的题 2 一次通过、题 3 第一次没过
@@ -54,7 +54,7 @@ def seed(s) -> None:
     # B：在题 1 卡住、第二次没想起来（挖空），到现在没通过；没绑定题的一次（概念问题）
     stuck(s, B, 1, "C06.03.02", 1, "example_given", 1, rnd=21)
     stuck(s, B, 1, "C06.03.02", 2, "blank_filled", 2, rnd=22)
-    stuck(s, B, None, "C06.03.01", 1, "example_given", 3, rnd=23)
+    stuck(s, B, None, "C06.03.03", 1, "example_given", 3, rnd=23)
     sub(s, B, 1, 4, "WA")
     # 题 2 在卡住之前就做过：不算“之后新题”
     sub(s, B, 2, 0, "AC")
@@ -90,7 +90,7 @@ def test_kp_numbers(database):
         r = rows["C06.03"]
         assert (r["students"], r["episodes"], r["repeat"], r["stubborn"]) == (2, 5, 2, 0)
         assert r["recall"] == {"n": 1, "d": 2} and r["passed"] == {"n": 2, "d": 4} and r["transfer"] == {"n": 1, "d": 2}
-        assert [x["code"] for x in r["skills"]] == ["C06.03.02", "C06.03.01"]
+        assert [x["code"] for x in r["skills"]] == ["C06.03.02", "C06.03.03"]
         b = next(x for x in r["studentRows"] if x["userId"] == B)
         assert b["rounds"] == 3 and b["passed"] is None     # 最近一次没绑定题
         assert rows["C05.03"]["silent"] == 1 and rows["C05.03"]["silentRows"][0]["problems"] == [

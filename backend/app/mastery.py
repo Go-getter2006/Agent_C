@@ -492,6 +492,42 @@ def problem_skills(label: m.ProblemLabel | None, tested: set[str] | frozenset = 
     return out
 
 
+def follow_relabel(s: Session, server_id: int, problem_id: int, label: m.ProblemLabel | None) -> int:
+    """一道题的标注换了（技能表改了、按标签兜底的换成大模型标的）：这道题以前每次“通过”的证据按新标注重记。
+    事件、分量的基数（原来主技能那条）、是不是独立、可信度、时间都不变，只是记到新标注的技能上、按主次重新乘系数。
+    没通过的证据记在出错的那个技能上（按错误标注），不跟题目标注走，不动。返回重记了几次通过。"""
+    if label is None:
+        return 0
+    subs = s.scalars(select(m.Submission.submission_id).where(
+        m.Submission.server_id == server_id, m.Submission.problem_id == problem_id,
+        m.Submission.judgement == "AC")).all()
+    if not subs:
+        return 0
+    keys = [f"pass:{server_id}:{x}" for x in subs]
+    rows = s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.source_key.in_(keys),
+                                                   m.SkillEvidence.success.is_(True))).all()
+    groups: dict[str, list[m.SkillEvidence]] = {}
+    for r in rows:
+        groups.setdefault(r.source_key, []).append(r)
+    new = problem_skills(label, tested_secondary(s, label))
+    want = {code for code, _f, _i in new}
+    done = 0
+    for key, group in groups.items():
+        if {r.skill_code for r in group} == want:
+            continue
+        base = max(group, key=lambda r: r.weight)   # 原来的主技能（系数 1）
+        user, event, weight, independent, ts, reliability = (base.user_id, base.event_type, base.weight,
+                                                             base.independent, base.ts, base.reliability)
+        for r in group:
+            s.delete(r)
+        s.flush()
+        for code, factor, counts_independent in new:
+            add_evidence(s, user, code, event, True, weight * factor, key, ts, independent and counts_independent,
+                         reliability)
+        done += 1
+    return done
+
+
 def reweigh_passes(s: Session, limit: int = 500) -> int:
     """以前的版本（次技能一律按 1.0、算独立成功）记下的“通过”证据，按现在的规则重算分量（后台空闲时做，全用程序）。
     返回改了几条。主技能的只改版本号；标注已经换过、这个技能不在当前标注里的，分量不动。"""

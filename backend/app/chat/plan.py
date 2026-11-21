@@ -2,10 +2,13 @@
 
 以前直接给一段示例代码（帮助级别最高的那种），学生没机会自己想。现在：
 1. 流程图（flow 块）：3～6 步，每步一个标题、一句话说要做什么、这一步最关键的知识点。不写代码。
-   步骤按（服务器, 题目）存一份（problem_plans），所有学生共用，题面变了才重新生成；有大模型时让它按题面分步，
-   程序核对（步数、长度、不能有代码和测试数据），不合格或没有大模型时按题目标注的技能用模板分步。
+   步骤由大模型按题面分（程序核对步数、长度、不能有代码和测试数据、知识点必须是这门课的），按（服务器, 题目）
+   存一份（problem_plans），所有学生共用，题面或题目标注变了才重新生成。后台空闲时给作业里的题提前做好
+   （prepare_assigned），学生来问时一般已经有了；还没有就当场生成一次。
+   大模型给不出合格的步骤（或者没配大模型）就不出流程图，按平常的引导走：按技能拼出来的步骤会误导，不用。
 2. 学生选卡在哪几步（可多选），或者“都不会”：从选中的第一步开始。每一回合只讲一步：点出关键知识点，
    再问一个让他自己说出这一步怎么做的问题；答上了换下一步，没答上就讲得更具体一点，两次还没答上讲清楚原理再往下走。
+   这一回合大模型没写出合格的话，才用固定的句子讲这一步（不让他干等）。
 3. 进度跟着对话走：每条引导消息带着流程图（当前这一步高亮、做完的打勾）和状态（content["plan"]，学生端看不到）。
    他问了别的、贴了代码、交了提交，就退出流程图，按平常的对话来。
 """
@@ -17,11 +20,12 @@ import json
 import logging
 import re
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import db, llm, pdftext
 from .. import models as m
-from ..taxonomy import KNOWLEDGE_POINTS, SKILLS, course_prompt, kp_of_skill, skill_name
+from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, skill_name
 
 log = logging.getLogger("chat.plan")
 
@@ -55,31 +59,6 @@ def _hash(statement: str, label: m.ProblemLabel | None) -> str:
     key = json.dumps([statement, label.primary_skill if label else "", list(label.secondary_skills or []) if label else []],
                      ensure_ascii=False)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
-
-_INPUT = ("C01.03", "C01.04", "C05.08", "C08.02")   # 读入数据用到的技能：并进第一步
-
-
-def template_steps(label: m.ProblemLabel | None, course: str) -> list[dict]:
-    """没有大模型时：读入 → 题目标注的技能（按知识点去重，按课程里的先后排）→ 输出。
-    标题是技能（要做的事），关键知识点是它所属的知识点；模板说不出“怎么做”，how 留空。"""
-    codes = [c for c in ([label.primary_skill, *(label.secondary_skills or [])] if label else []) if c in SKILLS]
-    read = next((c for c in codes if c.startswith(_INPUT)), None)
-    io = course == "C"   # 读入、输出两步的知识点只在 C 语言这边写出来
-    steps = [{"title": "读入数据", "how": skill_name(read) if read else "按输入格式把数据读进来，先想好用什么类型存",
-              "kp": KNOWLEDGE_POINTS.get(kp_of_skill(read) if read else "C01.03", "") if io else ""}]
-    chosen: dict[str, str] = {}   # 知识点 → 代表它的技能（主技能优先）
-    for code in codes:
-        kp = KNOWLEDGE_POINTS.get(kp_of_skill(code), "")
-        if code != read and not code.startswith(("C01.01", "C01.02", "C01.03")) and kp != steps[0]["kp"]:
-            chosen.setdefault(kp, code)
-    for kp, code in sorted(chosen.items(), key=lambda x: x[1])[:MAX_STEPS - 2]:
-        steps.append({"title": skill_name(code), "how": "", "kp": kp})
-    if len(steps) == 1:
-        steps.append({"title": "按题意计算", "how": "把题目要求的计算或判断一步步写出来", "kp": ""})
-    steps.append({"title": "输出结果", "how": "按输出格式打印，注意空格和换行",
-                  "kp": KNOWLEDGE_POINTS.get("C01.02", "") if io else ""})
-    return steps
 
 
 _SYSTEM = """你是 C 语言课程的助教。一名学生还没开始做下面这道题，不知道从哪下手。
@@ -120,29 +99,65 @@ def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests:
 
 
 def steps_for(s: Session, server_id: int, problem_id: int, statement: str, label: m.ProblemLabel | None,
-              course: str, tests: list[dict]) -> list[dict]:
-    """这道题的解题步骤：存过且题面没变就直接用（所有学生共用）；没有就生成一次存起来。"""
+              course: str, tests: list[dict]) -> list[dict] | None:
+    """这道题的解题步骤：大模型按题面分好、存过且题面没变就直接用（所有学生共用）；没有就现在生成一次存起来。
+    大模型给不出合格的步骤、或者没配大模型，返回 None（不出流程图）。刚试过没成的一小时内不再试。"""
     h = _hash(statement, label)
     row = s.get(m.ProblemPlan, (server_id, problem_id))
-    fresh = row is not None and row.content_hash == h and row.version == VERSION and bool(row.steps)
-    if fresh and row.source == "llm":
+    fresh = row is not None and row.content_hash == h and row.version == VERSION
+    if fresh and row.source == "llm" and row.steps:
         return list(row.steps)
-    # 上次大模型没给出合格的步骤：一小时内不再试（每个学生来问都调一次太浪费），用模板
-    recent = fresh and db.as_utc(row.created_at) > db.now() - dt.timedelta(hours=1)
-    steps, source = None, "template"
-    tried = bool(statement) and llm.available() and not recent
-    if tried:
-        steps = _llm_steps(statement, label, course, tests)
-        source = "llm" if steps else "template"
-    steps = steps or template_steps(label, course)
-    if fresh and not tried and steps == row.steps:
-        return steps
+    if fresh and row.source == "failed" and db.as_utc(row.created_at) > db.now() - dt.timedelta(hours=1):
+        return None
+    if not statement or not llm.available():
+        return None
+    steps = _llm_steps(statement, label, course, tests)
     if row is None:
         row = m.ProblemPlan(server_id=server_id, problem_id=problem_id)
         s.add(row)
-    row.steps, row.source, row.version, row.content_hash, row.created_at = steps, source, VERSION, h, db.now()
+    row.steps, row.source, row.version, row.content_hash, row.created_at = (
+        steps or [], "llm" if steps else "failed", VERSION, h, db.now())
     s.flush()
     return steps
+
+
+def _tests(s: Session, server_id: int, problem_id: int) -> list[dict]:
+    """这道题全部测试点的输入输出：只用来检查步骤里没有出现测试数据。"""
+    from ..xdoj.util import decode_bytes
+
+    out = []
+    for tc in s.scalars(select(m.Testcase).where(m.Testcase.server_id == server_id, m.Testcase.problem_id == problem_id)).all():
+        out.append({"standardInput": decode_bytes(tc.input_bytes, tc.input_encoding)[0] if tc.input_bytes is not None else None,
+                    "standardOutput": decode_bytes(tc.output_bytes, tc.output_encoding)[0] if tc.output_bytes is not None else None})
+    return out
+
+
+def prepare_assigned(s: Session, limit: int = 2) -> int:
+    """后台空闲时：给作业里的题提前做好解题步骤（每道题一次，题面变了才重做；最近布置的作业先做）。返回做了几道。"""
+    from .. import catalog
+    from ..labeling.labeler import current_problem_label
+
+    if not llm.available():
+        return 0
+    rows = s.execute(select(m.ContestProblem.server_id, m.ContestProblem.problem_id).join(
+        m.Contest, (m.Contest.server_id == m.ContestProblem.server_id) & (m.Contest.contest_id == m.ContestProblem.contest_id))
+        .order_by(m.Contest.end_time.desc())).all()
+    done = 0
+    for server_id, problem_id in dict.fromkeys(rows):
+        if done >= limit:
+            break
+        statement = pdftext.usable_text(s.get(m.ProblemText, (server_id, problem_id)))
+        if not statement:
+            continue
+        label = current_problem_label(s, server_id, problem_id)
+        row = s.get(m.ProblemPlan, (server_id, problem_id))
+        if row is not None and row.content_hash == _hash(statement, label) and row.version == VERSION \
+                and (row.source == "llm" or db.as_utc(row.created_at) > db.now() - dt.timedelta(hours=1)):
+            continue
+        steps_for(s, server_id, problem_id, statement, label, catalog.server_course(s, server_id),
+                  _tests(s, server_id, problem_id))
+        done += 1
+    return done
 
 
 # ------------------------------------------------------------ 引导一步

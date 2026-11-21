@@ -3,12 +3,16 @@
 改得对不对由运行决定：把学生改后的代码替换进模板，在沙箱里编译运行，用小题自带的数据检查。
 学生端只拿得到 view() 返回的内容；有没有错、错在哪一行、标准改法，作答结束前都不给。
 
-两种作答协议（QuizAttempt.protocol）：
+三种作答协议（QuizAttempt.protocol）：
 - 1（以前的）：把握 → 判断 → 判断有错的改代码。旧记录照旧显示、照旧能接着做完。
-- 2（界面改造方案第 4 节，现在新出的题都是）：先判断（满足要求 / 存在问题，把握可选，确认前可以改选）
+- 2（界面改造方案第 4 节）：先判断（满足要求 / 存在问题，把握可选，确认前可以改选）
   → 再选位置（判断有问题）或依据（判断满足要求）→ 判断有问题的修改（可以运行公开样例、看提示，
   可以原样提交）→ 反馈。首次判断、首次选行、首稿各记一次不再改，运行、提示、重试按顺序记进 events。
   第一步界面上不给任何能猜出答案的东西；反馈之前不下发错在哪、标准改法、解释。
+- 3（现在新出的题都是）：和 2 一样，只是判断“满足要求”以后不再点依据，智能体追问一句（CHALLENGE，
+  对正确和有错的代码说的一样，不透露对错）：坚持就出反馈；改判就去选有问题的位置、再修改。
+  首次判断照样只记一次（judged_has_bug 不改），追问和回答记进 events（challenge、challenge_reply）。
+  改判以后选的行、改的代码不算独立定位和独立修改；有错的代码改判后改对，按“提示后改对”记（right_second）。
 """
 from __future__ import annotations
 
@@ -30,6 +34,9 @@ from .sandbox.precheck import check_editable_code, compile_error_zh
 from .taxonomy import course_of
 
 DONE = "done"
+PROTOCOL = 3   # 新出的题用的作答协议
+CHALLENGE = ("你确定吗？先别急着定，把它当成别人写的代码再挑一遍错：变量的初值、循环的边界、"
+             "特殊的输入、输出的格式，都对吗？")
 _rng = random.Random()  # 选题用的随机数；演示数据入库时会固定种子
 
 
@@ -213,11 +220,11 @@ def item_version(item: m.QuizItem) -> str:
 
 def new_attempt(s: Session, user_id: str, item: m.QuizItem, reason: str, at: dt.datetime | None = None,
                 review_item_id: int | None = None) -> m.QuizAttempt:
-    """开始一道小题，不发对话消息（复习页里直接做）。新出的题都按独立作答（protocol 2）做。"""
+    """开始一道小题，不发对话消息（复习页里直接做）。新出的题都按独立作答（PROTOCOL）做。"""
     at = at or db.now()
     attempt = m.QuizAttempt(user_id=user_id, item_id=item.id, quiz_type=item.quiz_type, skill_code=item.skill_code,
                             reason=reason, state="judge", created_at=at, review_item_id=review_item_id,
-                            protocol=2, item_version=item_version(item),
+                            protocol=PROTOCOL, item_version=item_version(item),
                             events=[{"t": at.isoformat(), "kind": "prepared"}])
     s.add(attempt)
     s.flush()
@@ -283,7 +290,7 @@ def _finish(s: Session, attempt: m.QuizAttempt, item: m.QuizItem, outcome: str) 
 
 
 def set_confidence(s: Session, attempt: m.QuizAttempt, value: str, elapsed_ms: int | None) -> None:
-    if attempt.protocol == 2 or attempt.state != "confidence" or value not in ("没把握", "一半", "很有把握"):
+    if attempt.protocol >= 2 or attempt.state != "confidence" or value not in ("没把握", "一半", "很有把握"):
         return
     attempt.confidence = value
     attempt.confidence_ms = elapsed_ms
@@ -291,7 +298,7 @@ def set_confidence(s: Session, attempt: m.QuizAttempt, value: str, elapsed_ms: i
 
 
 def judge(s: Session, attempt: m.QuizAttempt, says_bug: bool) -> None:
-    if attempt.protocol == 2 or attempt.state != "judge":
+    if attempt.protocol >= 2 or attempt.state != "judge":
         return
     item = s.get(m.QuizItem, attempt.item_id)
     attempt.judged_has_bug = says_bug
@@ -350,7 +357,7 @@ def skip(s: Session, attempt: m.QuizAttempt) -> None:
     if attempt.state == DONE:
         return
     attempt.skipped = True
-    if attempt.protocol == 2:
+    if attempt.protocol >= 2:
         _event(attempt, "skip", state=attempt.state)
     _finish(s, attempt, s.get(m.QuizItem, attempt.item_id), "skipped")
 
@@ -364,7 +371,7 @@ _HEADLINES = {
 
 def view(s: Session, attempt: m.QuizAttempt) -> dict:
     item = s.get(m.QuizItem, attempt.item_id)
-    if attempt.protocol == 2:
+    if attempt.protocol >= 2:
         return view2(s, attempt, item)
     runs = list(attempt.runs or [])
     start_line = item.start_line or 1
@@ -413,7 +420,7 @@ def view(s: Session, attempt: m.QuizAttempt) -> dict:
     return out
 
 
-# ------------------------------------------------------------ 独立作答（protocol 2）
+# ------------------------------------------------------------ 独立作答（protocol 2、3）
 CONFIDENCE = ("没把握", "一半", "很有把握")
 
 
@@ -438,10 +445,21 @@ def _bug_set(item: m.QuizItem) -> set[int]:
     return set(item.bug_lines or ([item.bug_line] if item.bug_line else []))
 
 
+def challenge_state(attempt: m.QuizAttempt) -> str | None:
+    """protocol 3：判断“满足要求”以后智能体追问了一次。None 没追问；asked 还没回答；kept 坚持；flipped 改判。"""
+    asked, reply = False, None
+    for e in attempt.events or []:
+        if e.get("kind") == "challenge":
+            asked = True
+        elif e.get("kind") == "challenge_reply":
+            reply = "kept" if e.get("keep") else "flipped"
+    return reply or ("asked" if asked else None)
+
+
 def judge2(s: Session, attempt: m.QuizAttempt, says_bug: bool, confidence: str | None = None,
            elapsed_ms: int | None = None) -> None:
     """第一步：确认判断。确认以后锁定，不能再改（确认前在页面上可以改选）。把握可选。"""
-    if attempt.protocol != 2 or attempt.state != "judge":
+    if attempt.protocol < 2 or attempt.state != "judge":
         return
     item = s.get(m.QuizItem, attempt.item_id)
     attempt.judged_has_bug = says_bug
@@ -454,15 +472,34 @@ def judge2(s: Session, attempt: m.QuizAttempt, says_bug: bool, confidence: str |
         delta = db.now() - dt.datetime.fromisoformat(prepared["triggerAt"])
         timing["secondsSinceTrigger"] = max(0, int(delta.total_seconds()))
     _event(attempt, "judge", says="bug" if says_bug else "ok", confidence=confidence or "", **timing)
+    if attempt.protocol >= 3 and not says_bug:
+        _event(attempt, "challenge")   # 判断满足要求：智能体追问一句（对正确和有错的代码一样）
+        attempt.state = "challenge"
+    else:
+        attempt.state = "locate"
+
+
+def challenge_reply(s: Session, attempt: m.QuizAttempt, keep: bool) -> None:
+    """被追问以后：坚持“满足要求”就出反馈；改判就去选有问题的位置、再修改。首次判断不改。"""
+    if attempt.protocol < 3 or attempt.state != "challenge":
+        return
+    item = s.get(m.QuizItem, attempt.item_id)
+    _event(attempt, "challenge_reply", keep=bool(keep))
+    if keep:
+        _finish(s, attempt, item, "right_judge" if attempt.judge_correct else "wrong_judge")
+        _event(attempt, "feedback")
+        return
     attempt.state = "locate"
 
 
 def locate(s: Session, attempt: m.QuizAttempt, lines: list[int]) -> str | None:
-    """第二步：判断有问题的选位置，判断满足要求的选依据（支撑判断的关键行）。一行或连续几行。
+    """第二步：判断有问题的选位置（protocol 3 被追问后改判的也选位置），protocol 2 判断满足要求的选依据
+    （支撑判断的关键行）。一行或连续几行。
 
     返回要提示学生的话（选得不对时）；正常返回 None。全选代码、选太多行不算命中。
+    只有首次判断就说有问题的才算独立定位（locate_hit）。
     """
-    if attempt.protocol != 2 or attempt.state != "locate":
+    if attempt.protocol < 2 or attempt.state != "locate":
         return None
     item = s.get(m.QuizItem, attempt.item_id)
     start = item.start_line or 1
@@ -475,8 +512,9 @@ def locate(s: Session, attempt: m.QuizAttempt, lines: list[int]) -> str | None:
     attempt.first_lines = [start + x - 1 for x in rel]
     if item.has_bug and attempt.judged_has_bug:
         attempt.locate_hit = bool(_bug_set(item) & set(rel)) and (n == 1 or len(rel) < n) and len(rel) <= max(3, n // 2)
-    _event(attempt, "locate", lines=attempt.first_lines, role="where" if attempt.judged_has_bug else "why")
-    if attempt.judged_has_bug:
+    says_bug = bool(attempt.judged_has_bug) or challenge_state(attempt) == "flipped"
+    _event(attempt, "locate", lines=attempt.first_lines, role="where" if says_bug else "why")
+    if says_bug:
         attempt.state = "edit"
         return None
     _finish(s, attempt, item, "right_judge" if attempt.judge_correct else "wrong_judge")
@@ -497,7 +535,7 @@ def hint_texts(item: m.QuizItem) -> list[str]:
 
 
 def hint(s: Session, attempt: m.QuizAttempt) -> None:
-    if attempt.protocol != 2 or attempt.state != "edit":
+    if attempt.protocol < 2 or attempt.state != "edit":
         return
     item = s.get(m.QuizItem, attempt.item_id)
     if attempt.hints >= len(hint_texts(item)):
@@ -508,7 +546,7 @@ def hint(s: Session, attempt: m.QuizAttempt) -> None:
 
 def run_sample(s: Session, attempt: m.QuizAttempt, code: str) -> None:
     """运行公开样例（第一组检查数据）：只看这一组，不算一次提交，记一次运行。"""
-    if attempt.protocol != 2 or attempt.state != "edit":
+    if attempt.protocol < 2 or attempt.state != "edit":
         return
     item = s.get(m.QuizItem, attempt.item_id)
     code = (code or "").replace("\r\n", "\n").rstrip("\n")
@@ -533,7 +571,7 @@ def run_sample(s: Session, attempt: m.QuizAttempt, code: str) -> None:
 
 def submit_fix(s: Session, attempt: m.QuizAttempt, code: str) -> None:
     """提交修改。可以原样提交（认为代码没问题）。编译不过、改动太多、运行环境不可用都不算一次提交。"""
-    if attempt.protocol != 2 or attempt.state != "edit":
+    if attempt.protocol < 2 or attempt.state != "edit":
         return
     item = s.get(m.QuizItem, attempt.item_id)
     code = (code or "").replace("\r\n", "\n").rstrip("\n")
@@ -568,7 +606,10 @@ def submit_fix(s: Session, attempt: m.QuizAttempt, code: str) -> None:
         _note(attempt, "pass", "改对了。", code, counted=True)
         hit = bool(set(lines) & _bug_set(item))
         clean_first = first and attempt.hints == 0
-        outcome = ("right" if hit else "right_bypass") if clean_first else "right_second"
+        if challenge_state(attempt) == "flipped":
+            outcome = "right_second"   # 被追问以后才发现有问题：和看了提示才改对一样记
+        else:
+            outcome = ("right" if hit else "right_bypass") if clean_first else "right_second"
         _finish(s, attempt, item, outcome)
         _event(attempt, "feedback")
         return
@@ -605,12 +646,19 @@ def feedback2(s: Session, attempt: m.QuizAttempt, item: m.QuizItem) -> dict:
     mine = list(attempt.first_lines or [])
     if attempt.outcome == "skipped":
         return {"outcome": "skipped", "headline": "这道先跳过了。"}
+    challenged = challenge_state(attempt)
+    fixed = attempt.outcome in ("right", "right_bypass", "right_second")
     if not item.has_bug:
-        headline = "这段代码本来是对的" if judged_bug else "你识别出了一段正确的代码"
+        if challenged == "flipped":
+            headline = "这段代码本来是对的，你一开始的判断没错"
+        else:
+            headline = "这段代码本来是对的" if judged_bug else "你识别出了一段正确的代码"
     elif not judged_bug:
-        headline = "这段代码其实有错"
+        if challenged == "flipped":
+            headline = "追问以后你找到并改对了错误" if fixed else "这段代码其实有错，这次没改对"
+        else:
+            headline = "这段代码其实有错"
     else:
-        fixed = attempt.outcome in ("right", "right_bypass", "right_second")
         headline = "你找到并改对了错误" if fixed else "这次没改对"
     out: dict = {
         "outcome": "right" if attempt.correct else "wrong",
@@ -618,6 +666,7 @@ def feedback2(s: Session, attempt: m.QuizAttempt, item: m.QuizItem) -> dict:
         "lines": mine,
         "explanation": item.explanation,
         "origin": None if attempt.reason == "review" else _origin(s, attempt, item),
+        "challenge": challenged if challenged in ("kept", "flipped") else None,
     }
     runs = list(attempt.runs or [])
     passed_code = next((r["code"] for r in reversed(runs) if r.get("kind") == "pass" and r.get("code")), "")
@@ -637,7 +686,7 @@ def view2(s: Session, attempt: m.QuizAttempt, item: m.QuizItem) -> dict:
     runs = list(attempt.runs or [])
     out: dict = {
         "attemptId": attempt.id,
-        "protocol": 2,
+        "protocol": attempt.protocol,
         "stem": f"请判断这段代码能否满足「{item.scene}」的要求。" if revealing_stem(item) else item.stem,
         "caption": item.caption,
         "code": item.shown_code.split("\n"),
@@ -647,6 +696,11 @@ def view2(s: Session, attempt: m.QuizAttempt, item: m.QuizItem) -> dict:
         "judged": None if attempt.judged_has_bug is None else ("bug" if attempt.judged_has_bug else "ok"),
         "lines": list(attempt.first_lines or []),
     }
+    challenged = challenge_state(attempt)
+    if challenged:
+        out["challenge"] = {"text": CHALLENGE, "reply": None if challenged == "asked" else challenged}
+    if attempt.judged_has_bug is not None:   # 现在的判断：被追问后改判的是“存在问题”
+        out["current"] = "bug" if attempt.judged_has_bug or challenged == "flipped" else "ok"
     # 独立作答不标改动的那一行：学生要自己找位置，第一步界面上不能有能猜出答案的高亮
     if attempt.state == "edit":
         texts = hint_texts(item)

@@ -106,6 +106,24 @@ def _log_notice(s: Session, sub: m.Submission, chosen: str, now: dt.datetime, fe
                           "message": msg.id if msg is not None else None}, ts=now)
 
 
+def _failure_text(s: Session, sub: m.Submission, attempt: int, label: m.SubmissionLabel | None) -> str:
+    """普通没过：按程序对这次提交的诊断问一句（没过的那组是哪类情况、代码哪里可疑；诊断时比对过期望输出和他程序的
+    输出），和他在对话里第一次求助时问的一样（H0，不给答案）。诊断没把握时，只说哪类情况，问他原本期待什么结果。
+    测试数据本身不说。"""
+    from .context import for_submission
+
+    ctx = for_submission(s, sub, _course(s, sub.server_id))
+    head = f"你的第 {attempt} 次提交" + ("编译没有通过。" if sub.judgement == "CE" else f"没有通过（{_grid_text(s, sub)}）。")
+    sit = f"没过的是“{ctx.situation}”这类情况。" if ctx.situation else ""
+    if label is not None and label.confidence >= config.CHAT["low_confidence"] and ctx.root_error:
+        ask = ctx.fill(ctx.hint().ask).strip().removeprefix("编译没有通过。")
+        if ask:
+            return head + sit + ask
+    if sub.judgement == "CE":
+        return head + "编译器指出的是哪一行、说了什么？先从那一行看起。"
+    return head + sit + ("你原本期待程序在这类输入上得到什么结果？" if sit else "你原本期待程序在哪一步得到什么结果？")
+
+
 def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> m.ChatMessage | None:
     """一次没通过的提交标完错误之后调用。该说就在这道题的对话里发一条，返回这条消息。"""
     now = now or db.now()
@@ -163,7 +181,7 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
             kind = "stuck"
     if not kind:
         kind = "failure"
-        blocks.append({"t": "p", "text": f"你的第 {attempt} 次提交没有通过。你原本期待程序在哪一步得到什么结果？"})
+        blocks.append({"t": "p", "text": _failure_text(s, sub, attempt, label)})
     feats = {"attemptNo": attempt, "kind": kind, "recurrence": recur is not None, "stuck": kind == "stuck",
              "error": label.error_code if label is not None else "",
              "labelConfidence": round(label.confidence, 3) if label is not None else None,

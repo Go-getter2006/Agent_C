@@ -116,7 +116,9 @@ SYNC = {
 }
 
 # ---------------------------------------------------------------- 版本号
-TAXONOMY_VERSION = "0.1"      # 知识点表、技能表
+TAXONOMY_VERSION = "0.2"      # 知识点表、技能表。0.2（2026-11-21）：知识点拆成单一概念，几个捆了两件事的技能拆开
+# 0.2 里意思变窄了的技能：以前的标注用到它们的，后台用大模型重新标一次（labeling/problems.relabel_changed）
+RELABEL_SKILLS = frozenset({"C06.03.01", "C06.06.03", "C07.02.01", "C07.02.02"})
 ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
 LABELER_VERSION = "2026-11-20a"   # 次技能只列题目专门要求的
 PROMPT_VERSION = "2026-11-18d"

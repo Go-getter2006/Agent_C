@@ -102,7 +102,7 @@ def test_problem_detail_and_compile_error_has_no_grid(client, demo):
     assert [(x["attemptNo"], x["resultText"], x["passed"]) for x in subs] == [
         (3, "答案错误", 4), (2, "答案错误", 3), (1, "编译错误", None)]
     assert subs[2]["grid"] is None        # 编译错误不显示格子
-    assert [k["name"] for k in d["knowledge"]][0] == "最值、求和、统计"
+    assert [k["name"] for k in d["knowledge"]][0] == "求最值"
     assert all(set(k) == {"name", "level", "segments"} for k in d["knowledge"])
 
 
@@ -134,7 +134,7 @@ def test_cannot_see_other_students_data(client, demo):
     login(client, name=OTHER)
     assert client.get(f"/api/threads/p{sid}-406").json()["messages"] == []
     assert client.get(f"/api/submissions/{my_keys[2]}/source").status_code == 404
-    assert client.post(f"/api/quiz/{my_attempt}/skip").status_code == 404
+    assert client.post(f"/api/quiz/{my_attempt}/hint").status_code == 404
     del their_attempt
 
 
@@ -190,7 +190,7 @@ def test_review_flow_over_api(client, demo, monkeypatch):
                 item.last_success_at = db.now() - dt.timedelta(days=8)
                 item.due_at = db.now() - dt.timedelta(days=1)
     page = client.get("/api/review").json()
-    assert [d["title"] for d in page["due"]] == ["整型与取值范围"] and page["due"][0]["dueNow"]
+    assert [d["title"] for d in page["due"]] == ["整型的取值范围"] and page["due"][0]["dueNow"]
     due = page["due"][0]
     assert due["why"] == "卡住过" and due["origin"]["title"] == "阶乘求和" and due["memory"]["segments"] == 1
     plan = {k: v for k, v in page.items() if k != "current"}   # 备好的题里的代码会有 %d
@@ -198,7 +198,7 @@ def test_review_flow_over_api(client, demo, monkeypatch):
     assert "%" not in json.dumps(client.get("/api/progress").json()["next"], ensure_ascii=False)
     assert "C02" not in str(page) and "skill" not in str(page).lower()
     up = [u["title"] for u in page["upcoming"]]
-    assert "最值、求和、统计" in up
+    assert "求最值" in up
     assert "current" not in page
     with db.session_scope() as s:
         assert review.prepare(s, UID, "C") == "ready"
@@ -206,7 +206,7 @@ def test_review_flow_over_api(client, demo, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     q = body["quiz"]
-    assert body["lead"] and q["state"] == "judge" and q["protocol"] == 2   # 独立作答：先判断
+    assert body["lead"] and q["state"] == "judge" and q["protocol"] == 3   # 独立作答：先判断
     assert set(q) >= {"attemptId", "stem", "caption", "code", "state", "startLine"}
     assert client.post(f"/api/review/{due['id']}/start").json()["quiz"]["attemptId"] == q["attemptId"]  # 不重复出题
     aid = q["attemptId"]
@@ -216,9 +216,13 @@ def test_review_flow_over_api(client, demo, monkeypatch):
         line = item.start_line + (item.bug_line or 1) - 1
         assert owner in (UID, None) and item.verified   # 他没通过过用到这个技能的题：退回题库
     q = client.post(f"/api/quiz/{aid}/judge", json={"hasBug": has_bug, "confidence": "很有把握", "elapsedMs": 2100}).json()
-    assert q["state"] == "locate"
-    assert client.post(f"/api/quiz/{aid}/locate", json={"lines": []}).status_code == 400
-    q = client.post(f"/api/quiz/{aid}/locate", json={"lines": [line]}).json()
+    if not has_bug:   # 判断满足要求：智能体追问一句，他坚持
+        assert q["state"] == "challenge" and q["challenge"]["reply"] is None
+        q = client.post(f"/api/quiz/{aid}/challenge", json={"keep": True}).json()
+    else:
+        assert q["state"] == "locate"
+        assert client.post(f"/api/quiz/{aid}/locate", json={"lines": []}).status_code == 400
+        q = client.post(f"/api/quiz/{aid}/locate", json={"lines": [line]}).json()
     if q["state"] == "edit":
         from app.sandbox import sandbox_available
         if not sandbox_available():
@@ -239,7 +243,7 @@ def test_progress_page(client):
     p = client.get("/api/progress").json()
     assert set(p) == {"summary", "knowledge", "errors", "activity", "next", "foundation"} and p["foundation"] == []
     names = [i["name"] for g in p["knowledge"] for i in g["items"]]
-    assert "最值、求和、统计" in names and len(names) == len(set(names)) and len(names) == 65
+    assert "求最值" in names and len(names) == len(set(names)) and len(names) == 89
     assert all(not n.startswith("D") for n in names) and "单链表" not in names   # 跨课程的内容学生看不到
     for g in p["knowledge"]:
         for i in g["items"]:

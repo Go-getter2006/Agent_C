@@ -2,14 +2,19 @@
 
 单位是一名学生对某一版题目的一次作答（quiz_attempts 一行）。
 - 判断：首次判断正确数 / 提交了首次判断的题数。错题识别、正确代码识别分开算分子分母。
-- 定位：首次选中有效位置数 / 真实错题里判断有问题、提交了首次选行的次数（只算独立作答，protocol 2）。
-- 修改（dims-2）：看提示之前交的第一稿通过数 / 真实错题里交过这种第一稿的次数（只算 protocol 2）。
+- 定位：首次选中有效位置数 / 真实错题里判断有问题、提交了首次选行的次数（只算独立作答，protocol 2、3）。
+- 修改（dims-2）：看提示之前交的第一稿通过数 / 真实错题里交过这种第一稿的次数（只算 protocol 2、3）。
   运行公开样例是自己测一下，不算帮助，进分母；其中“没运行样例就交的”另列（editClean，就是 dims-1 的修改）。
   看了提示才交第一稿的不进分母，记在“提示后或重试后才改对”里。
 定位和修改的分母受前面判断的影响：1/2 只说明实际进入这一步的两次，不能读成对所有题的能力估计。
 
 另列（教师端）：应答机会（出过几道）、进入定位、进入修改、提示后或重试后才改对、跳过、还没做完、
 旧版记录（protocol 1，有判断、没有独立的选行，标“旧版未测定位”，不能拿后来改了哪行补首次定位）。
+
+追问（protocol 3，版本 CHALLENGE_VERSION）：判断“满足要求”以后智能体追问一句，对正确和有错的代码说的一样。
+- 坚持（held）：本来正确的代码判断满足要求、被追问后仍坚持的次数 / 这种情况回答了追问的次数；
+- 改判（turned）：有错的代码判断满足要求、被追问后改判的次数 / 这种情况回答了追问的次数。
+改判以后选的行、交的修改不进定位和修改的分子分母（不是独立作答）；首次判断照样进判断。
 不和掌握分硬配权重：掌握程度的估计照旧（mastery.py），三维只用来解释。
 """
 from __future__ import annotations
@@ -21,10 +26,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models as m
-from .quiz import revealing_stem
-from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill
+from .quiz import challenge_state, revealing_stem
+from .taxonomy import KNOWLEDGE_POINTS, course_of, kp_of_skill, kp_rank
 
 VERSION = "dims-2"   # 定义改了就改版本号（研究导出里带上，docs/研究数据与指标.md）。dims-2：修改的分母含运行过样例的第一稿
+CHALLENGE_VERSION = "challenge-1"   # 追问的说法和坚持、改判的算法
 
 
 @dataclass
@@ -49,6 +55,8 @@ class Dims:
     locate: Ratio = field(default_factory=Ratio)
     edit: Ratio = field(default_factory=Ratio)         # 看提示之前交的第一稿
     edit_clean: Ratio = field(default_factory=Ratio)   # 其中没运行公开样例就交的
+    held: Ratio = field(default_factory=Ratio)         # 追问后坚持（本来正确的代码）
+    turned: Ratio = field(default_factory=Ratio)       # 追问后改判（有错的代码）
     missed: int = 0          # 有错的代码判断成没问题（没进入定位）
     shown: int = 0           # 应答机会
     locate_entered: int = 0
@@ -88,7 +96,14 @@ def count(pairs) -> dict[str, Dims]:
             ok = bool(a.judge_correct)
             d.judge.add(ok)
             (d.judge_bug if item.has_bug else d.judge_ok).add(ok)
-        if a.protocol != 2:
+        if a.protocol >= 3 and a.judged_has_bug is False:
+            reply = challenge_state(a)
+            if reply in ("kept", "flipped"):
+                if item.has_bug:
+                    d.turned.add(reply == "flipped")
+                else:
+                    d.held.add(reply == "kept")
+        if a.protocol < 2:
             if a.judged_has_bug is not None:
                 d.legacy += 1
         else:
@@ -185,16 +200,25 @@ def evidence(s: Session, a: m.QuizAttempt, item: m.QuizItem) -> dict:
     judged = "发现问题" if a.judged_has_bug else "认为满足要求"
     steps = [{"label": "判断", "value": judged,
               "note": f"首次选择「{'存在问题' if a.judged_has_bug else '满足要求'}」，" + ("判断正确" if a.judge_correct else "判断有误")}]
-    if a.protocol != 2:
+    challenged = challenge_state(a) if a.protocol >= 3 else None
+    flipped = challenged == "flipped"
+    if challenged:
+        steps.append({"label": "追问", "value": {"kept": "坚持满足要求", "flipped": "改判为存在问题"}.get(challenged, "还没回答"),
+                      "note": "判断满足要求以后智能体追问了一句，正确和有错的代码问法一样"})
+    if a.protocol < 2:
         steps.append({"label": "定位", "value": "旧版未测定位", "note": "以前的小题没有单独选行这一步"})
     elif picked:
         if item.has_bug and a.judged_has_bug:
             note = "首次选择命中评分范围" if a.locate_hit else f"没有命中（有效位置：{_where(bug_lines)}）"
             steps.append({"label": "定位", "value": f"选中{_where(picked)}", "note": note})
+        elif flipped:
+            hit = "命中" if item.has_bug and set(picked) & set(bug_lines) else "没有命中"
+            steps.append({"label": "定位", "value": f"选中{_where(picked)}",
+                          "note": f"改判以后选的，不算独立定位；{hit if item.has_bug else '代码本来正确'}"})
         else:
             steps.append({"label": "依据" if not a.judged_has_bug else "定位", "value": f"选中{_where(picked)}",
                           "note": "支撑判断的关键行" if not a.judged_has_bug else "代码本来正确，选的位置其实没有问题"})
-    if a.protocol == 2 and a.judged_has_bug:
+    if a.protocol >= 2 and (a.judged_has_bug or flipped):
         if not item.has_bug:
             kind = next((e.get("misjudge") for e in reversed(a.events or []) if e.get("kind") == "submit"), None)
             value = {"kept": "原样提交", "extra": "多余修改", "broke": "改坏了"}.get(kind or "", "未提交")
@@ -210,8 +234,11 @@ def evidence(s: Session, a: m.QuizAttempt, item: m.QuizItem) -> dict:
             steps.append({"label": "修改", "value": "没有改对", "note": f"提交了 {a.tries} 次"})
         else:
             steps.append({"label": "修改", "value": "还没做完", "note": ""})
-    elif a.protocol == 2 and item.has_bug and not a.judged_has_bug:
-        steps.append({"label": "修改", "value": "未进入", "note": "判断时没发现问题"})
+    elif a.protocol >= 2 and item.has_bug and not a.judged_has_bug:
+        steps.append({"label": "修改", "value": "未进入",
+                      "note": "追问以后仍坚持满足要求" if challenged == "kept" else "判断时没发现问题"})
+    if flipped and steps[-1]["label"] == "修改":
+        steps[-1]["note"] = ("改判以后的修改，不算独立修改；" + steps[-1]["note"]).rstrip("；")
     focus = picked or bug_lines
     lo = max(start, (focus[0] if focus else start) - 1)
     hi = min(start + len(lines) - 1, (focus[-1] if focus else start) + 1)
@@ -220,12 +247,12 @@ def evidence(s: Session, a: m.QuizAttempt, item: m.QuizItem) -> dict:
         "title": item.stem, "time": (a.finished_at or a.created_at).isoformat(),
         "steps": steps,
         "code": {"start": lo, "lines": lines[lo - start:hi - start + 1], "picked": picked, "bug": bug_lines},
-        "order": order, "hints": a.hints, "sampleRuns": a.sample_runs, "legacy": a.protocol != 2,
+        "order": order, "hints": a.hints, "sampleRuns": a.sample_runs, "legacy": a.protocol < 2,
     }
 
 
 def teacher_rows(s: Session, d: dict[str, Dims]) -> list[dict]:
-    rows = sorted(d.values(), key=lambda x: x.kp)
+    rows = sorted(d.values(), key=lambda x: kp_rank(x.kp))
     out = []
     for x in rows:
         if not x.shown:
@@ -234,6 +261,7 @@ def teacher_rows(s: Session, d: dict[str, Dims]) -> list[dict]:
             "code": x.kp, "name": KNOWLEDGE_POINTS.get(x.kp, ""),
             "judge": x.judge.view(), "judgeBug": x.judge_bug.view(), "judgeOk": x.judge_ok.view(),
             "locate": x.locate.view(), "edit": x.edit.view(), "editClean": x.edit_clean.view(),
+            "held": x.held.view(), "turned": x.turned.view(),
             "why": why_empty(x),
             "counts": {"shown": x.shown, "locateEntered": x.locate_entered, "editEntered": x.edit_entered,
                        "afterHelp": x.after_help, "skipped": x.skipped, "open": x.open, "legacy": x.legacy,
