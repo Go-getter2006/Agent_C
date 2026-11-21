@@ -22,6 +22,7 @@
   flex-direction: column;
   background: var(--sidebar);
   color: var(--sidebar-text);
+  border-right: 1px solid var(--sidebar-line);
   padding: var(--sp-16) var(--sp-12);
   overflow-y: auto;
 }
@@ -33,7 +34,7 @@
   height: 40px;
   padding: 0 var(--sp-8);
   margin-bottom: var(--sp-20);
-  color: var(--on-dark);
+  color: var(--sidebar-ink);
 }
 
 .brand-mark {
@@ -46,13 +47,6 @@
   background: var(--brand);
   color: var(--on-brand);
   flex-shrink: 0;
-}
-
-.sidebar .brand-mark,
-.drawer-dark .brand-mark,
-.appbar .brand-mark {
-  background: var(--brand-on-dark);
-  color: var(--sidebar);
 }
 
 .brand-mark-sm {
@@ -108,19 +102,23 @@
 
 .nav-item:hover {
   background: var(--sidebar-2);
-  color: var(--on-dark);
+  color: var(--sidebar-ink);
 }
 
+/* 选中：卡片色的一块，细描边，图标用强调色 */
 .nav-item.active {
   color: var(--ink);
   background: var(--surface);
+  box-shadow: 0 1px 2px rgba(40, 30, 20, 0.06), 0 0 0 1px var(--sidebar-ring);
   transition: none;
 }
+
+.nav-item.active .nav-icon { color: var(--brand); }
 
 .nav-item.active:hover { background: var(--surface-2); color: var(--ink); }
 
 .nav-item:focus-visible {
-  outline-color: var(--brand-on-dark);
+  outline-color: var(--focus);
 }
 
 .nav-icon {
@@ -189,9 +187,9 @@
   flex-shrink: 0;
 }
 
-.avatar-dark {
+.avatar-dark {   /* 侧边栏里的头像 */
   background: var(--sidebar-3);
-  color: var(--on-dark);
+  color: var(--sidebar-ink);
 }
 
 .side-user {
@@ -203,7 +201,7 @@
 }
 
 .side-user strong {
-  color: var(--on-dark);
+  color: var(--sidebar-ink);
   font-size: var(--fs-13);
   font-weight: 600;
   overflow: hidden;
@@ -230,7 +228,7 @@
 
 .side-logout:hover {
   background: var(--sidebar-2);
-  color: var(--on-dark);
+  color: var(--sidebar-ink);
 }
 
 /* ---------- 学生端：侧边栏一直是窄的图标竖条（图标下面一行小字），把地方让给对话和右栏 ---------- */
@@ -363,14 +361,15 @@
     height: 56px;
     padding: 0 var(--sp-12) 0 var(--sp-4);
     background: var(--sidebar);
-    color: var(--on-dark);
+    color: var(--sidebar-ink);
+    border-bottom: 1px solid var(--sidebar-line);
   }
   .appbar-menu {
-    color: var(--on-dark);
+    color: var(--sidebar-text);
   }
   .appbar-menu:hover {
     background: var(--sidebar-2);
-    color: var(--on-dark);
+    color: var(--sidebar-ink);
   }
   .appbar-title {
     flex: 1;
@@ -379,7 +378,7 @@
   }
 }
 
-/* 深色抽屉（教师端手机导航） */
+/* 侧边栏颜色的抽屉（教师端手机导航） */
 .drawer-dark {
   background: var(--sidebar);
   color: var(--sidebar-text);
@@ -387,7 +386,7 @@
 
 .drawer-dark .drawer-head {
   border-bottom-color: var(--sidebar-line);
-  color: var(--on-dark);
+  color: var(--sidebar-ink);
 }
 
 .drawer-dark .icon-btn {
@@ -396,7 +395,7 @@
 
 .drawer-dark .icon-btn:hover {
   background: var(--sidebar-2);
-  color: var(--on-dark);
+  color: var(--sidebar-ink);
 }
 
 .drawer-dark .side-foot {
@@ -845,7 +844,7 @@
   height: 30px;
   border-radius: 8px;
   background: var(--brand-on-dark);
-  color: var(--sidebar);
+  color: var(--ink-block);
   flex: none;
 }
 
@@ -1159,7 +1158,7 @@
   height: 28px;
   padding: 0 var(--sp-16);
   border-radius: var(--r-pill);
-  background: var(--sidebar);
+  background: var(--ink-block);
   color: var(--on-dark);
   font-size: var(--fs-12);
   font-weight: 600;
@@ -1266,7 +1265,7 @@ button.flow-card:focus-visible {
   height: 26px;
   margin-top: 1px;
   border-radius: 50%;
-  background: var(--sidebar);
+  background: var(--ink-block);
   color: var(--on-dark);
   font-size: var(--fs-13);
   font-weight: 700;
