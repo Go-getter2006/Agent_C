@@ -311,9 +311,15 @@ def assignment_mastery(topics, submissions, states) -> dict:
 
 
 def _student_in_my_classes(s: Session, user: m.User, user_id: str, class_key_filter: str | None = None) -> tuple[m.Student, m.XClass]:
-    wanted = set(split_class_key(class_key_filter)) if class_key_filter else None   # 几个班一起看时是其中任何一个
+    if class_key_filter and len(split_class_key(class_key_filter)) > 1:   # 几个班一起看：在其中任何一个班里就行
+        for one in split_class_key(class_key_filter):
+            try:
+                return _student_in_my_classes(s, user, user_id, one)
+            except HTTPException:
+                continue
+        raise HTTPException(status_code=404, detail="没有这个学生，或者他不在你的班里。")
     for cls in my_classes(s, user):
-        if wanted is not None and class_key(cls.server_id, cls.class_id) not in wanted:
+        if class_key_filter and class_key(cls.server_id, cls.class_id) != class_key_filter:
             continue
         e = s.scalar(select(m.Enrollment.id).where(
             m.Enrollment.user_id == user_id, m.Enrollment.server_id == cls.server_id,
