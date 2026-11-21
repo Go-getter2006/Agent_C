@@ -22,7 +22,12 @@
   --sidebar-label: #6e6355; /* 分组小标题 4.6:1 */
   --sidebar-ink: #1f1d18;   /* 名称、悬停的字 */
   --sidebar-ring: #e1d8c9;  /* 选中项（卡片色）的描边 */
-  --ink-block: #23201b;     /* 深色块：登录页的课程开关滑块和按钮、流程图的标题和序号、复习提醒的图标 */
+  /* 实心按钮和色块（主要按钮、选中的切换按钮、发送、登录页的课程开关、流程图的标题和序号、小题标签）：
+     柔和的课程色，不用黑色。C 语言陶土色，白字 7.4:1 */
+  --solid: #7f4630;
+  --solid-hover: #6b3a27;
+  --solid-disabled: #a3806f;
+  --on-solid: #fffaf3;
   --on-dark-2: #d2cabd;
 
   /* 文字 */
@@ -42,7 +47,7 @@
   /* 品牌和强调：标志、当前位置、少量图标。黄色只用在代码里被指出的那一行 */
   --brand: #b9431a;
   --on-brand: #fffaf3;
-  --brand-on-dark: #f0895a;   /* 深色底（墨色按钮、复习提醒）上的强调色 */
+  --brand-on-dark: #f0895a;   /* 深色底上的强调色 */
   --accent-bg: #fbeadf;
   --accent-line: #f1c9b3;
   --mark: #fff3bf;
@@ -161,7 +166,10 @@
   --sidebar-label: #56637c; /* 4.9:1 */
   --sidebar-ink: #121c31;
   --sidebar-ring: #d3dce8;
-  --ink-block: #13284d;     /* 深蓝块 */
+  --solid: #3a5679;         /* 石板蓝，白字 7.5:1 */
+  --solid-hover: #2e4664;
+  --solid-disabled: #8596ad;
+  --on-solid: #f8fbff;
   --on-dark-2: #c9d5e8;
 
   --ink: #121c31;

@@ -818,8 +818,8 @@
   margin: var(--sp-8) var(--sp-12) var(--sp-12);
   padding: var(--sp-10) var(--sp-12);
   border-radius: var(--r-md);
-  background: var(--ink);
-  color: var(--on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
   text-decoration: none;
   font-size: var(--fs-13);
 }
@@ -843,8 +843,8 @@
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: var(--brand-on-dark);
-  color: var(--ink-block);
+  background: var(--on-solid);
+  color: var(--solid);
   flex: none;
 }
 
@@ -1158,8 +1158,8 @@
   height: 28px;
   padding: 0 var(--sp-16);
   border-radius: var(--r-pill);
-  background: var(--ink-block);
-  color: var(--on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
   font-size: var(--fs-12);
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -1265,8 +1265,8 @@ button.flow-card:focus-visible {
   height: 26px;
   margin-top: 1px;
   border-radius: 50%;
-  background: var(--ink-block);
-  color: var(--on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
   font-size: var(--fs-13);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -1508,9 +1508,13 @@ button.flow-card:focus-visible {
   height: 40px;
   border: 0;
   border-radius: 12px;
-  background: var(--ink);
-  color: var(--on-dark);
+  background: var(--solid);
+  color: var(--on-solid);
   flex-shrink: 0;
+}
+
+.send:hover:not(:disabled) {
+  background: var(--solid-hover);
 }
 
 .send:disabled {
