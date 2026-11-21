@@ -165,6 +165,9 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             k = (sub.server_id, sub.user_id, sub.problem_id)
             attempt_no[k] = attempt_no.get(k, 0) + 1
             attempt_no[(sub.server_id, sub.submission_id)] = attempt_no[k]
+        prediction_metadata = dict(s.execute(select(m.PredictionLog.source_key, m.PredictionLog.provenance).where(
+            m.PredictionLog.user_id.in_(user_ids), m.PredictionLog.ts >= date_from, m.PredictionLog.ts <= date_to,
+            m.PredictionLog.skill_code.like((course or "") + "%"))).all())
         for sub in subs:
             judge = s.scalar(select(m.Judge).where(m.Judge.server_id == sub.server_id,
                                                    m.Judge.submission_id == sub.submission_id, m.Judge.is_latest.is_(True)))
@@ -192,7 +195,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                 samples=("没通过第 " + "、".join(str(x) for x in failed) + " 组") if failed else "",
                 detail=f"第 {n} 次，{JUDGEMENTS.get(sub.judgement, sub.judgement_text)}" + (f"，{cells}" if cells else "")
                 + (f"，标注：{errs}" if errs else ""),
-                data={"attempt": n, "result": sub.judgement, "cells": cells, "failedGroups": failed,
+                data={"attempt": n, **({"predictionRecord": prediction_metadata.get(f"first:{sub.server_id}:{sub.submission_id}")} if n == 1 else {}), "result": sub.judgement, "cells": cells, "failedGroups": failed,
                       "errors": [lab.error_code for lab in labels],
                       **({"source": source, "sourceFetched": bool(source)} if include_code else {})})
 
@@ -348,7 +351,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                 problem_id=e.step.problem_id, problem=_problem_title(s, titles, e.step.server_id, e.step.problem_id),
                 submission_id=e.next_sub.submission_id if e.next_sub else None,
                 detail=f"{helpeffect.LEVEL_NAMES.get(e.level, e.level)}，{outcome}"
-                       + ("" if e.error_gone is None else ("，讨论的错误没了" if e.error_gone else "，讨论的错误还在")),
+                       + ("" if e.error_gone is None else ("，未再识别到原错误" if e.error_gone else "，讨论的错误还在")),
                 data=helpeffect.export_row(e))
 
     if "decision" in kinds:

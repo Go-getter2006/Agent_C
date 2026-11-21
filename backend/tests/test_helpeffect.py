@@ -45,12 +45,12 @@ def test_last_help_before_each_resubmission(database):
         h2 = eps[(PID, "H2")]
         assert (h2.error_gone, h2.tries_to_pass) == (True, 2)
         h3 = eps[(PID, "H3")]
-        assert (h3.next_pass, h3.error_gone, h3.tries_to_pass) == (True, True, 1)
+        assert (h3.next_pass, h3.error_gone, h3.tries_to_pass) == (True, None, 1)
         silent = eps[(702, "H0")]
         assert (silent.next_sub, silent.next_pass, silent.passed) == (None, None, False)
         rows = {r["level"]: r for r in helpeffect.summarize(list(eps.values()))}
         assert rows["all"]["n"] == 4 and rows["all"]["resubmitted"] == {"n": 3, "d": 4}
-        assert rows["all"]["nextPass"] == {"n": 1, "d": 3} and rows["all"]["errorGone"] == {"n": 2, "d": 3}
+        assert rows["all"]["nextPass"] == {"n": 1, "d": 3} and rows["all"]["errorGone"] == {"n": 1, "d": 2}
         assert rows["H0"]["resubmitted"] == {"n": 0, "d": 1} and rows["H0"]["nextPass"] is None and rows["all"]["medianTries"] == 2.0
         row = helpeffect.export_row(h1)
         assert row["version"] == helpeffect.VERSION and row["helpsBefore"] == 1 and row["nextSubmission"] == 101
@@ -69,3 +69,19 @@ def test_unknown_when_not_judged_or_not_labeled(database):
         assert (b.next_pass, b.error_gone, b.minutes) == (None, None, 3.0)
         assert helpeffect.episodes(s, [UID], "D") == []                       # 按课程分开
         assert helpeffect.episodes(s, [UID], "C", problems={(SID, 999)}) == []  # 只看班上布置的题
+
+
+def test_low_confidence_other_and_missing_error_are_unknown(database):
+    with db.session_scope() as s:
+        for i in range(4):
+            _step(s, 2 * i, "H1", error="" if i == 2 else "LP01")
+            _sub(s, 300+i, 2*i+1, "WA", None)
+            s.add(m.SubmissionLabel(server_id=SID, submission_id=300+i, role="primary", is_current=True,
+                                    skill_code="C05.02.01", confidence=0.3 if i == 0 else 0.9,
+                                    error_code="OT99" if i == 1 else "IO02"))
+    with db.session_scope() as s:
+        eps = helpeffect.episodes(s, [UID], "C")
+        assert [e.next_status for e in eps] == ["unknown", "unknown", "unknown", "absent"]
+        row = helpeffect.summarize(eps)[-1]
+        assert row["nextStatus"]["unknown"] == {"n": 3, "d": 4}
+        assert sum(x["n"] for x in row["nextStatus"].values()) == 4

@@ -819,6 +819,7 @@ class PredictionLog(Base):
     features: Mapped[dict] = mapped_column(JSON, default=dict)
     model_version: Mapped[str] = mapped_column(String(24), default="")
     # 掌握分（档位就按它定）：这一周学到的参数算的，和经验值参数算的，同时记下来比谁准（app/learn.py）
+    provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # 当时可用的版本、首交条件和回算时间
     p_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     p_score_fixed: Mapped[float | None] = mapped_column(Float, nullable=True)
     params_version: Mapped[str] = mapped_column(String(24), default="")
@@ -887,6 +888,14 @@ class AgentReview(Base):
     source: Mapped[str] = mapped_column(String(8), default="rule")         # llm / rule
     requested_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[Dt] = _ts()
+
+
+class FusionWeightsHistory(Base):
+    __tablename__ = "fusion_weights_history"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    course: Mapped[str] = mapped_column(String(8), index=True)
+    fitted_at: Mapped[Dt] = _ts()
+    weights: Mapped[dict] = mapped_column(JSON)
 
 
 class ModelWeights(Base):

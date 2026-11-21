@@ -47,7 +47,7 @@ def test_research_and_data_only_for_developer(client, demo):
     """老师只有“班级”一块；研究（模型检验、理解评估、求助效果）和数据（日志申请、数据源）只给开发者账号。"""
     key = f"c{demo['server_id']}-31"
     research = [f"/api/teacher/classes/{key}/graph", f"/api/teacher/classes/{key}/rating",
-                f"/api/teacher/classes/{key}/help", "/api/teacher/logs", "/api/teacher/sources"]
+                f"/api/teacher/classes/{key}/help", f"/api/teacher/classes/{key}/exam-replay?exam=2026-11-20T16:00:00Z", "/api/teacher/logs", "/api/teacher/sources"]
     login(client, "demo-teacher")
     for path in research:
         assert client.get(path).status_code == 403, path
@@ -157,7 +157,7 @@ def test_stuck_list_and_graph_page(client, demo):
     assert help_["totals"]["stuck"] >= 1 and {"version", "students", "constructive", "answerSeeking"} == set(help_["dialogue"])
     # 每次帮助之后（app/helpeffect.py）：按帮助级别，最后一行是全部，比例都有分子分母
     nxt = help_["helpNext"]
-    assert nxt["version"] == "help-next-1" and nxt["rows"] and nxt["rows"][-1]["level"] == "all"
+    assert nxt["version"] == "help-next-2" and nxt["rows"] and nxt["rows"][-1]["level"] == "all"
     assert all(set(r) >= {"n", "resubmitted", "nextPass", "errorGone", "passed", "medianMinutes", "medianTries"}
                for r in nxt["rows"])
     # 上课用：谁卡在这里，在知识图谱的知识点详情里
@@ -470,7 +470,7 @@ def test_research_export_keeps_student_ids(client, demo):
     quiz = next(r for r in js["rows"] if r["kind"] in ("小题", "复习"))["data"]
     assert {"protocol", "judgedHasBug", "firstLines", "locateHit", "firstFixPass", "firstFixClean", "hints",
             "sampleRuns", "events"} <= set(quiz)
-    assert js["request"]["versions"]["stuck"] == "stuck-kp-1" and js["request"]["versions"]["helpNext"] == "help-next-1"
+    assert js["request"]["versions"]["stuck"] == "stuck-kp-1" and js["request"]["versions"]["helpNext"] == "help-next-2"
     helped = next(r for r in js["rows"] if r["kind"].startswith("帮助之后"))["data"]
     assert {"level", "helpsBefore", "nextSubmission", "minutes", "nextPass", "errorGone", "passed", "triesToPass"} <= set(helped)
     again = client.post("/api/teacher/logs", json={**body, "format": "csv"}).json()["request"]
@@ -776,3 +776,18 @@ def test_correlation_has_interval_and_no_minimum():
     xs = list(range(40))
     many = correlation(xs, [x + 10 * (x % 4) for x in xs])
     assert many["r"] == 0.75 and 0 < many["low"] < many["r"] < many["high"] < 1 and many["p"] < 0.001
+
+
+def test_exam_report_requires_developer_and_explicit_time(client, demo):
+    path = f"/api/teacher/classes/c{demo['server_id']}-31/exam-replay"
+    login(client, UID)
+    assert client.get(path, params={"exam": "2026-10-01T00:00:00Z"}).status_code == 403
+    client.post("/api/auth/logout")
+    dev(client)
+    assert client.get(path).status_code == 422
+    assert client.get(path, params={"exam": "2026-10-01T08:00"}).status_code == 422
+    resp = client.get(path, params={"exam": "2001-01-01T08:00:00+08:00"})
+    assert resp.status_code == 200 and "no-store" in resp.headers["cache-control"]
+    data = resp.json()
+    assert data["pairedOpportunities"] == 0 and not data["rows"]
+    assert data["students"] == len(data["noEvidenceStudents"]) > 0

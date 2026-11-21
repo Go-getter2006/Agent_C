@@ -20,7 +20,8 @@ from sqlalchemy.orm import Session
 
 from . import config, db, mastery
 from . import models as m
-from .labeling.labeler import current_problem_label
+from .labeling.labeler import current_problem_label, problem_label_at
+from .research import HelpHistory
 from .taxonomy.prereq import PREREQ_EDGES, children_of, parents_of
 
 _PARENTS = parents_of()
@@ -96,7 +97,7 @@ def infer(evidence: dict[str, tuple[float, float]], rng: random.Random | None = 
 
 def evidence_of(s: Session, user_id: str, at: dt.datetime | None = None) -> dict[str, tuple[float, float]]:
     """采用 v2 的作答证据权重，包括失败和通过可信度，排除对话的智能体估分。"""
-    states = mastery.skill_states(s, user_id, at=at, model="v2", include_agent=False)
+    states = mastery.skill_states(s, user_id, at=at, model="v2", include_agent=False, replay=at is not None)
     return {code: (st.s, st.f) for code, st in states.items() if st.s + st.f > 0}
 
 
@@ -138,6 +139,8 @@ def log_predictions(s: Session, user_id: str) -> int:
     subs = s.scalars(select(m.Submission).where(m.Submission.user_id == user_id)
                      .order_by(m.Submission.submission_id)).all()
     seen: set[tuple[int, int]] = set()
+
+    help_by_server = {}
     n = 0
     for sub in subs:
         key = (sub.server_id, sub.problem_id)
@@ -149,12 +152,32 @@ def log_predictions(s: Session, user_id: str) -> int:
         source_key = f"first:{sub.server_id}:{sub.submission_id}"
         if source_key in done:
             continue
-        label = current_problem_label(s, sub.server_id, sub.problem_id)
+        before = sub.submit_time - dt.timedelta(microseconds=1)
+        historical_label = problem_label_at(s, sub.server_id, sub.problem_id, before)
+        label = historical_label or current_problem_label(s, sub.server_id, sub.problem_id)
         if label is None:
             continue
-        before = sub.submit_time - dt.timedelta(seconds=1)
+        course = label.primary_skill[0]
+        param = mastery.params_as_of(s, course, before)
+        fusion = s.scalar(select(m.FusionWeightsHistory).where(
+            m.FusionWeightsHistory.course == course, m.FusionWeightsHistory.fitted_at <= before)
+            .order_by(m.FusionWeightsHistory.fitted_at.desc(), m.FusionWeightsHistory.id.desc()).limit(1))
+        if sub.server_id not in help_by_server:
+            help_by_server[sub.server_id] = HelpHistory(s, [user_id], sub.server_id, course, db.now())
+        help_context = help_by_server[sub.server_id].before(user_id, sub.problem_id, sub.submit_time)
+        fingerprint = s.get(m.CodeFingerprint, (sub.server_id, sub.submission_id))
+        checked = fingerprint is not None and fingerprint.tokens >= config.MASTERY_V2["copy_min_tokens"]
+        provenance = {"mode": "retrospective", "computedAt": db.now().isoformat(), "cutoff": sub.submit_time.isoformat(),
+                      **help_context,
+                      "suspicious": fingerprint.suspicious if checked else None,
+                      "labelVersion": historical_label.version if historical_label else None,
+                      "labelFallback": historical_label is None, "paramsVersion": param.version,
+                      "fusionWeightsAt": fusion.fitted_at.isoformat() if fusion else None,
+                      "historicalLimits": ["skill_evidence_reweighted", "cross_edges_not_versioned", "retention_unavailable"],
+                      "fusionSource": "archive" if fusion else "default-unverified"}
+
         simple = mastery.skill_states(s, user_id, at=before, model="v1").get(label.primary_skill)
-        v2 = mastery.skill_states(s, user_id, at=before, model="v2", with_predicted=True).get(label.primary_skill)
+        v2 = mastery.skill_states(s, user_id, at=before, model="v2", with_predicted=True, replay=True).get(label.primary_skill)
         evidence = evidence_of(s, user_id, at=before)
         evidence.setdefault(label.primary_skill, (0.0, 0.0))
         graph = infer(evidence)
@@ -162,10 +185,11 @@ def log_predictions(s: Session, user_id: str) -> int:
         graph_pass = guess + (1.0 - slip - guess) * graph[label.primary_skill]
         from . import profile
 
-        feats, fused, v2_base = profile.prediction_snapshot(s, user_id, label.primary_skill, before)
+        feats, fused, v2_base = profile.prediction_snapshot(
+            s, user_id, label.primary_skill, before, weights=fusion.weights if fusion else config.PROFILE["default_weights"])
         # 掌握分：这一周学到的参数，和经验值参数（app/learn.py），同时记下来比谁准
         fixed = mastery.skill_states(s, user_id, at=before, model="v2", params=mastery.PRIOR,
-                                     graph_prior=False).get(label.primary_skill)
+                                     graph_prior=False, replay=True).get(label.primary_skill)
         learned = v2 if v2 is not None and not v2.predicted else None
         s.add(m.PredictionLog(
             user_id=user_id, skill_code=label.primary_skill, source_key=source_key, ts=sub.submit_time,
@@ -175,7 +199,7 @@ def log_predictions(s: Session, user_id: str) -> int:
             p_fused=round(fused, 4) if fused is not None else None, p_v2_base=round(v2_base, 4), features=feats,
             model_version=config.GRAPH_VERSION,
             p_score=round(learned.score if learned else 0.5, 4), p_score_fixed=round(fixed.score if fixed else 0.5, 4),
-            params_version=(learned.params_version if learned else mastery.active_params(s, label.primary_skill[0]).version)))
+            params_version=param.version, provenance=provenance))
         n += 1
     return n
 
@@ -286,6 +310,10 @@ def prediction_overview(s: Session, user_ids: list[str], course: str, weeks: int
     ]
     return {
         "total": len(rows),
+        "replayCoverage": {"legacy": sum(r.provenance is None for r in rows),
+                           "noHistoricalLabel": sum(bool((r.provenance or {}).get("labelFallback")) for r in rows),
+                           "noArchivedWeights": sum((r.provenance or {}).get("fusionSource") == "default-unverified"
+                                                    for r in rows)},
         "weekly": _weekly_accuracy(current, now, weeks),
         "predictionHistory": history,
         "fusionWeekly": _weekly_accuracy(rows, now, weeks),

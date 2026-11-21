@@ -36,7 +36,7 @@ interface KpDetail {
   // 小题首次独立作答的判断、定位、修改（全班、每个学生）；颜色仍表示原来的掌握档位
   diagnosis: { judge: Ratio; locate: Ratio; edit: Ratio; shown: number; why: Why } | null;
   studentDims: Record<string, { judge: Ratio; locate: Ratio; edit: Ratio; shown: number; why: Why }>;
-  students: { userId: string; name: string; level: string; p: number | null; score: number | null; predicted: boolean; text: string }[];
+  students: { userId: string; name: string; distinctProblems: number | null; level: string; p: number | null; score: number | null; predicted: boolean; text: string }[];
   errors: { code: string; name: string; count: number }[];
   problems: { problemId: number; title: string; brief: string; primary: boolean }[];
   prereqs: { code: string; name: string; course: string; cross: boolean }[];
@@ -146,6 +146,7 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                       <div className="kg-people-top">
                         <Link to={`/teacher/students/${w.userId}`} className="link">{w.name}</Link>
                         <span className={`lvpill ${levelClass(w.level)}`}><i />{w.predicted ? "推算" : w.level}</span>
+                        {w.distinctProblems != null && <span className="note num">{w.distinctProblems} 道题</span>}
                         {w.score !== null ? <ScoreBadge score={w.score} /> : w.p !== null && <span className="note num">{w.p.toFixed(2)}</span>}
                       </div>
                       {w.text && <p className="kg-people-text">{w.text}</p>}

@@ -74,6 +74,19 @@ PRIOR = Params()
 _ACTIVE: dict[str, tuple[float, Params]] = {}
 
 
+def params_as_of(s: Session, course: str, at: dt.datetime) -> Params:
+    row = s.scalar(select(m.MasteryParams).where(m.MasteryParams.course == course, m.MasteryParams.fitted_at <= at)
+                   .order_by(m.MasteryParams.fitted_at.desc(), m.MasteryParams.id.desc()).limit(1))
+    return _params_from(row)
+
+
+def _params_from(row: m.MasteryParams | None) -> Params:
+    if row is None:
+        return PRIOR
+    values = row.params or {}
+    return Params(row.version, dict(values.get("scales", {})), float(values.get("h0", 0)), float(values.get("g", 0)))
+
+
 def active_params(s: Session, course: str) -> Params:
     """这门课这一周用的参数（mastery_params 里最新的一版），没有就用经验值。进程里缓存 5 分钟。"""
     import time
@@ -83,8 +96,7 @@ def active_params(s: Session, course: str) -> Params:
         return hit[1]
     row = s.scalars(select(m.MasteryParams).where(m.MasteryParams.course == course)
                     .order_by(m.MasteryParams.fitted_at.desc(), m.MasteryParams.id.desc()).limit(1)).first()
-    prm = PRIOR if row is None else Params(row.version, dict((row.params or {}).get("scales", {})),
-                                            float((row.params or {}).get("h0", 0.0)), float((row.params or {}).get("g", 0.0)))
+    prm = _params_from(row)
     _ACTIVE[course] = (time.monotonic(), prm)
     return prm
 
@@ -203,7 +215,7 @@ def _rows(s: Session, user_id: str, at: dt.datetime) -> list[m.SkillEvidence]:
 
 def skill_states(s: Session, user_id: str, at: dt.datetime | None = None, decay: bool = True,
                  model: str | None = None, with_predicted: bool = False, include_agent: bool = True,
-                 params: Params | None = None, graph_prior: bool = True) -> dict[str, SkillState]:
+                 params: Params | None = None, graph_prior: bool = True, *, replay: bool = False) -> dict[str, SkillState]:
     """每个有证据的技能的状态。model 不填就用 config.MASTERY_MODEL。
 
     with_predicted（只对 v2）：把没有证据、但能由先修推出来的技能也带上（predicted=True），用于数据结构准备度。
@@ -217,7 +229,7 @@ def skill_states(s: Session, user_id: str, at: dt.datetime | None = None, decay:
     if memo is not None and key in memo:
         return memo[key]
     if model == "v2":
-        out = _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted, include_agent, params, graph_prior)
+        out = _skill_states_v2(s, user_id, at or db.now(), decay, with_predicted, include_agent, params, graph_prior, replay)
     else:
         out = _skill_states_v1(s, user_id, at or db.now(), decay)
     if memo is not None:
@@ -327,7 +339,7 @@ def apply_params(st: SkillState, params: Params, decay: bool = True) -> None:
             st.f += w
 
 
-def attempt_history(s: Session, user_id: str, at: dt.datetime) -> dict[tuple[int, int], list[tuple[int, str, str | None]]]:
+def attempt_history(s: Session, user_id: str, at: dt.datetime, *, historical: bool = False) -> dict[tuple[int, int], list[tuple[int, str, str | None]]]:
     """这个学生到 at 为止每道题的提交：(服务器, 题号) → [(提交编号, 评测结果, 这次标出的主错误的技能)]，按编号排。"""
     rows = s.execute(select(m.Submission.server_id, m.Submission.problem_id, m.Submission.submission_id,
                             m.Submission.judgement)
@@ -335,13 +347,19 @@ def attempt_history(s: Session, user_id: str, at: dt.datetime) -> dict[tuple[int
                      .order_by(m.Submission.submission_id)).all()
     skills: dict[tuple[int, int], str] = {}
     if rows:
-        for server_id, submission_id, skill in s.execute(
-                select(m.SubmissionLabel.server_id, m.SubmissionLabel.submission_id, m.SubmissionLabel.skill_code)
+        for server_id, submission_id, skill, confidence in s.execute(
+                select(m.SubmissionLabel.server_id, m.SubmissionLabel.submission_id, m.SubmissionLabel.skill_code,
+                       m.SubmissionLabel.confidence)
                 .join(m.Submission, (m.Submission.server_id == m.SubmissionLabel.server_id)
                       & (m.Submission.submission_id == m.SubmissionLabel.submission_id))
-                .where(m.Submission.user_id == user_id, m.SubmissionLabel.is_current.is_(True),
-                       m.SubmissionLabel.role == "primary", m.SubmissionLabel.confidence >= 0.5)).all():
-            skills[(int(server_id), int(submission_id))] = skill
+                .where(m.Submission.user_id == user_id, m.Submission.submit_time <= at,
+                       m.SubmissionLabel.created_at <= at if historical else m.SubmissionLabel.is_current.is_(True),
+                       m.SubmissionLabel.role == "primary").order_by(m.SubmissionLabel.created_at, m.SubmissionLabel.id)):
+            key = (int(server_id), int(submission_id))
+            if confidence >= 0.5:
+                skills[key] = skill
+            else:
+                skills.pop(key, None)
     out: dict[tuple[int, int], list[tuple[int, str, str | None]]] = {}
     for server_id, problem_id, submission_id, judgement in rows:
         out.setdefault((int(server_id), int(problem_id)), []).append(
@@ -374,7 +392,7 @@ def resolved_by(row: m.SkillEvidence, history: dict[tuple[int, int], list[tuple[
 
 def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
                      with_predicted: bool, include_agent: bool = True, params: Params | None = None,
-                     graph_prior: bool = True) -> dict[str, SkillState]:
+                     graph_prior: bool = True, historical: bool = False) -> dict[str, SkillState]:
     from .cross import weighted_parents
 
     cfg = config.MASTERY_V2
@@ -385,9 +403,9 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
             return params
         c = course_of(code)
         if c not in by_course:
-            by_course[c] = active_params(s, c)
+            by_course[c] = params_as_of(s, c, at) if historical else active_params(s, c)
         return by_course[c]
-    history = attempt_history(s, user_id, at)
+    history = attempt_history(s, user_id, at, historical=historical)
     by_skill: dict[str, list[m.SkillEvidence]] = {}
     for r in _rows(s, user_id, at):
         if r.event_type in AGENT_EVENTS and not include_agent:

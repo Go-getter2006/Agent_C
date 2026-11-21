@@ -32,7 +32,7 @@ from ..xdoj import api as sync_api
 from ..xdoj import store
 from ..xdoj.client import SessionError, XdojClient, XdojError, limiter_for
 from .auth import record_failure, set_login_cookie, throttle
-from .. import misconceptions
+from .. import misconceptions, research
 from . import cache
 from .deps import admin, get_session, teacher
 
@@ -1108,6 +1108,7 @@ def graph(key: str, user: m.User = Depends(admin), s: Session = Depends(get_sess
         "edges": edges,
         "weekly": comparisons["weekly"],
         "predictionHistory": comparisons["predictionHistory"],
+        "replayCoverage": comparisons["replayCoverage"],
         "fusionWeekly": comparisons["fusionWeekly"],
         "fusion": _fusion_view(s, course),
         "masteryParams": _params_view(s, course),
@@ -1371,6 +1372,7 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
                "p": round(st.p, 2) if st else None, "score": score(st.score) if st and not st.predicted else None,
                "predicted": bool(st and st.predicted),
                # 数据结构的班看 C 语言的知识点：只有档位和估计，不说答题记录
+               "distinctProblems": None if other else recs.get(p.user_id, {}).get(kp, kpdesc.Record()).problems,
                "text": "" if other else kpdesc.describe(recs.get(p.user_id, {}).get(kp), teacher=True)}
         everyone.append(row)
         if st is not None and (st.level == "待加强" or (st.predicted and st.p < 0.45)):
@@ -1444,6 +1446,17 @@ def cross_page(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
             "dKps": [{"code": c, "name": KNOWLEDGE_POINTS.get(c, "")} for c in d_kps]}
 
 
+@router.get("/classes/{key}/exam-replay")
+def exam_replay(key: str, exam: dt.datetime, response: Response, user: m.User = Depends(admin),
+                s: Session = Depends(get_session)) -> dict:
+    if exam.tzinfo is None:
+        raise HTTPException(status_code=422, detail="考试时间需要包含时区。")
+    cls = _class(s, user, key)
+    response.headers["Cache-Control"] = "private, no-store"
+    report = research.exam_report(s, class_students(s, cls), cls.server_id, _course_of_class(s, cls), exam, db.now())
+    return {**report, "classes": split_class_key(key), "versions": logs.versions()}
+
+
 # ------------------------------------------------------------ 研究 · 理解评估
 @router.get("/classes/{key}/rating")
 def understanding_check(key: str, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
@@ -1452,7 +1465,7 @@ def understanding_check(key: str, user: m.User = Depends(admin), s: Session = De
     ids = [st.user_id for st in class_students(s, cls)]
     rows = list(s.scalars(select(m.AgentAssessment).where(
         m.AgentAssessment.user_id.in_(ids or ["-"]), m.AgentAssessment.course == _course_of_class(s, cls))).all())
-    return {"summary": assess.overview(s, rows)}
+    return {"summary": assess.overview(s, rows), **diagnosis.research_flow(s, ids, _course_of_class(s, cls))}
 
 
 class ReviewLinkBody(BaseModel):

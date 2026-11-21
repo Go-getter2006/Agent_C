@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from bisect import bisect_right
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -58,6 +59,7 @@ class Dims:
     held: Ratio = field(default_factory=Ratio)         # 追问后坚持（本来正确的代码）
     turned: Ratio = field(default_factory=Ratio)       # 追问后改判（有错的代码）
     missed: int = 0          # 有错的代码判断成没问题（没进入定位）
+    shown_bug: int = 0       # 支持独立作答的真实错题机会
     shown: int = 0           # 应答机会
     locate_entered: int = 0
     edit_entered: int = 0
@@ -88,6 +90,8 @@ def count(pairs) -> dict[str, Dims]:
         if not (viewed or a.skipped or a.judged_has_bug is not None or a.confidence):
             continue
         d.shown += 1
+        if a.protocol >= 2 and item.has_bug:
+            d.shown_bug += 1
         if a.skipped:
             d.skipped += 1
         if a.state != "done":
@@ -278,3 +282,51 @@ def summary(d: Dims | None) -> dict:
     return {"judge": d.judge.view(), "locate": d.locate.view(), "edit": d.edit.view(), "shown": d.shown,
             "judgeBug": d.judge_bug.view(), "judgeOk": d.judge_ok.view(), "editClean": d.edit_clean.view(),
             "why": why_empty(d)}
+
+
+def research_flow(s: Session, ids: list[str], course: str) -> dict:
+    """测量单位为作答机会。同一学生可能多次随机分组。"""
+    pairs = _attempts(s, ids, course)
+    totals = list(count(pairs).values())
+    flow = {"shownBug": sum(d.shown_bug for d in totals), "judged": sum(d.locate_entered for d in totals),
+            "located": sum(d.locate.n for d in totals), "locatedAttempts": sum(d.locate.d for d in totals),
+            "fixed": sum(d.edit.n for d in totals), "drafts": sum(d.edit.d for d in totals)}
+    by_id = {a.id: a for a, _ in pairs}
+    exposures = {}
+    for a, _ in pairs:
+        times = [e.get("t") for e in a.events or [] if e.get("kind") in ("viewed", "judge", "skip") and e.get("t")]
+        if times:
+            exposures.setdefault((a.user_id, a.skill_code), []).append((min(dt.datetime.fromisoformat(t) for t in times), a))
+    first_exposures = {}
+    for key, entries in exposures.items():
+        seen = set()
+        for t, a in sorted(entries, key=lambda x: (x[0], x[1].id)):
+            if a.item_id not in seen:
+                first_exposures.setdefault(key, []).append((t, a))
+                seen.add(a.item_id)
+    exposure_times = {k: [t for t, _ in rows] for k, rows in first_exposures.items()}
+    groups = {arm: {"assigned": 0, "shownNext": 0, "answered": 0, "correct": 0, "students": set()}
+              for arm in ("challenge", "none")}
+    for decision in s.scalars(select(m.DecisionLog).where(m.DecisionLog.user_id.in_(ids),
+                              m.DecisionLog.course == course, m.DecisionLog.kind == "challenge",
+                              m.DecisionLog.rule == "challenge-random-1")):
+        a = by_id.get((decision.ref or {}).get("attempt"))
+        if decision.chosen not in groups:
+            continue
+        g = groups[decision.chosen]
+        g["assigned"] += 1
+        g["students"].add(decision.user_id)
+        if a is None:
+            continue
+        key = (a.user_id, a.skill_code)
+        entries = first_exposures.get(key, [])
+        pos = bisect_right(exposure_times.get(key, []), decision.ts)
+        if pos < len(entries) and entries[pos][1].item_id == a.item_id:
+            pos += 1
+        nxt = entries[pos][1] if pos < len(entries) else None
+        if nxt is not None:
+            g["shownNext"] += 1
+            if nxt.judge_correct is not None:
+                g["answered"] += 1
+                g["correct"] += int(nxt.judge_correct)
+    return {"flow": flow, "arms": {arm: {**g, "students": len(g["students"])} for arm, g in groups.items()}}

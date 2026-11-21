@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from . import db
 from . import models as m
-from .labeling.labeler import current_problem_label
+from .labeling.labeler import current_problem_label, problem_label_at
 
 RAPID_SECONDS = 60       # 两次没通过的提交隔不到这么久：算“急着重交”
 STUCK_FAILS = 3          # 交了这么多次还没过，算卡住
@@ -79,9 +79,11 @@ def episode_for(s: Session, user_id: str, server_id: int, problem_id: int,
 
 
 def episodes(s: Session, user_id: str, at: dt.datetime | None = None,
-             server_ids: set[int] | None = None) -> list[Episode]:
+             server_ids: set[int] | None = None, *, historical: bool = False) -> list[Episode]:
     at = at or db.now()
     q = select(m.Submission).where(m.Submission.user_id == user_id, m.Submission.judgement != "PENDING")
+    if historical:
+        q = q.where(m.Submission.submit_time <= at, m.Submission.fetched_at <= at)
     subs = [x for x in s.scalars(q.order_by(m.Submission.submission_id)).all()
             if (x.submit_time is None or x.submit_time <= at) and (server_ids is None or x.server_id in server_ids)]
     groups: dict[tuple[int, int], list[m.Submission]] = {}
@@ -92,8 +94,11 @@ def episodes(s: Session, user_id: str, at: dt.datetime | None = None,
     if failed_keys:
         for lab in s.scalars(select(m.SubmissionLabel).where(
                 m.SubmissionLabel.submission_id.in_([k[1] for k in failed_keys]),
-                m.SubmissionLabel.is_current.is_(True), m.SubmissionLabel.role == "primary")).all():
-            if lab.confidence >= 0.5:
+                m.SubmissionLabel.created_at <= at if historical else m.SubmissionLabel.is_current.is_(True),
+                m.SubmissionLabel.role == "primary").order_by(m.SubmissionLabel.created_at, m.SubmissionLabel.id)):
+            if lab.confidence < 0.5:
+                labels.pop((lab.server_id, lab.submission_id), None)
+            else:
                 labels[(lab.server_id, lab.submission_id)] = lab
     out = []
     for (server_id, problem_id), rows in groups.items():
@@ -104,7 +109,7 @@ def episodes(s: Session, user_id: str, at: dt.datetime | None = None,
             if x.judgement == "AC":
                 passed = x
                 break
-        label = current_problem_label(s, server_id, problem_id)
+        label = problem_label_at(s, server_id, problem_id, at) if historical else current_problem_label(s, server_id, problem_id)
         ep = Episode(server_id, problem_id, upto, passed, now=at,
                      problem_skills=([label.primary_skill, *(label.secondary_skills or [])] if label else []))
         for x in upto:

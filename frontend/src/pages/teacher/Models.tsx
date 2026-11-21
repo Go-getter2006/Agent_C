@@ -1,6 +1,7 @@
 // 研究 · 模型检验：掌握程度算法 v1、v2、图模型（试验中）和多维融合在同一批预测上谁更准；v2 去掉智能体评估的消融；
 // 融合权重、可复查的先修技能、两种估计的分歧、前置关系的描述统计。
 // 智能体评估的一致率在“理解评估”，对话行为和表现在“求助效果”。
+import ExamReplay from "./ExamReplay";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { FlaskConical } from "lucide-react";
@@ -26,6 +27,7 @@ interface GraphData {
     nFused: number; fusedBrier: number | null; v2BaseBrier: number | null; v2SameBrier: number | null;
     nScore?: number; scoreBrier?: number | null; scoreFixedBrier?: number | null;
   }[];
+  replayCoverage?: { legacy: number; noHistoricalLabel: number; noArchivedWeights: number };
   predictionHistory?: { version: string; weekly: GraphData["weekly"]; legacyGraph: boolean }[];
   fusionWeekly?: GraphData["weekly"];
   fusion: { learned: boolean; n: number; minSamples: number; updatedAt: string | null; weights: { dim: string; name: string; w: number; default: number }[] };
@@ -260,6 +262,8 @@ export default function Models({ cls }: { cls: ClassInfo }) {
       <MasteryParams d={d} />
 
       <h2 className="sec-head">多维融合<span>每个维度的权重按数据学，每天夜里更新</span></h2>
+      {d.replayCoverage && <p className="note">夜间预测按历史记录回算。{d.replayCoverage.legacy} 条旧记录缺少版本追踪，{d.replayCoverage.noHistoricalLabel} 条缺当时的题目标注，{d.replayCoverage.noArchivedWeights} 条缺当时的融合权重；后两项可重叠。</p>}
+      <ExamReplay key={cls.key} classKey={cls.key} />
       <FusionStats d={d} />
       <div className="sec-narrow">
         <FusionWeights d={d} />

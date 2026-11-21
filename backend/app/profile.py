@@ -96,22 +96,24 @@ class Sources:
 
     def __init__(self, s: Session, user_id: str, at: dt.datetime | None = None, with_graph: bool = True):
         self.s, self.user_id, self.at = s, user_id, at or db.now()
-        self.states = mastery.skill_states(s, user_id, at=at, model="v2", with_predicted=True)   # at 为空：现在
+        self.states = mastery.skill_states(s, user_id, at=at, model="v2", with_predicted=True, replay=not with_graph)   # at 为空：现在
         self.evidence = [r for r in s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.user_id == user_id)).all()
                          if r.ts <= self.at]
         self.assessments = [a for a in s.scalars(select(m.AgentAssessment).where(
             m.AgentAssessment.user_id == user_id, m.AgentAssessment.level.is_not(None))).all() if a.created_at <= self.at]
-        self.reviews = list(s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)).all())
+        # 夜间回放时不能把今天的复习状态用于过去的预测，旧状态没有逐版留存。
+        self.reviews = (list(s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == user_id)))
+                        if with_graph else [])
         self.quizzes = [q for q in s.scalars(select(m.QuizAttempt).where(
             m.QuizAttempt.user_id == user_id, m.QuizAttempt.state == "done", m.QuizAttempt.skipped.is_(False),
-            m.QuizAttempt.confidence != "")).all() if q.correct is not None and q.created_at <= self.at]
+            m.QuizAttempt.confidence != "")).all() if q.correct is not None and q.finished_at is not None and q.finished_at <= self.at]
         self.graph = {r.skill_code: r.p for r in s.scalars(select(m.GraphPosterior).where(
             m.GraphPosterior.user_id == user_id, m.GraphPosterior.model_version == config.GRAPH_VERSION)).all()} if with_graph else {}
         from .cross import weighted_parents
         from .process import episodes
 
         self.parents, _ = weighted_parents(s)   # 数据结构的技能带上采用的跨课程联系（按类型和数据检验加权）
-        self.episodes = [e for e in episodes(s, user_id, self.at) if e.score is not None]   # OJ 上的改错过程
+        self.episodes = [e for e in episodes(s, user_id, self.at, historical=not with_graph) if e.score is not None]   # OJ 上的改错过程
 
 
 def _understanding(src: Sources, skill: str) -> tuple[float | None, int]:
@@ -288,20 +290,21 @@ def refit(s: Session) -> dict[str, dict]:
             row = m.ModelWeights(course=course)
             s.add(row)
         row.weights, row.n, row.brier, row.learned, row.updated_at = w, len(samples), brier, learned, db.now()
+        s.add(m.FusionWeightsHistory(course=course, fitted_at=row.updated_at, weights=w))
         out[course] = {"weights": w, "n": len(samples), "learned": learned, "brier": brier}
     return out
 
 
-def prediction_snapshot(s: Session, user_id: str, skill: str, at: dt.datetime) -> tuple[dict, float | None, float]:
+def prediction_snapshot(s: Session, user_id: str, skill: str, at: dt.datetime, *, weights: dict) -> tuple[dict, float | None, float]:
     """预测记录用：那一刻这个技能的各维度特征、融合的预测、v2 去掉智能体评估的预测。"""
     src = Sources(s, user_id, at, with_graph=False)
     d = skill_dims(src, skill)
     if d.perf is None:   # 新技能：做题维度用先修推出来的准备度
         st = src.states.get(skill)
         d.perf = st.p if st is not None else 0.5
-    base = mastery.skill_states(s, user_id, at=at, model="v2", with_predicted=True, include_agent=False).get(skill)
+    base = mastery.skill_states(s, user_id, at=at, model="v2", with_predicted=True, include_agent=False, replay=True).get(skill)
     feats = features(d)
-    return feats, fuse(d, weights_for(s, course_of(skill))), (base.p if base is not None else 0.5)
+    return feats, fuse(d, weights), (base.p if base is not None else 0.5)
 
 
 # ------------------------------------------------------------ 画像

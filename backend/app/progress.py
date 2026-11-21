@@ -82,6 +82,13 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
             kps.setdefault(kp, []).append(key)
     course = snap.course
     groups: dict[str, list[dict]] = {}
+    latest_practice = {}
+    quizzes = snap.s.scalars(select(m.QuizAttempt).where(
+        m.QuizAttempt.user_id == snap.user_id, m.QuizAttempt.skill_code.like(course + "%"),
+        m.QuizAttempt.protocol >= 2, m.QuizAttempt.finished_at.is_not(None),
+        m.QuizAttempt.skipped.is_(False)).order_by(m.QuizAttempt.finished_at.desc(), m.QuizAttempt.id.desc()))
+    for q in quizzes:
+        latest_practice.setdefault(kp_of_skill(q.skill_code), q)
     for kp in sorted(k for k in KNOWLEDGE_POINTS if course_of(k) == course):
         keys = kps.get(kp, [])
         tried = [k for k in keys if snap.subs.get(k)]
@@ -99,6 +106,14 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
             basis = kpdesc.describe(snap.desc.get(kp))
             if stuck:
                 basis = basis.rstrip("。") + f"；卡住过 {stuck} 次。"
+        q = latest_practice.get(kp)
+        if q and q.judged_has_bug and q.judge_correct and q.locate_hit:
+            if q.first_fix_pass and not q.hints:
+                basis = "上次小题你找到了出错的位置，第一次修改就通过了。"
+            elif q.correct and any(e.get("kind") == "hint" for e in q.events or []):
+                basis = "上次小题你找到了出错的位置，修改时用过提示。下次试试自己改。"
+        elif q and q.judge_correct is False and q.judged_has_bug is False:
+            basis = "上次小题你漏看了一个错误。再读一段代码，先判断它是否符合题意。"
         practice = snap.practice_for(kp) if keys else None
         groups.setdefault(TOPICS.get(kp[:3], ""), []).append({
             "name": KNOWLEDGE_POINTS.get(kp, ""), **level_view(level), "basis": basis, "covered": bool(keys),
@@ -121,7 +136,7 @@ def error_block(snap: Snapshot, days: int = 30, top: int = 5) -> list[dict]:
                 m.SubmissionLabel.is_current.is_(True))).all()
             # 置信度低于 0.5 的标注照样保存，但不用于学生端显示
             codes = {lab.error_code for lab in labels if lab.confidence >= 0.5 and lab.error_code != "OT99"}
-            coded.append((sub, codes if labels else None))  # None：还没标，看不出改没改
+            coded.append((sub, codes or None))  # None：还没标，看不出改没改
         for i, (sub, codes) in enumerate(coded):
             if not codes or not sub.submit_time:
                 continue

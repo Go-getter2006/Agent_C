@@ -14,12 +14,14 @@ interface Summary {
   basis: { chat: number; reflect: number; code: number };
 }
 
+type Study = { summary: Summary; flow: { shownBug: number; judged: number; located: number; locatedAttempts: number; fixed: number; drafts: number };
+  arms: Record<string, { assigned: number; students: number; shownNext: number; answered: number; correct: number }> };
 const k2 = (x: number | null) => (x === null ? "—" : x.toFixed(2));
 const LEVELS: [keyof Summary["levels"], string][] = [["0", "不理解"], ["1", "能照做"], ["2", "能解释"], ["3", "能迁移"]];
 
 export default function Rating({ cls }: { cls: ClassInfo }) {
   const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
-  const data = useLoad(() => get<{ summary: Summary }>(`/api/teacher/classes/${cls.key}/rating`), [cls.key, tick], 0, false,
+  const data = useLoad(() => get<Study>(`/api/teacher/classes/${cls.key}/rating`), [cls.key, tick], 0, false,
     `t:rating:${cls.key}`, String(tick));
   if (data.error && !data.data) return <Problem message={data.error} onRetry={data.reload} />;
   if (!data.data) return <div className="card card-body"><Loading what="正在汇总" lines={4} /></div>;
@@ -33,6 +35,16 @@ export default function Rating({ cls }: { cls: ClassInfo }) {
         { label: "按事实下调", value: s.adjusted.d ? `${s.adjusted.n}/${s.adjusted.d}` : "—", note: "大模型评的等级和程序确定的事实冲突" },
       ]} />
 
+      <Card title="从看到错题到独立修改" sub="按作答机会统计，同一人可以做多题">
+        <p>看到真实错题 {data.data.flow.shownBug} 次，首次认出 {data.data.flow.judged} 次。</p>
+        <p>首次定位命中 {data.data.flow.located} 次，有效选行 {data.data.flow.locatedAttempts} 次；提示前首稿通过 {data.data.flow.fixed} 次，独立交首稿 {data.data.flow.drafts} 次。</p>
+        {data.data.flow.shownBug > 0 && <p>全部错题机会中，独立定位成功 {data.data.flow.located}/{data.data.flow.shownBug}，独立首稿通过 {data.data.flow.fixed}/{data.data.flow.shownBug}。</p>}
+      </Card>
+      <Card title="随机追问后的下一道新题" sub="按原分组，观察同一技能下首次见到的下一道题">
+        <table className="table"><thead><tr>{["分组", "学生", "分配次数", "见到下一题", "完成首次判断", "首次判断正确"].map(h => <th key={h}>{h}</th>)}</tr></thead>
+          <tbody>{Object.entries(data.data.arms).map(([key, g]) => <tr key={key}><td>{key === "challenge" ? "追问" : "直接反馈"}</td>
+            <td>{g.students}</td><td>{g.assigned}</td><td>{g.shownNext}</td><td>{g.answered}</td><td>{g.answered ? g.correct + "/" + g.answered : "—"}</td></tr>)}</tbody></table>
+      </Card>
       <Card title="大模型和规则" sub="同一个回合，大模型读学生原话评的等级（下调之前）和只看事实的规则给的等级" bodyClass="">
         {a.n === 0 ? <p className="card-body note">还没有两者都给了等级的回合。</p> : (
           <div className="table-scroll">

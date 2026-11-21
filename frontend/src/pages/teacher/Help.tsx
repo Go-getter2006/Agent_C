@@ -16,7 +16,7 @@ interface KpRow {
 }
 
 interface HelpNextRow {
-  level: string; name: string; n: number; resubmitted: R; nextPass: R; errorGone: R; passed: R;
+  level: string; name: string; n: number; resubmitted: R; nextPass: R; noSubmission: number; noSubmissionStudents: number; unjudged: number; nextStatus: Record<"passed" | "present" | "absent" | "unknown", R>; passed: R;
   medianMinutes: number | null; medianTries: number | null;
 }
 
@@ -109,7 +109,7 @@ export default function Help({ cls }: { cls: ClassInfo }) {
               <thead>
                 <tr>
                   <th scope="col">帮助</th><th scope="col" className="num">次数</th><th scope="col" className="num">再交了</th>
-                  <th scope="col" className="num">下一次就通过</th><th scope="col" className="num">讨论的错误没了</th>
+                  <th scope="col" className="num">下一次就通过</th>{["再次识别到", "未再识别到", "尚未再交", "待评测"].map(x => <th scope="col" className="num" key={x}>{x}</th>)}
                   <th scope="col" className="num">之后通过</th><th scope="col" className="num">隔多久再交</th>
                   <th scope="col" className="num">到通过交了几次</th>
                 </tr>
@@ -121,7 +121,8 @@ export default function Help({ cls }: { cls: ClassInfo }) {
                     <td className="num">{r.n}</td>
                     <td className="num"><Ratio r={r.resubmitted} /></td>
                     <td className="num"><Ratio r={r.nextPass} /></td>
-                    <td className="num"><Ratio r={r.errorGone} /></td>
+                    {(["present", "absent"] as const).map(k => <td className="num" key={k}><Ratio r={r.nextStatus[k]} /></td>)}
+                    <td className="num">{r.noSubmission} 次 · {r.noSubmissionStudents} 人</td><td className="num">{r.unjudged}</td>
                     <td className="num"><Ratio r={r.passed} /></td>
                     <td className="num">{r.medianMinutes === null ? "—" : `${r.medianMinutes} 分钟`}</td>
                     <td className="num">{r.medianTries === null ? "—" : `${r.medianTries} 次`}</td>
@@ -131,8 +132,12 @@ export default function Help({ cls }: { cls: ClassInfo }) {
             </table>
           </div>
         )}
+        {d.helpNext.rows.filter(r => r.level === "all" && (r.nextStatus.unknown?.n ?? 0) > 0).map(r => {
+          const comparable = (r.nextStatus.present?.n ?? 0) + (r.nextStatus.absent?.n ?? 0);
+          return <p key={r.level} className="card-foot">{comparable + (r.nextStatus.unknown?.n ?? 0)} 次仍未通过，其中 {comparable} 次有足够标注可比较。</p>;
+        })}
         <p className="card-foot">
-          两次提交之间给了几次帮助的，算最后那一次。讨论的错误没了：下一次通过，或者程序没在下一次提交里再标出帮助时诊断的那个错误。
+          两次提交之间给了几次帮助的，算最后那一次。四种结果的分母均为已有评测结果的下一次提交。只有具体且可信的错误标注才参与比较。
           时间和次数是中位数。帮助级别是按学生当时的情况选的，级别之间不能直接比效果。指标版本 {d.helpNext.version}。
         </p>
       </Card>

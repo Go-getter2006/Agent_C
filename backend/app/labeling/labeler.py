@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 
@@ -26,6 +27,12 @@ def current_problem_label(s: Session, server_id: int, problem_id: int) -> m.Prob
     return s.scalar(select(m.ProblemLabel).where(
         m.ProblemLabel.server_id == server_id, m.ProblemLabel.problem_id == problem_id,
         m.ProblemLabel.is_current.is_(True)))
+
+
+def problem_label_at(s: Session, server_id: int, problem_id: int, at: dt.datetime) -> m.ProblemLabel | None:
+    return s.scalar(select(m.ProblemLabel).where(
+        m.ProblemLabel.server_id == server_id, m.ProblemLabel.problem_id == problem_id, m.ProblemLabel.created_at <= at)
+        .order_by(m.ProblemLabel.created_at.desc(), m.ProblemLabel.version.desc()).limit(1))
 
 
 def testcase_labels(s: Session, label: m.ProblemLabel | None) -> dict[int, m.TestcaseLabel]:
