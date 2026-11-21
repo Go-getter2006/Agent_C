@@ -399,8 +399,7 @@ def topics(user: m.User = Depends(student), s: Session = Depends(get_session)) -
 def thread(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
     topic = _topic(s, user, key)
-    sync_api.notify_student_active(s, user.student_id)
-    # 读聊天记录无需等待沙箱/模型。通过后的收尾由提交处理和后台轮询执行。
+    # 活跃同步由作业列表和发消息触发。读聊天记录只查库，避免跟后台同步争用写锁。
     if key == "new":
         return {"messages": []}
     return {"messages": _thread_view(s, user, th, topic)}
