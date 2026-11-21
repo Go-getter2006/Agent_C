@@ -12,6 +12,12 @@
 - 之后新题一次通过：第一次卡在这个知识点以后，才开始做的、主知识点是它的题里，第一次提交就通过的题数 / 这样的题数。
 - 没来问：这个班布置的、主知识点是它的题上，通过前（或到现在）没通过的提交不少于 SILENT_FAILS 次、
   却没就这道题开过求助回合的学生数。智能体只看得到来问的学生，这一项补上只在 OJ 上反复试的。
+- 没来问的后来通过：上面这些（学生, 题）里，后来在 XDOJ 上通过的 / 全部。
+
+来问的和没来问的（ask_vs_silent，版本 ask-silent-1）：这个班布置的题上，通过前（或到现在）没通过的提交
+不少于 SILENT_FAILS 次的（学生, 题）。就这道题开过求助回合（通过后的回顾不算）的算“来问过”，其余算“没来问”。
+各给：几题次、几个学生、后来通过的 / 全部、通过的那些一共交了几次（中位数）。描述性的，不是帮助的效果：
+来问的往往是更难的题、更想做出来的学生。
 """
 from __future__ import annotations
 
@@ -27,6 +33,7 @@ from .labeling.labeler import current_problem_label
 from .taxonomy import KNOWLEDGE_POINTS, kp_of_skill, skill_name
 
 VERSION = "stuck-kp-1"
+ASK_VERSION = "ask-silent-1"
 SILENT_FAILS = 3
 DONE = {"recalled", "blank_filled", "example_given", "exercise"}
 _SKIP = {"PENDING", "UNKNOWN"}
@@ -63,6 +70,7 @@ class KpStat:
     passed: Ratio = field(default_factory=Ratio)
     transfer: Ratio = field(default_factory=Ratio)
     silent: dict[str, list[tuple[int, int, int]]] = field(default_factory=dict)   # 学生 → [(服务器, 题号, 没通过的次数)]
+    silent_passed: dict[tuple[str, int, int], bool] = field(default_factory=dict)  # (学生, 服务器, 题号) → 后来通过没有
 
     @property
     def students(self) -> set[str]:
@@ -148,6 +156,46 @@ def compute(s: Session, user_ids: list[str], course: str, problems: list[tuple[i
                     continue
                 st = out.setdefault(kp, KpStat(kp=kp))
                 st.silent.setdefault(uid, []).append((server_id, problem_id, fails))
+                st.silent_passed[(uid, server_id, problem_id)] = ac is not None
+    return out
+
+
+def _median(xs: list[int]) -> float | None:
+    if not xs:
+        return None
+    xs = sorted(xs)
+    mid = len(xs) // 2
+    return float(xs[mid]) if len(xs) % 2 else (xs[mid - 1] + xs[mid]) / 2
+
+
+def ask_vs_silent(s: Session, user_ids: list[str], problems: list[tuple[int, int]]) -> dict:
+    """反复没过的题：来问过的和没来问的，后来通过了几道、通过前一共交了几次（定义见模块说明，ask-silent-1）。"""
+    empty = {"cases": 0, "students": 0, "passed": None, "medianTries": None}
+    out = {"version": ASK_VERSION, "threshold": SILENT_FAILS, "asked": dict(empty), "silent": dict(empty)}
+    if not user_ids or not problems:
+        return out
+    wanted = set(problems)
+    subs: dict[tuple[str, int, int], list[m.Submission]] = defaultdict(list)
+    for sub in s.scalars(select(m.Submission).where(
+            m.Submission.user_id.in_(user_ids), m.Submission.server_id.in_({sv for sv, _p in problems}))
+            .order_by(m.Submission.submission_id)).all():
+        if sub.judgement not in _SKIP and (sub.server_id, sub.problem_id) in wanted:
+            subs[(sub.user_id, sub.server_id, sub.problem_id)].append(sub)
+    asked = set(s.execute(select(m.ChatRound.user_id, m.ChatRound.server_id, m.ChatRound.problem_id).where(
+        m.ChatRound.user_id.in_(user_ids), m.ChatRound.problem_id.is_not(None),
+        m.ChatRound.end_reason != m.REFLECT_END)).all())
+    groups: dict[str, list[tuple[str, bool, int | None]]] = {"asked": [], "silent": []}
+    for key, rows in subs.items():
+        ac = next((i for i, x in enumerate(rows) if x.judgement == "AC"), None)
+        fails = ac if ac is not None else len(rows)
+        if fails < SILENT_FAILS:
+            continue
+        groups["asked" if key in asked else "silent"].append((key[0], ac is not None, ac + 1 if ac is not None else None))
+    for name, items in groups.items():
+        if items:
+            out[name] = {"cases": len(items), "students": len({u for u, _p, _t in items}),
+                         "passed": {"n": sum(1 for _u, p, _t in items if p), "d": len(items)},
+                         "medianTries": _median([t for _u, p, t in items if p and t is not None])}
     return out
 
 
@@ -197,6 +245,8 @@ def kp_rows(s: Session, stats: dict[str, KpStat], names: dict[str, str]) -> list
                    "problems": [{"title": title(sv, pid), "problemId": pid, "fails": n} for sv, pid, n in items]}
                   for uid, items in st.silent.items() if uid not in by_student]
         silent.sort(key=lambda r: -max(p["fails"] for p in r["problems"]))
+        silent_users = {r["userId"] for r in silent}
+        later = [ok for (uid, _sv, _pid), ok in st.silent_passed.items() if uid in silent_users]
         rows.append({
             "code": kp, "name": KNOWLEDGE_POINTS.get(kp, ""),
             "students": len(by_student), "episodes": len(st.episodes),
@@ -204,6 +254,7 @@ def kp_rows(s: Session, stats: dict[str, KpStat], names: dict[str, str]) -> list
             "stubborn": len({e.sp.user_id for e in st.episodes if e.sp.stubborn}),
             "recall": st.recall.view(), "passed": st.passed.view(), "transfer": st.transfer.view(),
             "silent": len(silent),
+            "silentPassed": {"n": sum(later), "d": len(later)} if later else None,
             "skills": sorted(({"code": c, "name": skill_name(c), "students": len({e.sp.user_id for e in eps}),
                                "episodes": len(eps)} for c, eps in by_skill.items()), key=lambda x: -x["episodes"]),
             "studentRows": students, "silentRows": silent,

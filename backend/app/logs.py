@@ -1,4 +1,4 @@
-"""教师按需申请学生的行为日志。
+"""开发者按需导出学生的行为日志（以前叫“教师按需申请”；2026-11-21 起只给开发者账号，没有申请记录页）。
 
 做法参考数据库实训平台库道（DBEDU）给授课教师开放的“按需获取自己学生的查询日志”：
 哪些 ID、什么时候、用了哪些样例、做了哪些交互。在这里对应成：
@@ -10,14 +10,14 @@
 - 做了哪些交互：登录、在 XDOJ 提交、提问、点求助按钮、智能体回复（帮助级别）、小题作答、复习、看代码、看差异、复制代码。
 
 处理原则：
-1. 只给自己的学生：按教师账号对应的数据源能看到的班级核对学号；管理员可以要全部。
+1. 只给开发者账号（角色 admin，能要这门课所有的学生）；以前给老师时按他名下的班核对学号。
 2. 最少够用：只导出勾选的那几类；原文默认不导出，勾选“包含原文”才有：提问和回复的文字、贴的代码、
    复习小题的题干和给的代码、首稿、每次运行的代码和结果、完整事件、反馈后的问答、做完后的回顾；
    在这之下再勾“包含提交的源码”才有在 XDOJ 提交的源码。
    测试点的输入输出、学生的密码和令牌任何时候都不导出。
-3. 留痕：每次申请都记一条（谁、什么时候、要了谁的、什么时间段、哪几类、用途、导出了多少条、下载了几次）。
-4. 有时限：下载链接 7 天后失效，可以随时作废；文件不落盘，下载时按申请时定下的范围现生成。
-5. 限量：一次最多 500 个学号、时间段最长 366 天、每人每天最多 20 次申请。
+3. 留痕：每次导出仍在 log_requests 记一条（谁、什么时候、要了谁的、什么时间段、哪几类），页面上不再列出。
+4. 文件不落盘：点导出时按定下的范围现生成，马上下载（下载链接 7 天后失效）。
+5. 限量：一次最多 MAX_IDS 个学号、时间段最长 366 天；用途可以不写。
 6. 分课程：只导出申请时登录的那门课的记录（C 语言和数据结构分开登录）。
 7. 一律带学号和姓名，不做化名：老师要拿学号和期末考试系统的成绩比对（比对由老师自己做）。
    研究用的几类（求助回合、卡点、理解评估）和小题的独立作答字段带指标版本，定义见 docs/研究数据与指标.md。
@@ -32,7 +32,7 @@ import re
 import secrets
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import db
@@ -56,11 +56,10 @@ KINDS: dict[str, str] = {
     "decision": "系统的决定（复习先出哪个、出正确还是有错的代码、发不发主动消息）",
     "assess": "理解评估",
 }
-MAX_IDS = 500
+MAX_IDS = 5000   # 开发者全选所有班时也够
 # 导出文件的格式版本：列或 data 里的字段改了就改这个（logs-2：加“栏目”“代码”两列、复习小题全过程、可选提交源码）
 EXPORT_VERSION = "logs-2"
 MAX_DAYS = 366
-DAILY_LIMIT = 20
 TTL_DAYS = 7
 
 UI_KIND = {
@@ -469,13 +468,6 @@ def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_f
         raise RequestError("结束时间早于开始时间。")
     if (date_to - date_from).days > MAX_DAYS:
         raise RequestError(f"时间段最长 {MAX_DAYS} 天。")
-    if len((purpose or "").strip()) < 4:
-        raise RequestError("请写一句用途，比如“期中前了解哪些同学还没开始做作业”。")
-    today = now.astimezone(db.BEIJING).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(db.UTC)
-    used = s.scalar(select(func.count()).select_from(m.LogRequest).where(
-        m.LogRequest.requester_id == user.id, m.LogRequest.created_at >= today)) or 0
-    if used >= DAILY_LIMIT:
-        raise RequestError(f"今天已经申请了 {used} 次，每天最多 {DAILY_LIMIT} 次。")
     requested = parse_ids(ids_text)
     allowed = allowed_students(s, user)
     from_classes: list[str] = []

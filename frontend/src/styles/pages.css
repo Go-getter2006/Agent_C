@@ -1303,6 +1303,20 @@
   font-weight: 500;
 }
 
+/* 开发者：几个班一起看 */
+.class-multi-btn { display: inline-flex; align-items: center; justify-content: space-between; gap: var(--sp-8);
+  text-align: left; cursor: pointer; max-width: 420px; }
+.class-multi-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.class-pick .class-multi-btn svg { position: static; flex: none; }
+.class-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; min-width: 280px; max-height: 60vh; overflow-y: auto;
+  padding: var(--sp-8); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--shadow-pop); }
+.class-menu-group { display: flex; flex-direction: column; }
+.class-menu-group + .class-menu-group { margin-top: var(--sp-8); padding-top: var(--sp-8); border-top: 1px solid var(--line); }
+.class-menu .check { display: flex; gap: var(--sp-8); padding: var(--sp-6) var(--sp-8); border-radius: var(--r-sm); }
+.class-menu .check:hover { background: var(--row-hover); }
+.class-menu .check .note { margin-left: auto; padding-left: var(--sp-12); }
+.class-menu-all { font-weight: 600; }
+
 @media (max-width: 767px) {
   .page-tools,
   .class-pick,
@@ -1625,12 +1639,17 @@
   font-weight: 600;
 }
 
-.log-result .card-body {
+.log-result {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-12);
-  align-items: flex-start;
+  gap: var(--sp-8);
+  padding: var(--sp-12);
+  border-radius: var(--r-md);
+  background: var(--pass-bg);
 }
+
+.log-result p { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-6); }
+.log-result p > svg { color: var(--pass); }
 
 .kind-counts {
   display: flex;
@@ -2772,7 +2791,23 @@
 .tsub-table td { vertical-align: middle; }
 .tsub-row.open td { background: var(--surface-2); }
 .tsub-expand > td { background: var(--surface-2); padding: var(--sp-12) var(--sp-16) var(--sp-16); }
-.tsub-detail { display: flex; flex-direction: column; gap: var(--sp-12); max-width: 960px; }
+.tsub-detail { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: var(--sp-16); align-items: start; }
+.tsub-left, .tsub-right { display: flex; flex-direction: column; gap: var(--sp-10); min-width: 0; }
+@media (max-width: 1100px) { .tsub-detail { grid-template-columns: minmax(0, 1fr); } }
+/* 测试点：没过的展开、高亮（和代码块一个样子）；通过的收起 */
+.tcase { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
+.tcase-head { display: flex; align-items: center; gap: var(--sp-8); width: 100%; padding: var(--sp-8) var(--sp-12); border: 0;
+  background: none; text-align: left; font-size: var(--fs-13); color: var(--ink); cursor: pointer; }
+.tcase-head svg { flex: none; color: var(--pass); }
+.tcase-head:hover { background: var(--row-hover); }
+.tcase-fail { border-color: color-mix(in srgb, var(--fail) 45%, var(--line)); box-shadow: inset 3px 0 0 var(--fail); }
+.tcase-fail .tcase-head { background: var(--fail-bg); }
+.tcase-fail .tcase-head svg { color: var(--fail); }
+.tcase-body { display: flex; flex-direction: column; gap: var(--sp-8); padding: 0 var(--sp-12) var(--sp-12); }
+.tcase-body > .note { margin: 0; }
+.io-block .code-cap .note { margin-left: auto; font-size: var(--fs-12); }
+.io-block .code-body { max-height: 220px; overflow: auto; }
+.io-empty { margin: 0; padding: var(--sp-8) var(--sp-12); font-size: var(--fs-12); color: var(--ink-3); }
 .tsub-labels { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--sp-4); font-size: var(--fs-13); }
 .tsub-compile { margin: 0; padding: var(--sp-10) var(--sp-12); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line);
   font-family: var(--font-code); font-size: var(--fs-12); white-space: pre-wrap; max-height: 200px; overflow: auto; }
@@ -2780,3 +2815,7 @@
 .tsub-cases td { vertical-align: top; }
 .pager { display: flex; align-items: center; justify-content: center; gap: var(--sp-12); padding: var(--sp-12); border-top: 1px solid var(--line); }
 .table-tools select.field { width: auto; min-width: 150px; max-width: 280px; }
+
+/* 开发者：每一页右上角的导出 */
+.export-links { display: inline-flex; gap: var(--sp-4); }
+.cand-near { display: block; white-space: nowrap; }

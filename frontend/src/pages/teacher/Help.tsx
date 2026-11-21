@@ -1,5 +1,6 @@
-// 研究 · 求助效果（app/stuckstats.py，定义见 docs/研究数据与指标.md）：分级帮助有没有用。
-// 只给比例（几比几）；谁卡在哪个知识点（上课用）在知识图谱的知识点详情里。
+// 研究 · 求助效果（app/stuckstats.py、app/helpeffect.py，定义见 docs/研究数据与指标.md）：分级帮助有没有用。
+// 先看用了多少，再比反复没过时来问的和没来问的，然后是每次帮助之后、按知识点。只给比例（几比几）；
+// 谁卡在哪个知识点（上课用）在知识图谱的知识点详情里。
 import { Link } from "react-router-dom";
 import { CircleCheck } from "lucide-react";
 import { get } from "../../api";
@@ -11,7 +12,7 @@ type R = { n: number; d: number } | null;
 
 interface KpRow {
   code: string; name: string; students: number; episodes: number; repeat: number; stubborn: number;
-  recall: R; passed: R; transfer: R; silent: number;
+  recall: R; passed: R; transfer: R; silent: number; silentPassed: R;
 }
 
 interface HelpNextRow {
@@ -19,15 +20,24 @@ interface HelpNextRow {
   medianMinutes: number | null; medianTries: number | null;
 }
 
+interface Group { cases: number; students: number; passed: R; medianTries: number | null }
+
 interface HelpData {
   rows: KpRow[]; silentFails: number; version: string;
+  usage: { students: number; used: number; askedHomework: number; stuck: number; silent: number };
+  askVsSilent: { version: string; threshold: number; asked: Group; silent: Group };
   helpNext: { version: string; rows: HelpNextRow[] };
   totals: { students: number; stuck: number; episodes: number; recall: R; passed: R; transfer: R; silent: number };
   dialogue: { students: number; constructive: number | null; answerSeeking: number | null };
 }
 
 const frac = (r: R) => (r ? `${r.n}/${r.d}` : "—");
+const pct = (r: R) => (r && r.d ? `${Math.round((100 * r.n) / r.d)}%` : "");
 const corr = (x: number | null) => (x === null ? "样本不够" : x.toFixed(2));
+
+function Ratio({ r }: { r: R }) {
+  return <>{frac(r)}{r && r.d > 0 && <span className="note"> {pct(r)}</span>}</>;
+}
 
 export default function Help({ cls }: { cls: ClassInfo }) {
   const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
@@ -35,57 +45,52 @@ export default function Help({ cls }: { cls: ClassInfo }) {
   const d = data.data;
   if (data.error && !d) return <Problem message={data.error} onRetry={data.reload} />;
   if (!d) return <div className="card card-body"><Loading what="正在汇总" lines={5} /></div>;
+  const u = d.usage;
   const t = d.totals;
+  const av = d.askVsSilent;
+  const stuckRows = d.rows.filter((r) => r.episodes > 0);
+  const silentRows = d.rows.filter((r) => r.silent > 0).sort((a, b) => b.silent - a.silent);
+  const of = (n: number) => `${n}/${u.students} 人`;
+
   return (
     <div className="stack">
-      <Facts label="全班" items={[
-        { label: "卡住过", value: `${t.stuck} 人 · ${t.episodes} 次`, note: `全班 ${t.students} 人` },
-        { label: "第二次自己想起来", value: frac(t.recall), note: "同一技能第二次卡住时" },
-        { label: "卡后通过", value: frac(t.passed), note: "卡住时那道题后来通过" },
-        { label: "之后新题一次通过", value: frac(t.transfer), note: "同知识点、之后才开始做的题" },
-        { label: "没来问", value: `${t.silent} 人`, note: `一道题没过的提交 ≥ ${d.silentFails} 次` },
+      <Facts label="用了多少" items={[
+        { label: "用过智能体", value: of(u.used), note: "在任何栏目发过消息" },
+        { label: "在作业题上求助", value: of(u.askedHomework), note: "通过后的回顾不算" },
+        { label: "求助时卡住过", value: `${u.stuck} 人 · ${t.episodes} 次`, note: "智能体记下的卡点" },
+        { label: "反复没过、没来问", value: of(u.silent), note: `一道题没过的提交 ≥ ${d.silentFails} 次` },
       ]} />
 
-      <Card title="按知识点" sub="分子 / 分母；谁卡在这里，在知识图谱里点这个知识点看" bodyClass="">
-        {d.rows.length === 0 ? (
-          <Empty icon={CircleCheck} title="还没有卡点">对话里卡住、或一道题反复没过又没来问的，会按知识点列在这里。</Empty>
-        ) : (
-          <div className="table-scroll">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th scope="col">知识点</th><th scope="col" className="num">卡住</th><th scope="col" className="num">反复</th>
-                  <th scope="col" className="num">顽固</th><th scope="col" className="num">第二次自己想起来</th>
-                  <th scope="col" className="num">卡后通过</th><th scope="col" className="num">之后新题一次通过</th><th scope="col" className="num">没来问</th>
+      <Card title="反复没过的题：来问的和没来问的" sub={`一道题没通过的提交 ≥ ${av.threshold} 次的（学生, 题）；分子 / 分母`} bodyClass="">
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col"></th><th scope="col" className="num">题次</th><th scope="col" className="num">学生</th>
+                <th scope="col" className="num">后来通过</th><th scope="col" className="num">通过前一共交了几次</th>
+              </tr>
+            </thead>
+            <tbody>
+              {([["来问过", av.asked], ["没来问", av.silent]] as const).map(([name, g]) => (
+                <tr key={name}>
+                  <td>{name}</td>
+                  <td className="num">{g.cases || "—"}</td>
+                  <td className="num">{g.students || "—"}</td>
+                  <td className="num"><Ratio r={g.passed} /></td>
+                  <td className="num">{g.medianTries === null ? "—" : `${g.medianTries} 次`}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {d.rows.map((r) => (
-                  <tr key={r.code}>
-                    <td><Link className="link" to={`/teacher/map?kp=${r.code}`}>{r.name}</Link></td>
-                    <td className="num">{r.students ? `${r.students} 人 · ${r.episodes} 次` : "—"}</td>
-                    <td className="num">{r.repeat || "—"}</td>
-                    <td className="num">{r.stubborn || "—"}</td>
-                    <td className="num">{frac(r.recall)}</td>
-                    <td className="num">{frac(r.passed)}</td>
-                    <td className="num">{frac(r.transfer)}</td>
-                    <td className="num">{r.silent ? `${r.silent} 人` : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              ))}
+            </tbody>
+          </table>
+        </div>
         <p className="card-foot">
-          反复：卡住两个回合以上的人。顽固：第三次卡在同一技能的人。第二次自己想起来：智能体先请他回忆时自己说出来。
-          卡后通过：卡住时那道题后来在 XDOJ 上通过。之后新题一次通过：第一次卡在这里以后才开始做的同知识点题，第一次提交就通过。
-          没来问：一道题没过的提交不少于 {d.silentFails} 次，没就这道题求助。指标版本 {d.version}。
+          来问过：就这道题在作业引导里开过求助回合。次数是中位数。描述性的，不是帮助的效果：来问的往往是更难的题、更想做出来的学生。指标版本 {av.version}。
         </p>
       </Card>
 
       <Card title="每次帮助之后" sub="作业引导里每次帮助以后，这道题的下一次提交；分子 / 分母" bodyClass="">
         {d.helpNext.rows.length === 0 ? (
-          <Empty icon={CircleCheck} title="还没有帮助记录">学生在作业引导里求助、智能体给出帮助以后，会按帮助的级别列在这里。</Empty>
+          <Empty icon={CircleCheck} title="还没有帮助记录" />
         ) : (
           <div className="table-scroll">
             <table className="table">
@@ -102,10 +107,10 @@ export default function Help({ cls }: { cls: ClassInfo }) {
                   <tr key={r.level} className={r.level === "all" ? "row-total" : undefined}>
                     <td>{r.name}</td>
                     <td className="num">{r.n}</td>
-                    <td className="num">{frac(r.resubmitted)}</td>
-                    <td className="num">{frac(r.nextPass)}</td>
-                    <td className="num">{frac(r.errorGone)}</td>
-                    <td className="num">{frac(r.passed)}</td>
+                    <td className="num"><Ratio r={r.resubmitted} /></td>
+                    <td className="num"><Ratio r={r.nextPass} /></td>
+                    <td className="num"><Ratio r={r.errorGone} /></td>
+                    <td className="num"><Ratio r={r.passed} /></td>
                     <td className="num">{r.medianMinutes === null ? "—" : `${r.medianMinutes} 分钟`}</td>
                     <td className="num">{r.medianTries === null ? "—" : `${r.medianTries} 次`}</td>
                   </tr>
@@ -120,7 +125,66 @@ export default function Help({ cls }: { cls: ClassInfo }) {
         </p>
       </Card>
 
-      <Card title="对话行为和做题表现" sub={`对话至少 5 条、通过至少 3 道题的 ${d.dialogue.students} 名学生；和“平均几次改对”的相关系数（负数表示次数少）`}>
+      <div className="grid-2">
+        <Card title="求助时卡住的知识点" sub="分子 / 分母；谁卡在这里，在知识图谱里点这个知识点看" bodyClass="">
+          {stuckRows.length === 0 ? <Empty icon={CircleCheck} title="还没有人在求助时卡住" /> : (
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th scope="col">知识点</th><th scope="col" className="num">卡住</th><th scope="col" className="num">反复</th>
+                    <th scope="col" className="num">第二次自己想起来</th><th scope="col" className="num">卡后通过</th>
+                    <th scope="col" className="num">之后新题一次通过</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="row-total">
+                    <td>全部</td><td className="num">{t.stuck} 人 · {t.episodes} 次</td><td className="num"></td>
+                    <td className="num"><Ratio r={t.recall} /></td><td className="num"><Ratio r={t.passed} /></td>
+                    <td className="num"><Ratio r={t.transfer} /></td>
+                  </tr>
+                  {stuckRows.map((r) => (
+                    <tr key={r.code}>
+                      <td><Link className="link" to={`/teacher/map?kp=${r.code}`}>{r.name}</Link></td>
+                      <td className="num">{r.students} 人 · {r.episodes} 次</td>
+                      <td className="num">{r.repeat || "—"}{r.stubborn ? <span className="note"> 顽固 {r.stubborn}</span> : null}</td>
+                      <td className="num"><Ratio r={r.recall} /></td>
+                      <td className="num"><Ratio r={r.passed} /></td>
+                      <td className="num"><Ratio r={r.transfer} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="card-foot">
+            反复：卡住两个回合以上的人；顽固：第三次卡在同一技能的人。第二次自己想起来：智能体先请他回忆时自己说出来。
+            卡后通过：卡住时那道题后来通过。之后新题一次通过：第一次卡在这里以后才开始做的同知识点题，第一次提交就通过。指标版本 {d.version}。
+          </p>
+        </Card>
+
+        <Card title="反复没过、没来问的知识点" sub="主知识点是它的题上；分子 / 分母" bodyClass="">
+          {silentRows.length === 0 ? <Empty icon={CircleCheck} title="没有反复没过又没来问的" /> : (
+            <div className="table-scroll">
+              <table className="table">
+                <thead><tr><th scope="col">知识点</th><th scope="col" className="num">没来问</th><th scope="col" className="num">后来通过</th></tr></thead>
+                <tbody>
+                  {silentRows.map((r) => (
+                    <tr key={r.code}>
+                      <td><Link className="link" to={`/teacher/map?kp=${r.code}`}>{r.name}</Link></td>
+                      <td className="num">{r.silent} 人</td>
+                      <td className="num"><Ratio r={r.silentPassed} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="card-foot">没来问：一道题没过的提交不少于 {d.silentFails} 次，没就这道题求助（在这个知识点上求助时卡住过的不算在这里）。后来通过按（学生, 题）数。</p>
+        </Card>
+      </div>
+
+      <Card title="对话行为和做题表现" sub={`对话至少 5 条、通过至少 3 道题的学生 ${d.dialogue.students} 人（至少 8 人才算）；和“平均几次改对”的相关系数（负数表示次数少）`}>
         <p className="num">建构性提问占比：{corr(d.dialogue.constructive)} · 索要答案占比：{corr(d.dialogue.answerSeeking)}</p>
         <p className="note">描述性的，不是因果。StudyChat（McNichols 等 2026）发现概念性提问和成绩正相关、索要答案负相关。</p>
       </Card>
