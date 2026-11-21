@@ -30,6 +30,7 @@ class Ctx:
     profile_note: str = ""                       # 多维画像的一句话，给大模型看（profile.tutor_note）
     # 下面这些只给大模型看（学生看不到）：题目、全部测试点、这道题以前的提交、学情、在别的题上纠结过什么
     statement: str = ""
+    document: m.ProblemText | None = None   # 仅绑定的公开题面，用于实际回复时取页图
     all_tests: list[dict] = field(default_factory=list)   # [{"standardInput", "standardOutput"}]，也用于回复的泄露检查
     history: list[str] = field(default_factory=list)      # 这道题每次提交：第几次、结果、错误、改了几行
     learning: list[str] = field(default_factory=list)     # 学情：薄弱的知识点和提示
@@ -298,6 +299,7 @@ def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
     if ctx.problem is not None:
         sid, pid = ctx.problem.server_id, ctx.problem.problem_id
         text = s.get(m.ProblemText, (sid, pid))
+        ctx.document = text
         ctx.statement = pdftext.usable_text(text)
         for tc in s.scalars(select(m.Testcase).where(m.Testcase.server_id == sid, m.Testcase.problem_id == pid)
                             .order_by(m.Testcase.seq, m.Testcase.testcase_id)).all():

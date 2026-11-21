@@ -22,11 +22,12 @@ CASES = json.loads((Path(__file__).resolve().parent / "fixtures/statement_sectio
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
 def test_pdf_sample_boundaries_match_frontend(case):
-    assert [body for _, body in samples(case["text"])] == [tuple(body.split()) for body in case["samples"]]
+    assert [body for _, body in samples(case["text"])] == case["samples"]
 
 
 def test_tidy_cannot_swap_or_change_spaced_pdf_samples():
-    raw = CASES[1]["text"]
+    raw = next(case["text"] for case in CASES if case["name"] == "PDF inter-character spaces and invisible characters")
+    assert "Thursday" in raw
     assert pdftext.check_tidy(raw, raw.replace("输\u200b出 示\u2060例\u00a0１︰", "输出示例 1："), False) is None
     assert "样例" in pdftext.check_tidy(raw, raw.replace("Thursday", "Wednesday"), False)
 
