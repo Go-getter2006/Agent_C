@@ -999,9 +999,35 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
             "diagnosis": diagnosis.teacher_rows(s, diagnosis.by_student(s, [user_id], course)[user_id])}
 
 
+DIALOGUE_VERSION = "dialogue-corr-2"   # 2026-11-21：不再要求至少 8 人，人数不限都算，同时给 95% 区间和 p 值
+
+
+def correlation(xs: list[float], ys: list[float]) -> dict:
+    """皮尔逊相关系数，附 95% 置信区间（Fisher z 变换）和双侧 p 值（同一近似）。
+    人数不设门槛：人少时区间自然很宽；区间跨过 0 就是看不出有没有关系。少于 4 人或某一边没有变化时只给人数。"""
+    import math
+
+    n = len(xs)
+    out = {"n": n, "r": None, "low": None, "high": None, "p": None}
+    if n < 4:
+        return out
+    mx, my = sum(xs) / n, sum(ys) / n
+    sx = sum((x - mx) ** 2 for x in xs) ** 0.5
+    sy = sum((y - my) ** 2 for y in ys) ** 0.5
+    if sx == 0 or sy == 0:
+        return out
+    r = max(-1.0, min(1.0, sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sx * sy)))
+    se = 1 / math.sqrt(n - 3)
+    z = math.atanh(max(-0.999999, min(0.999999, r)))
+    low, high = math.tanh(z - 1.96 * se), math.tanh(z + 1.96 * se)
+    p = math.erfc(abs(z) / se / math.sqrt(2))
+    return {"n": n, "r": round(r, 2), "low": round(low, 2), "high": round(high, 2), "p": round(p, 3)}
+
+
 def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) -> dict:
     """对话行为和做题表现：建构性提问占比、索要答案占比，各自和“平均交几次才通过”的相关系数
-    （描述性，样本少时不算；负数表示这类对话多的学生，通过需要的次数少）。"""
+    （描述性；负数表示这类对话多的学生，通过需要的次数少）。对话至少 5 条、通过至少 3 道题的学生才算，
+    人数不设门槛，每个系数附 95% 区间和 p 值（correlation）。"""
     xs_c, xs_a, ys = [], [], []
     for uid in ids:
         dia = profile.dialogue_profile(s, uid, course)
@@ -1011,19 +1037,8 @@ def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) ->
         xs_c.append(dia["constructive"])
         xs_a.append(dia["answerSeeking"])
         ys.append(sum(tries) / len(tries))
-
-    def corr(xs: list[float], ys_: list[float]) -> float | None:
-        n = len(xs)
-        if n < 8:
-            return None
-        mx, my = sum(xs) / n, sum(ys_) / n
-        sx = sum((x - mx) ** 2 for x in xs) ** 0.5
-        sy = sum((y - my) ** 2 for y in ys_) ** 0.5
-        if sx == 0 or sy == 0:
-            return None
-        return round(sum((x - mx) * (y - my) for x, y in zip(xs, ys_)) / (sx * sy), 2)
-
-    return {"students": len(ys), "constructive": corr(xs_c, ys), "answerSeeking": corr(xs_a, ys)}
+    return {"version": DIALOGUE_VERSION, "students": len(ys),
+            "constructive": correlation(xs_c, ys), "answerSeeking": correlation(xs_a, ys)}
 
 
 # ------------------------------------------------------------ 图模型（试验中）

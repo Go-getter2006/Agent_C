@@ -21,6 +21,7 @@ interface HelpNextRow {
 }
 
 interface Group { cases: number; students: number; passed: R; medianTries: number | null }
+interface Corr { n: number; r: number | null; low: number | null; high: number | null; p: number | null }
 
 interface HelpData {
   rows: KpRow[]; silentFails: number; version: string;
@@ -28,12 +29,23 @@ interface HelpData {
   askVsSilent: { version: string; threshold: number; asked: Group; silent: Group };
   helpNext: { version: string; rows: HelpNextRow[] };
   totals: { students: number; stuck: number; episodes: number; recall: R; passed: R; transfer: R; silent: number };
-  dialogue: { students: number; constructive: number | null; answerSeeking: number | null };
+  dialogue: { version: string; students: number; constructive: Corr; answerSeeking: Corr };
 }
 
 const frac = (r: R) => (r ? `${r.n}/${r.d}` : "—");
 const pct = (r: R) => (r && r.d ? `${Math.round((100 * r.n) / r.d)}%` : "");
-const corr = (x: number | null) => (x === null ? "样本不够" : x.toFixed(2));
+/** 相关系数：r、95% 区间、p；区间跨过 0 就是看不出有没有关系。 */
+function CorrText({ c }: { c: Corr }) {
+  if (c.r === null || c.low === null || c.high === null) return <>算不了（{c.n} 人）</>;
+  const unclear = c.low <= 0 && c.high >= 0;
+  return (
+    <>
+      <b>{c.r.toFixed(2)}</b>
+      <span className="note">（95% 区间 {c.low.toFixed(2)} 到 {c.high.toFixed(2)}，p = {c.p === null ? "—" : c.p < 0.001 ? "< 0.001" : c.p.toFixed(3)}）</span>
+      {unclear && <span className="note"> · 区间跨过 0，看不出有没有关系</span>}
+    </>
+  );
+}
 
 function Ratio({ r }: { r: R }) {
   return <>{frac(r)}{r && r.d > 0 && <span className="note"> {pct(r)}</span>}</>;
@@ -184,9 +196,10 @@ export default function Help({ cls }: { cls: ClassInfo }) {
         </Card>
       </div>
 
-      <Card title="对话行为和做题表现" sub={`对话至少 5 条、通过至少 3 道题的学生 ${d.dialogue.students} 人（至少 8 人才算）；和“平均几次改对”的相关系数（负数表示次数少）`}>
-        <p className="num">建构性提问占比：{corr(d.dialogue.constructive)} · 索要答案占比：{corr(d.dialogue.answerSeeking)}</p>
-        <p className="note">描述性的，不是因果。StudyChat（McNichols 等 2026）发现概念性提问和成绩正相关、索要答案负相关。</p>
+      <Card title="对话行为和做题表现" sub={`对话至少 5 条、通过至少 3 道题的学生 ${d.dialogue.students} 人；和“平均几次改对”的相关系数（负数表示次数少）`}>
+        <p className="num">建构性提问占比：<CorrText c={d.dialogue.constructive} /></p>
+        <p className="num">索要答案占比：<CorrText c={d.dialogue.answerSeeking} /></p>
+        <p className="note">人数不设门槛；人少时区间很宽。区间用 Fisher z 变换算，少于 4 人算不了。描述性的，不是因果。StudyChat（McNichols 等 2026）发现概念性提问和成绩正相关、索要答案负相关。指标版本 {d.dialogue.version}。</p>
       </Card>
     </div>
   );

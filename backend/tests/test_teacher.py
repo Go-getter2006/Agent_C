@@ -154,7 +154,7 @@ def test_stuck_list_and_graph_page(client, demo):
     assert row["passed"]["d"] >= 1 and help_["version"] == "stuck-kp-1"
     assert all(set(r) >= {"recall", "passed", "transfer", "silent"} for r in help_["rows"])
     assert not any("studentRows" in r for r in help_["rows"])
-    assert help_["totals"]["stuck"] >= 1 and {"students", "constructive", "answerSeeking"} == set(help_["dialogue"])
+    assert help_["totals"]["stuck"] >= 1 and {"version", "students", "constructive", "answerSeeking"} == set(help_["dialogue"])
     # 每次帮助之后（app/helpeffect.py）：按帮助级别，最后一行是全部，比例都有分子分母
     nxt = help_["helpNext"]
     assert nxt["version"] == "help-next-1" and nxt["rows"] and nxt["rows"][-1]["level"] == "all"
@@ -763,3 +763,16 @@ def test_version_tells_pages_when_to_refetch(client, demo):
     client.post("/api/auth/logout")
     login(client, UID)
     assert client.get("/api/teacher/version").status_code == 403
+
+
+def test_correlation_has_interval_and_no_minimum():
+    """相关系数人数不设门槛，附 95% 区间（Fisher z）和 p 值；区间跨过 0 就是看不出有没有关系。"""
+    from app.web.teacher import correlation
+
+    assert correlation([1, 2, 3], [1, 2, 3])["r"] is None            # 少于 4 人只给人数
+    assert correlation([1, 1, 1, 1], [1, 2, 3, 4])["r"] is None      # 没有变化
+    few = correlation([1, 2, 3, 4, 5], [2, 1, 4, 3, 5])
+    assert few["r"] == 0.8 and few["low"] < 0 < few["high"] and few["p"] > 0.05   # 5 个人：区间很宽，跨过 0
+    xs = list(range(40))
+    many = correlation(xs, [x + 10 * (x % 4) for x in xs])
+    assert many["r"] == 0.75 and 0 < many["low"] < many["r"] < many["high"] < 1 and many["p"] < 0.001
