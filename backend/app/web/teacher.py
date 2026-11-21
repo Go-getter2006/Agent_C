@@ -1,6 +1,7 @@
 """教师端接口：班级概况、学生列表和明细、顽固卡点、图模型结果（试验中）、数据源。
 
-教师只看自己的班（按 class_sources 控制）；管理员看全部。教师端可以看到题号、内部编码和概率数值。
+教师只看自己的班（按 class_sources 控制），只有“班级”一块；开发者账号（角色 admin，.env 的 DEV_ACCOUNT）看这门课所有的班，
+研究（模型检验、理解评估、求助效果）和数据（日志申请、数据源）两块只给它（Depends(admin)）。教师端可以看到题号、内部编码和概率数值。
 
 C 语言和数据结构分开登录（user.course 来自登录凭证）：
 - C 语言：只有 C 语言的班、提交、知识点、卡点、对话，任何地方都不出现数据结构；
@@ -31,7 +32,7 @@ from ..xdoj.client import SessionError, XdojClient, XdojError, limiter_for
 from .auth import record_failure, set_login_cookie, throttle
 from .. import misconceptions
 from . import cache
-from .deps import get_session, teacher
+from .deps import admin, get_session, teacher
 
 
 def _memo_states(s: Session = Depends(get_session)) -> None:
@@ -742,7 +743,7 @@ def students(key: str, user: m.User = Depends(teacher), s: Session = Depends(get
 
 @router.get("/classes/{key}/help")
 @page_cache("help")
-def help_effect(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+def help_effect(key: str, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
     """研究 · 求助效果：按知识点的卡点结局（app/stuckstats.py）和对话行为与做题表现。
     谁卡在哪个知识点（上课用）在知识图谱的知识点详情里看，这里只给比例。"""
     from .. import helpeffect
@@ -937,7 +938,7 @@ def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) ->
 # ------------------------------------------------------------ 图模型（试验中）
 @router.get("/classes/{key}/graph")
 @page_cache("graph")
-def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+def graph(key: str, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
     cls = _class(s, user, key)
     course = _course_of_class(s, cls)
     people = {st.user_id: st.name for st in class_students(s, cls)}
@@ -1075,7 +1076,7 @@ def _source_view(s: Session, source: m.DataSource) -> dict:
 
 
 @router.get("/sources")
-def sources_list(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+def sources_list(user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
     q = select(m.DataSource).where(m.DataSource.server_id.in_(course_server_ids(s, user.course) or [-1])) \
         .order_by(m.DataSource.id)
     if user.role != "admin":
@@ -1292,7 +1293,7 @@ def cross_page(key: str, user: m.User = Depends(teacher), s: Session = Depends(g
 
 # ------------------------------------------------------------ 研究 · 理解评估
 @router.get("/classes/{key}/rating")
-def understanding_check(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+def understanding_check(key: str, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
     """研究 · 理解评估：智能体评“理解”和只看事实的规则对照；按事实下调了多少、为什么；各档、各种材料有多少。"""
     cls = _class(s, user, key)
     ids = [st.user_id for st in class_students(s, cls)]
@@ -1344,7 +1345,7 @@ def _day(text: str, end: bool) -> dt.datetime:
 
 
 @router.get("/logs")
-def log_requests(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+def log_requests(user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
     q = select(m.LogRequest).where(m.LogRequest.course == user.course).order_by(m.LogRequest.id.desc()).limit(50)
     if user.role != "admin":
         q = q.where(m.LogRequest.requester_id == user.id)
@@ -1357,7 +1358,7 @@ def log_requests(user: m.User = Depends(teacher), s: Session = Depends(get_sessi
 
 
 @router.post("/logs")
-def log_create(body: LogBody, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+def log_create(body: LogBody, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
     mine = {class_key(c.server_id, c.class_id) for c in my_classes(s, user)}
     bad = [k for k in body.classKeys if k not in mine]
     if bad:
@@ -1378,7 +1379,7 @@ def log_create(body: LogBody, user: m.User = Depends(teacher), s: Session = Depe
 
 
 @router.get("/logs/{req_id}/download")
-def log_download(req_id: int, token: str, user: m.User = Depends(teacher), s: Session = Depends(get_session)):
+def log_download(req_id: int, token: str, user: m.User = Depends(admin), s: Session = Depends(get_session)):
     from urllib.parse import quote
 
     req = s.get(m.LogRequest, req_id)
@@ -1396,7 +1397,7 @@ def log_download(req_id: int, token: str, user: m.User = Depends(teacher), s: Se
 
 
 @router.post("/logs/{req_id}/revoke")
-def log_revoke(req_id: int, user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
+def log_revoke(req_id: int, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
     req = s.get(m.LogRequest, req_id)
     if req is None or req.course != user.course or (user.role != "admin" and req.requester_id != user.id):
         raise HTTPException(status_code=404, detail="没有这个申请。")

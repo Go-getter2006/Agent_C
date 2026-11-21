@@ -27,6 +27,11 @@ def login(c, name, password="test-pass"):
     return c.post("/api/auth/login", json={"loginName": name, "password": password})
 
 
+def dev(c, course="C"):
+    """开发者账号：研究（模型检验、理解评估、求助效果）和数据（日志申请、数据源）两块只给它。"""
+    return c.post("/api/auth/login", json={"loginName": "dev-test", "password": "dev-pass", "course": course})
+
+
 def test_roles_are_separated(client):
     assert login(client, UID).json()["role"] == "student"
     for path in ("/api/teacher/classes", "/api/teacher/sources", f"/api/teacher/students/{UID}",
@@ -36,6 +41,30 @@ def test_roles_are_separated(client):
     assert login(client, "demo-teacher").json() == {"role": "teacher", "name": "演示教师", "course": "C"}
     for path in ("/api/homeworks", "/api/progress", "/api/threads/general"):
         assert client.get(path).status_code == 403, path
+
+
+def test_research_and_data_only_for_developer(client, demo):
+    """老师只有“班级”一块；研究（模型检验、理解评估、求助效果）和数据（日志申请、数据源）只给开发者账号。"""
+    key = f"c{demo['server_id']}-31"
+    research = [f"/api/teacher/classes/{key}/graph", f"/api/teacher/classes/{key}/rating",
+                f"/api/teacher/classes/{key}/help", "/api/teacher/logs", "/api/teacher/sources"]
+    login(client, "demo-teacher")
+    for path in research:
+        assert client.get(path).status_code == 403, path
+    assert client.post("/api/teacher/logs", json={"ids": UID, "dateFrom": "2026-11-01", "dateTo": "2026-11-30",
+                                                  "kinds": ["submission"], "purpose": "看看"}).status_code == 403
+    assert client.get(f"/api/teacher/classes/{key}/overview").status_code == 200
+    client.post("/api/auth/logout")
+    # 开发者：.env 的 DEV_ACCOUNT、DEV_PASSWORD，一个账号一个密码，登录时照样选课程；看这门课所有的班
+    assert client.post("/api/auth/login", json={"loginName": "dev-test", "password": "test-pass"}).status_code == 401
+    assert dev(client).json() == {"role": "admin", "name": "开发者", "course": "C"}
+    for path in research:
+        assert client.get(path).status_code == 200, path
+    assert len(client.get("/api/teacher/classes").json()["classes"]) == 2
+    with db.session_scope() as s:
+        assert s.scalar(select(m.User).where(m.User.login_name == "dev-test")).role == "admin"
+    client.post("/api/auth/logout")
+    assert dev(client, "D").status_code in (200, 400)   # 数据结构没接入时 400；接入了照样能登录
 
 
 def _avg_to_pass(server_id: int, uid: str) -> float:
@@ -115,7 +144,7 @@ def test_stuck_list_and_graph_page(client, demo):
     sid = demo["server_id"]
     with db.session_scope() as s:   # 让演示学生在同一个技能上第二次卡住
         workflow.handle(s, UID, (sid, 406), action="hint")
-    login(client, "demo-teacher")
+    dev(client)   # 研究页只给开发者
     key = f"c{sid}-31"
     # 研究 · 求助效果：按知识点的比例，不列学生
     help_ = client.get(f"/api/teacher/classes/{key}/help").json()
@@ -167,8 +196,7 @@ def test_other_teacher_sees_nothing(client, demo):
     assert client.get(f"/api/teacher/classes/c{sid}-31/overview").status_code == 404
     assert client.get(f"/api/teacher/classes/c{sid}-31/students").status_code == 404
     assert client.get(f"/api/teacher/students/{UID}").status_code == 404
-    mine = client.get("/api/teacher/sources").json()["sources"]
-    assert [x["account"] for x in mine] == ["someone-else"]
+    assert client.get("/api/teacher/sources").status_code == 403   # 数据源只给开发者
     client.post("/api/auth/logout")
     login(client, "root")   # 管理员看全部
     assert len(client.get("/api/teacher/classes").json()["classes"]) == 2
@@ -177,7 +205,7 @@ def test_other_teacher_sees_nothing(client, demo):
 
 
 def test_sources_page(client):
-    login(client, "demo-teacher")
+    dev(client)
     data = client.get("/api/teacher/sources").json()
     src = data["sources"][0]
     assert (src["account"], src["demo"], src["enabled"], src["classes"], src["submissions"]) == (
@@ -319,6 +347,7 @@ def test_graph_page_preserves_historical_predictions_and_shows_repeated_failures
             assert mastery.record_failed_submission(s, sub, skill)
 
     login(client, "demo-teacher")
+    dev(client)   # 模型检验是研究页，只给开发者
     url = f"/api/teacher/classes/c{sid}-31/graph"
     before = client.get(url).json()
     assert before["weekly"] == []
@@ -383,7 +412,7 @@ def test_log_request_scoped_audited_and_minimal(client, demo):
     sid = demo["server_id"]
     with db.session_scope() as s:
         workflow.handle(s, UID, (sid, 406), "我的手机号是 13800000000，帮我看看")   # 对话原文默认不导出
-    login(client, "demo-teacher")
+    dev(client)   # 日志申请只给开发者
     meta = client.get("/api/teacher/logs").json()
     assert {k["code"] for k in meta["kinds"]} >= {"submission", "ask", "reply", "quiz", "review", "login", "view"}
     body = {"ids": f"{UID}, 2500000002 2500000101 9999999999", "dateFrom": "2026-06-01", "dateTo": "2027-05-31",
@@ -421,7 +450,7 @@ def test_log_request_scoped_audited_and_minimal(client, demo):
 def test_research_export_keeps_student_ids(client, demo):
     """研究用的几类记录也带学号和姓名（老师要和期末考试系统按学号比对），不做化名；
     卡点、求助回合、理解评估、独立作答的字段和指标版本都在。"""
-    login(client, "demo-teacher")
+    dev(client)
     body = {"ids": UID, "dateFrom": "2026-06-01", "dateTo": "2027-05-31", "format": "json",
             "kinds": ["submission", "ask", "quiz", "review", "round", "stuck", "help", "assess"], "purpose": "论文数据分析",
             "deidentify": True}   # 以前的“去标识”参数：现在不认，照样带学号
@@ -449,6 +478,7 @@ def test_research_export_keeps_student_ids(client, demo):
 
 
 def test_other_teacher_cannot_get_logs_of_my_students(client, demo):
+    """日志申请只给开发者：老师（不管是不是他的班）都申请不了。"""
     with db.session_scope() as s:
         src = m.DataSource(server_id=demo["server_id"], teacher_user_id="someone-else", enabled=False)
         s.add(src)
@@ -456,12 +486,12 @@ def test_other_teacher_cannot_get_logs_of_my_students(client, demo):
         s.add(m.User(role="teacher", login_name="other-teacher", display_name="别的老师", data_source_id=src.id))
     login(client, "other-teacher")
     r = client.post("/api/teacher/logs", json={"ids": UID, "dateFrom": "2026-11-01", "dateTo": "2026-11-30",
-                                               "kinds": ["submission"], "purpose": "想看看别班"}).json()["request"]
-    assert r["granted"] == 0 and r["denied"] == [UID] and r["rows"] == 0
+                                               "kinds": ["submission"], "purpose": "想看看别班"})
+    assert r.status_code == 403
 
 
 def test_log_request_rules(client, demo):
-    login(client, "demo-teacher")
+    dev(client)
     base = {"ids": UID, "dateFrom": "2026-11-01", "dateTo": "2026-11-30", "kinds": ["submission"], "purpose": "期中前看看"}
     assert client.post("/api/teacher/logs", json={**base, "purpose": ""}).status_code == 400          # 要写用途
     assert client.post("/api/teacher/logs", json={**base, "kinds": []}).status_code == 400
@@ -629,8 +659,7 @@ def test_courses_are_logged_in_and_shown_separately(client, monkeypatch):
     assert client.get("/api/auth/me").json()["course"] == "C"
     classes = client.get("/api/teacher/classes").json()
     assert [c["name"] for c in classes["classes"]] == ["C 语言（测试）一班"] and classes["course"] == "C"
-    srcs = client.get("/api/teacher/sources").json()
-    assert [x["serverCode"] for x in srcs["sources"]] == ["c-test"] and all(k["course"] == "C" for k in srcs["known"])
+    assert client.get("/api/teacher/sources").status_code == 403   # 数据源只给开发者（下面按课程分开看）
     # 关联另一门课的入口没有了
     assert client.post("/api/teacher/sources/link", json={"server": "ds-test", "userId": "zhang-ds",
                                                            "password": "ds-pass"}).status_code in (404, 405)
@@ -644,7 +673,6 @@ def test_courses_are_logged_in_and_shown_separately(client, monkeypatch):
     _own_class(d_id, 601)
     classes = client.get("/api/teacher/classes").json()["classes"]
     assert [c["name"] for c in classes] == ["数据结构（测试）一班"]
-    assert [x["serverCode"] for x in client.get("/api/teacher/sources").json()["sources"]] == ["ds-test"]
     assert client.get(f"/api/teacher/classes/c{c_id}-501/overview").status_code == 404
     g = client.get(f"/api/teacher/classes/c{d_id}-601/knowledge-map").json()
     assert {c["code"] for c in g["courses"]} == {"C", "D"} and any(e["cross"] for e in g["edges"])
@@ -656,6 +684,20 @@ def test_courses_are_logged_in_and_shown_separately(client, monkeypatch):
     assert detail["course"] == "D" and detail["foundation"] and detail["submissions"] == []
     assert all(k["code"].startswith("D") for k in detail["knowledge"])
     assert client.get("/api/teacher/students/2599000004").status_code == 404   # 只上 C 的学生不在数据结构的班里
+
+    # 开发者：一个账号一个密码，登录时选课程，各看各的数据源和班
+    client.post("/api/auth/logout")
+    dev(client, "C")
+    srcs = client.get("/api/teacher/sources").json()   # 这门课所有的数据源（演示的也在），没有数据结构的
+    codes = [x["serverCode"] for x in srcs["sources"]]
+    assert "c-test" in codes and "ds-test" not in codes and all(k["course"] == "C" for k in srcs["known"])
+    names = [c["name"] for c in client.get("/api/teacher/classes").json()["classes"]]
+    assert "C 语言（测试）一班" in names and "数据结构（测试）一班" not in names
+    client.post("/api/auth/logout")
+    assert dev(client, "D").json()["course"] == "D"
+    assert [x["serverCode"] for x in client.get("/api/teacher/sources").json()["sources"]] == ["ds-test"]
+    assert [c["name"] for c in client.get("/api/teacher/classes").json()["classes"]] == ["数据结构（测试）一班"]
+    client.post("/api/auth/logout")
 
     # 学生：两门都上的，选哪门进哪门
     client.post("/api/auth/logout")

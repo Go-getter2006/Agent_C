@@ -23,6 +23,10 @@ from app.xdoj.store import SyncContext, request_logger  # noqa: E402
 
 config.DEEPSEEK_API_KEY = ""
 config.DEV_LOGIN_PASSWORD = "test-pass"
+# 开发者账号（研究、数据两块只给它）：测试里叫 dev-test
+config.DEV_ACCOUNT = "dev-test"
+config.DEV_PASSWORD = "dev-pass"
+DEV = {"loginName": "dev-test", "password": "dev-pass"}
 config.SYNC_IN_WEB = False
 
 

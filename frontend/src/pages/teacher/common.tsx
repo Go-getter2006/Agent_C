@@ -7,6 +7,7 @@ import { Empty, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 
 // 三块（docs/教师端结构.md）：班级（上课用）、研究（论文用）、数据。每一页回答一个问题。
+// 老师只有“班级”；研究和数据两块只给开发者账号（角色 admin，.env 的 DEV_ACCOUNT），后端也只让它取。
 export const NAV: NavItem[] = [
   { to: "/teacher/class", label: "总览", icon: LayoutDashboard, section: "班级" },
   { to: "/teacher/students", label: "学生", icon: Users, section: "班级" },
@@ -20,11 +21,17 @@ export const NAV: NavItem[] = [
   { to: "/teacher/sources", label: "数据源", icon: Database, section: "数据" },
 ];
 
-/** 数据结构这边多一页“跨课程”（C 语言这边不出现）。 */
-export const navFor = (course: "C" | "D"): NavItem[] =>
-  course === "D"
-    ? NAV.flatMap((n) => (n.to === "/teacher/map" ? [n, { to: "/teacher/cross", label: "跨课程", icon: Link2, section: "班级" }] : [n]))
-    : NAV;
+/** 只给开发者账号的几页（研究、数据）。 */
+export const DEV_ONLY = new Set(NAV.filter((n) => n.section !== "班级").map((n) => n.to));
+export const isDeveloper = (role: string) => role === "admin";
+
+/** 数据结构这边多一页“跨课程”（C 语言这边不出现）；老师看不到研究和数据两块。 */
+export const navFor = (course: "C" | "D", role = "teacher"): NavItem[] => {
+  const nav = isDeveloper(role) ? NAV : NAV.filter((n) => !DEV_ONLY.has(n.to));
+  return course === "D"
+    ? nav.flatMap((n) => (n.to === "/teacher/map" ? [n, { to: "/teacher/cross", label: "跨课程", icon: Link2, section: "班级" }] : [n]))
+    : nav;
+};
 
 export interface ClassInfo {
   key: string;
@@ -156,9 +163,9 @@ interface PageProps {
 }
 
 export function TeacherPage({ title, sub, withClass = true, tools, crumb, wide = false, children }: PageProps) {
-  const { current, loading, error, course } = useClasses();
+  const { current, loading, error, course, role } = useClasses();
   return (
-    <Shell nav={navFor(course)} kind="teacher">
+    <Shell nav={navFor(course, role)} kind="teacher">
       <main className="page">
         <div className={wide ? "page-inner page-wide" : "page-inner"}>
           {crumb}

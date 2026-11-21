@@ -67,7 +67,7 @@ BODY = {"ids": UID, "dateFrom": "2026-06-01", "dateTo": "2027-05-31", "format": 
 
 def test_sections_and_full_text(client, demo):
     seeded = _seed(demo["server_id"])
-    client.post("/api/auth/login", json={"loginName": "demo-teacher", "password": "test-pass"})
+    client.post("/api/auth/login", json={"loginName": "dev-test", "password": "dev-pass"})   # 日志申请只给开发者
 
     plain = _download(client, BODY)
     rows = plain["rows"]
@@ -110,7 +110,7 @@ def test_sections_and_full_text(client, demo):
 
 def test_csv_has_section_and_code_columns(client, demo):
     _seed(demo["server_id"])
-    client.post("/api/auth/login", json={"loginName": "demo-teacher", "password": "test-pass"})
+    client.post("/api/auth/login", json={"loginName": "dev-test", "password": "dev-pass"})   # 日志申请只给开发者
     req = client.post("/api/teacher/logs", json={**BODY, "format": "csv", "includeText": True}).json()["request"]
     text = client.get(f"/api/teacher/logs/{req['id']}/download", params={"token": req["token"]}).content.decode("utf-8-sig")
     header = text.splitlines()[0].split(",")

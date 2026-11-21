@@ -12,7 +12,7 @@ import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, Facts, LevelLegend, Loading, Problem, ResultPill, Tabs, levelClass } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
-import { Code, endReason, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, useClasses, type SkillRef } from "./common";
+import { Code, endReason, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, isDeveloper, useClasses, type SkillRef } from "./common";
 import { DiagnosisCard, type DiagnosisRow } from "./Diagnosis";
 
 interface Detail {
@@ -454,13 +454,15 @@ function ModelTab({ d }: { d: Detail }) {
 const TABS: Tab[] = ["overview", "help", "quiz", "subs", "model"];
 
 export default function StudentDetail() {
-  const { tick } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const { tick, role } = useClasses();   // 数据变了才重取（common.tsx 的 useVersionTicks）
+  const dev = isDeveloper(role);   // 模型细节、申请日志只给开发者
   const { id } = useParams();
   const [params, setParams] = useSearchParams();
   const cls = params.get("classKey");
   const data = useLoad(() => get<Detail>(`/api/teacher/students/${id}${cls ? `?classKey=${encodeURIComponent(cls)}` : ""}`), [id, cls, tick], 0, false, `t:student:${id}:${cls ?? ""}`, String(tick));
   const d = data.data;
-  const tab: Tab = TABS.includes(params.get("tab") as Tab) ? (params.get("tab") as Tab) : "overview";
+  const asked = params.get("tab") as Tab;
+  const tab: Tab = TABS.includes(asked) && (asked !== "model" || dev) ? asked : "overview";
   const setTab = (v: Tab) => {
     const next = new URLSearchParams(params);
     if (v === "overview") next.delete("tab");
@@ -475,7 +477,7 @@ export default function StudentDetail() {
       tools={d ? (
         <>
           <Link to={`/teacher/map?student=${d.student.userId}`} className="btn btn-sm"><Waypoints size={15} aria-hidden="true" />在知识图谱里看</Link>
-          <Link to={`/teacher/logs?ids=${d.student.userId}`} className="btn btn-sm"><FileDown size={15} aria-hidden="true" />申请日志</Link>
+          {dev && <Link to={`/teacher/logs?ids=${d.student.userId}`} className="btn btn-sm"><FileDown size={15} aria-hidden="true" />申请日志</Link>}
         </>
       ) : null}>
       {() => (
@@ -489,7 +491,7 @@ export default function StudentDetail() {
                 { value: "help", label: "求助", count: d.stuck.length + d.rounds.length },
                 { value: "quiz", label: "小题和复习", count: d.quizzes.length },
                 { value: "subs", label: "提交", count: d.submissions.length + d.moreSubmissions },
-                { value: "model", label: "模型细节" },
+                ...(dev ? [{ value: "model" as Tab, label: "模型细节" }] : []),
               ]} />
               <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
                 {tab === "overview" && <OverviewTab d={d} />}

@@ -47,6 +47,7 @@ def teacher(user: m.User = Depends(current_user)) -> m.User:
 
 
 def admin(user: m.User = Depends(current_user)) -> m.User:
+    """开发者账号（角色 admin）：教师端的研究、数据两块只给它。"""
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="这个操作需要管理员权限。")
+        raise HTTPException(status_code=403, detail="这个页面只对开发者开放。")
     return user

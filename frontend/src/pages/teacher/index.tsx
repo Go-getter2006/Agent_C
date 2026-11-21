@@ -1,6 +1,8 @@
-// 教师端的路由。只看自己名下的班。分三块（docs/教师端结构.md）：班级（上课用）、研究（论文用）、数据。
+// 教师端的路由。只看自己名下的班。分三块（docs/教师端结构.md）：班级（上课用）、研究（论文用）、数据；
+// 研究和数据只给开发者账号，老师打开这几个地址回到总览。
 import { Navigate, Route, Routes } from "react-router-dom";
-import { ClassesProvider, TeacherPage, useClasses } from "./common";
+import type { ReactElement } from "react";
+import { ClassesProvider, TeacherPage, isDeveloper, useClasses } from "./common";
 import Cross from "./Cross";
 import Help from "./Help";
 import KnowledgeMap from "./KnowledgeMap";
@@ -20,7 +22,9 @@ const MAP_SUB = {
 };
 
 function Routed() {
-  const { course, loading } = useClasses();
+  const { course, loading, role } = useClasses();
+  // 研究、数据两块：只给开发者；还不知道是谁时先不画（免得老师那边先发一次请求）
+  const dev = (el: ReactElement) => (loading ? null : isDeveloper(role) ? el : <Navigate to="/teacher/class" replace />);
   return (
       <Routes>
         {/* 班级（上课用） */}
@@ -34,13 +38,13 @@ function Routed() {
         <Route path="cross" element={course === "D" || loading
           ? <TeacherPage title="跨课程" sub="要先补哪些 C 语言基础。只有掌握程度，不含 C 语言的答题记录">{(cls) => cls && !loading && <Cross cls={cls} />}</TeacherPage>
           : <Navigate to="/teacher/class" replace />} />
-        {/* 研究（论文用） */}
-        <Route path="models" element={<TeacherPage title="模型检验" sub="掌握程度怎么算更准：用学生之后的真实表现来检验">{(cls) => cls && <Models cls={cls} />}</TeacherPage>} />
-        <Route path="rating" element={<TeacherPage title="理解评估" sub="智能体评“理解”和只看事实的规则对照：一致率、按事实下调了多少">{(cls) => cls && <Rating cls={cls} />}</TeacherPage>} />
-        <Route path="help" element={<TeacherPage title="求助效果" sub="分级帮助有没有用：卡住以后怎么样了，谁卡住了又没来问">{(cls) => cls && <Help cls={cls} />}</TeacherPage>} />
-        {/* 数据 */}
-        <Route path="logs" element={<TeacherPage title="日志申请" withClass={false} sub="按需取自己学生的使用记录，带学号">{() => <Logs />}</TeacherPage>} />
-        <Route path="sources" element={<TeacherPage title="数据源" withClass={false} sub="从 XDOJ 同步数据的状态">{() => <Sources />}</TeacherPage>} />
+        {/* 研究（论文用，只给开发者） */}
+        <Route path="models" element={dev(<TeacherPage title="模型检验" sub="掌握程度怎么算更准：用学生之后的真实表现来检验">{(cls) => cls && <Models cls={cls} />}</TeacherPage>)} />
+        <Route path="rating" element={dev(<TeacherPage title="理解评估" sub="智能体评“理解”和只看事实的规则对照：一致率、按事实下调了多少">{(cls) => cls && <Rating cls={cls} />}</TeacherPage>)} />
+        <Route path="help" element={dev(<TeacherPage title="求助效果" sub="分级帮助有没有用：卡住以后怎么样了，谁卡住了又没来问">{(cls) => cls && <Help cls={cls} />}</TeacherPage>)} />
+        {/* 数据（只给开发者） */}
+        <Route path="logs" element={dev(<TeacherPage title="日志申请" withClass={false} sub="按需取学生的使用记录，带学号">{() => <Logs />}</TeacherPage>)} />
+        <Route path="sources" element={dev(<TeacherPage title="数据源" withClass={false} sub="从 XDOJ 同步数据的状态">{() => <Sources />}</TeacherPage>)} />
         {/* 旧地址：原来的“卡点”页（谁卡在哪个知识点）现在在知识图谱的表和知识点详情里；“模型对比”改叫模型检验 */}
         <Route path="stuck" element={<Navigate to="/teacher/map?view=table&sort=stuck" replace />} />
         <Route path="graph" element={<Navigate to="/teacher/models" replace />} />
