@@ -11,7 +11,9 @@
 
 处理原则：
 1. 只给自己的学生：按教师账号对应的数据源能看到的班级核对学号；管理员可以要全部。
-2. 最少够用：只导出勾选的那几类；对话原文默认不导出，勾选“包含对话原文”才有；
+2. 最少够用：只导出勾选的那几类；原文默认不导出，勾选“包含原文”才有：提问和回复的文字、贴的代码、
+   复习小题的题干和给的代码、首稿、每次运行的代码和结果、完整事件、反馈后的问答、做完后的回顾；
+   在这之下再勾“包含提交的源码”才有在 XDOJ 提交的源码。
    测试点的输入输出、学生的密码和令牌任何时候都不导出。
 3. 留痕：每次申请都记一条（谁、什么时候、要了谁的、什么时间段、哪几类、用途、导出了多少条、下载了几次）。
 4. 有时限：下载链接 7 天后失效，可以随时作废；文件不落盘，下载时按申请时定下的范围现生成。
@@ -37,6 +39,7 @@ from . import db
 from . import models as m
 from .diagnosis import CHALLENGE_VERSION
 from .quiz import challenge_state
+from .xdoj.assemble import source_text
 from .taxonomy import JUDGEMENTS, KNOWLEDGE_POINTS, course_of, error_name, kp_of_skill, skill_name
 
 KINDS: dict[str, str] = {
@@ -54,6 +57,8 @@ KINDS: dict[str, str] = {
     "assess": "理解评估",
 }
 MAX_IDS = 500
+# 导出文件的格式版本：列或 data 里的字段改了就改这个（logs-2：加“栏目”“代码”两列、复习小题全过程、可选提交源码）
+EXPORT_VERSION = "logs-2"
 MAX_DAYS = 366
 DAILY_LIMIT = 20
 TTL_DAYS = 7
@@ -94,8 +99,33 @@ class Row:
     submission_id: int | None = None
     samples: str = ""
     detail: str = ""
+    section: str = ""     # 栏目：知识问答 / 作业引导 / 复习提升 / 主动消息（看得出的才填）
     text: str = ""
+    code: str = ""
     data: dict = field(default_factory=dict)
+
+
+SECTION_ASK, SECTION_HOMEWORK, SECTION_REVIEW, SECTION_NOTICE = "知识问答", "作业引导", "复习提升", "主动消息"
+
+
+def _section(problem_id: int | None, topic_id: int | None = None) -> str:
+    """对话在哪个栏目：绑了题的是作业引导；知识问答的主题、以前不绑题的“综合”对话都算知识问答。"""
+    return SECTION_HOMEWORK if problem_id is not None and topic_id is None else SECTION_ASK
+
+
+def _proactive(msg: m.ChatMessage) -> bool:
+    """智能体主动发的：提交没过的提醒（chat/proactive.py）、通过后的总结（chat/summary.py）。"""
+    return msg.role == "agent" and (msg.failure_submission_id is not None or "summary" in (msg.content or {}))
+
+
+def _code_blocks(blocks: list[dict]) -> list[dict]:
+    return [{"caption": b.get("caption", ""), "start": b.get("start", 1), "code": "\n".join(b.get("lines", []))}
+            for b in blocks if b.get("t") == "code"]
+
+
+def _join_code(parts: list[tuple[str, str]]) -> str:
+    """几段代码放进一格：每段前面一行【标题】。"""
+    return "\n\n".join(f"【{title}】\n{code}" if title else code for title, code in parts if code)
 
 
 def _problem_title(s: Session, cache: dict, server_id: int | None, problem_id: int | None) -> str:
@@ -109,8 +139,12 @@ def _problem_title(s: Session, cache: dict, server_id: int | None, problem_id: i
 
 
 def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt.datetime, kinds: list[str],
-            include_text: bool, course: str | None = None) -> list[Row]:
-    """按申请的范围把日志收齐，按时间排好。course：只要这门课的。"""
+            include_text: bool, course: str | None = None, include_code: bool = False) -> list[Row]:
+    """按申请的范围把日志收齐，按时间排好。course：只要这门课的。
+
+    include_text：带原文（文字、贴的代码、复习小题的全过程）；include_code：再带提交的源码（要先有 include_text）。
+    """
+    include_code = include_code and include_text
     if not user_ids:
         return []
     names = dict(s.execute(select(m.Student.user_id, m.Student.name).where(m.Student.user_id.in_(user_ids))).all())
@@ -151,14 +185,17 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                 m.SubmissionLabel.is_current.is_(True))).all()
             errs = "、".join(f"{lab.error_code} {error_name(lab.error_code)}" for lab in labels)
             n = attempt_no.get((sub.server_id, sub.submission_id), 0)
+            source = (source_text(s, sub.server_id, sub.submission_id) or "") if include_code else ""
             add(user_id=sub.user_id, time=sub.submit_time, kind="submission", action="在 XDOJ 提交",
+                section=SECTION_HOMEWORK, code=source,
                 course=courses.get(sub.server_id, ""), problem_id=sub.problem_id,
                 problem=_problem_title(s, titles, sub.server_id, sub.problem_id), submission_id=sub.submission_id,
                 samples=("没通过第 " + "、".join(str(x) for x in failed) + " 组") if failed else "",
                 detail=f"第 {n} 次，{JUDGEMENTS.get(sub.judgement, sub.judgement_text)}" + (f"，{cells}" if cells else "")
                 + (f"，标注：{errs}" if errs else ""),
                 data={"attempt": n, "result": sub.judgement, "cells": cells, "failedGroups": failed,
-                      "errors": [lab.error_code for lab in labels]})
+                      "errors": [lab.error_code for lab in labels],
+                      **({"source": source, "sourceFetched": bool(source)} if include_code else {})})
 
     if {"ask", "reply"} & set(kinds):
         q = select(m.ChatMessage)
@@ -174,7 +211,10 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             blocks = (msg.content or {}).get("blocks", [])
             text = "\n".join(b.get("text", "") for b in blocks if b.get("t") == "p")
             codes = [b for b in blocks if b.get("t") == "code"]
+            code_parts = _code_blocks(blocks) if include_text else []
+            code = _join_code([(c["caption"], c["code"]) for c in code_parts])
             title = _problem_title(s, titles, msg.server_id, msg.problem_id)
+            section = SECTION_NOTICE if _proactive(msg) else _section(msg.problem_id, msg.topic_id)
             if msg.role == "student":
                 st = steps.get(msg.id)
                 if st is not None:
@@ -187,28 +227,37 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                     detail = f"意图 {st.intent}，规则 {st.rule_id}，帮助级别 {st.help_level}" + (
                         f"，诊断 {st.root_error_code}" if st.root_error_code else "")
                 add(user_id=msg.user_id, time=msg.created_at, kind="ask", action=action,
-                    course=msg.course, problem_id=msg.problem_id,
+                    course=msg.course, problem_id=msg.problem_id, section=section,
                     problem=title, submission_id=st.submission_id if st else None, detail=detail,
-                    text=text if include_text else "",
-                    data={"round": msg.round_id, "intent": st.intent if st else None,
+                    text=text if include_text else "", code=code,
+                    data={"message": msg.id, "round": msg.round_id, "topic": msg.topic_id,
+                          "intent": st.intent if st else None,
                           "rule": st.rule_id if st else None, "help": st.help_level if st else None,
-                          "pastedCode": bool(codes)})
+                          "pastedCode": bool(codes), **({"codeBlocks": code_parts} if include_text else {})})
             elif "reply" in kinds:
                 st = last_step.get(msg.user_id)
                 example = [b for b in codes if b.get("caption") in ("示例", "上次给你的那段")]
-                add(user_id=msg.user_id, time=msg.created_at, kind="reply", action="智能体回复",
-                    course=msg.course, problem_id=msg.problem_id,
+                proactive = section == SECTION_NOTICE
+                add(user_id=msg.user_id, time=msg.created_at, kind="reply",
+                    action=("提交没过的提醒" if msg.failure_submission_id is not None else "通过后的总结")
+                    if proactive else "智能体回复",
+                    course=msg.course, problem_id=msg.problem_id, section=section,
                     problem=title, samples="给了示例代码" if example else "",
-                    detail=(HELP_TEXT.get(st.help_level, "") if st else "") + (
+                    submission_id=msg.failure_submission_id if proactive else None,
+                    detail="" if proactive else (HELP_TEXT.get(st.help_level, "") if st else "") + (
                         f"，回复来源 {st.reply_source}" if st and st.reply_source else ""),
-                    text=(text + ("\n" + "\n".join("\n".join(b.get("lines", [])) for b in codes) if codes else ""))
-                    if include_text else "",
-                    data={"help": st.help_level if st else None, "exampleCode": bool(example)})
+                    text=text if include_text else "", code=code,
+                    data={"message": msg.id, "round": msg.round_id, "topic": msg.topic_id, "proactive": proactive,
+                          "help": None if proactive else st.help_level if st else None, "exampleCode": bool(example),
+                          **({"codeBlocks": code_parts} if include_text else {})})
 
     if "quiz" in kinds or "review" in kinds:
         attempts = s.scalars(select(m.QuizAttempt).where(
             m.QuizAttempt.user_id.in_(user_ids), m.QuizAttempt.created_at >= date_from,
             m.QuizAttempt.created_at <= date_to).order_by(m.QuizAttempt.id)).all()
+        # 以前插在对话里的小题：按它所在的对话定栏目
+        in_chat = {x.quiz_attempt_id: _section(x.problem_id, x.topic_id) for x in s.scalars(select(m.ChatMessage).where(
+            m.ChatMessage.quiz_attempt_id.in_([a.id for a in attempts] or [-1]))).all()}
         for a in attempts:
             kind = "review" if a.reason == "review" else "quiz"
             if kind not in kinds or (course is not None and course_of(a.skill_code or "C") != course):
@@ -217,7 +266,10 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             result = {"right": "改对了", "right_judge": "判断对", "right_second": "第二次改对",
                       "right_bypass": "绕开原错误改对", "wrong_fix": "两次没改对", "wrong_judge": "判断错",
                       "skipped": "跳过"}.get(a.outcome, "没做完")
+            full = _quiz_full(a, item) if include_text else None
             add(user_id=a.user_id, time=a.created_at, kind=kind, course=course_of(a.skill_code or "C"),
+                section=SECTION_REVIEW if kind == "review" else in_chat.get(a.id, ""),
+                text=full["text"] if full else "", code=full["code"] if full else "",
                 action="复习题" if kind == "review" else "小题",
                 problem_id=item.source_problem_id if item else None,
                 problem=_problem_title(s, titles, item.source_server_id if item else None,
@@ -239,8 +291,10 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                       "challengeAssigned": True if any(e.get("kind") == "challenge" for e in a.events or [])
                       else False if any(e.get("kind") == "no_challenge" for e in a.events or []) else None,
                       "challengeVersion": CHALLENGE_VERSION if a.protocol >= 3 else None,
-                      "events": [{k: v for k, v in e.items() if k in ("t", "kind", "misjudge", "pass", "triggerAt", "triggerReason", "phase", "secondsSinceTrigger", "keep")}
-                                 for e in (a.events or [])]})
+                      "events": list(a.events or []) if include_text else
+                      [{k: v for k, v in e.items() if k in ("t", "kind", "misjudge", "pass", "triggerAt", "triggerReason", "phase", "secondsSinceTrigger", "keep")}
+                       for e in (a.events or [])],
+                      **(full["data"] if full else {})})
 
     if "round" in kinds:
         q = select(m.ChatRound).where(m.ChatRound.user_id.in_(user_ids), m.ChatRound.started_at >= date_from,
@@ -251,7 +305,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             n_student = sum(1 for _ in s.scalars(select(m.ChatMessage.id).where(
                 m.ChatMessage.round_id == r.id, m.ChatMessage.role == "student", m.ChatMessage.kind == "text")).all())
             minutes = round(((r.ended_at or r.last_message_at) - r.started_at).total_seconds() / 60, 1)
-            add(user_id=r.user_id, time=r.started_at, kind="round",
+            add(user_id=r.user_id, time=r.started_at, kind="round", section=_section(r.problem_id),
                 action="通过后的回顾" if r.end_reason == m.REFLECT_END else "求助回合", course=r.course,
                 problem_id=r.problem_id, problem=_problem_title(s, titles, r.server_id, r.problem_id),
                 submission_id=r.submission_id,
@@ -348,10 +402,39 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
         for e in events:
             kind, action = UI_KIND[e.kind]
             add(user_id=e.user_id, time=e.ts, kind=kind, action=action, detail=e.target or "", course=e.course,
+                section=SECTION_REVIEW if kind == "review" else "",
                 data={"event": e.kind, "target": e.target})
 
     rows.sort(key=lambda r: (r.time, r.user_id))
     return rows
+
+
+def _quiz_full(a: m.QuizAttempt, item: m.QuizItem | None) -> dict:
+    """一次小题作答的全过程（勾了“包含原文”才有）：题、给的代码、他的首稿、每次运行、反馈后的问答、做完后的回顾。
+
+    这些都是我们自己出的题和他在这里写的东西，不含 XDOJ 的测试点。
+    """
+    runs = [{"kind": r.get("kind"), "message": r.get("message"), "counted": r.get("counted"),
+             "choice": r.get("choice"), "code": r.get("code") or ""} for r in (a.runs or [])]
+    turns = [{k: v for k, v in turn.items() if k in ("t", "question", "answer")} for turn in (a.discussion or [])]
+    recap = a.recap or None
+    quiz = None
+    if item is not None:
+        quiz = {"stem": item.stem, "caption": item.caption, "shownCode": item.shown_code, "startLine": item.start_line,
+                "judgedCode": item.judged_code or None, "hasBug": item.has_bug, "bugLines": list(item.bug_lines or []),
+                "standardFix": item.standard_fix or None, "explanation": item.explanation or None}
+    text = []
+    if item is not None:
+        text.append(f"题干：{item.stem}")
+    for turn in turns:
+        text.append(f"他问：{turn.get('question', '')}\n智能体答：{turn.get('answer', '')}")
+    if recap and recap.get("analysis"):
+        text.append(f"做完后的回顾：{recap['analysis']}")
+    code = [("给的代码", item.shown_code if item else ""), ("首稿", a.first_fix or "")]
+    code += [(f"第 {i} 次运行（{r['kind'] or ''}）", r["code"]) for i, r in enumerate(runs, 1)]
+    return {"text": "\n\n".join(text), "code": _join_code(code),
+            "data": {"quiz": quiz, "firstFix": a.first_fix or None, "runs": runs, "discussion": turns,
+                     "recap": recap}}
 
 
 def allowed_students(s: Session, user: m.User) -> set[str] | None:
@@ -375,7 +458,7 @@ def allowed_students(s: Session, user: m.User) -> set[str] | None:
 
 def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_from: dt.datetime,
            date_to: dt.datetime, kinds: list[str], include_text: bool, fmt: str, purpose: str,
-           course: str = "C") -> m.LogRequest:
+           course: str = "C", include_code: bool = False) -> m.LogRequest:
     now = db.now()
     kinds = [k for k in dict.fromkeys(kinds) if k in KINDS]
     if not kinds:
@@ -415,10 +498,11 @@ def create(s: Session, user: m.User, ids_text: str, class_ids: list[str], date_f
     req = m.LogRequest(
         requester_id=user.id, requester_name=user.display_name or user.login_name, requested_ids=requested, course=course,
         granted_ids=granted, denied_ids=denied, class_keys=list(class_ids), date_from=date_from,
-        date_to=min(date_to, now), kinds=kinds, include_text=bool(include_text), fmt=fmt,
+        date_to=min(date_to, now), kinds=kinds, include_text=bool(include_text),
+        include_code=bool(include_code and include_text), fmt=fmt,
         purpose=purpose.strip()[:200], token=secrets.token_urlsafe(24), status="ready", created_at=now,
         expires_at=now + dt.timedelta(days=TTL_DAYS))
-    req.rows = len(collect(s, granted, req.date_from, req.date_to, kinds, include_text, course))
+    req.rows = len(collect(s, granted, req.date_from, req.date_to, kinds, include_text, course, req.include_code))
     s.add(req)
     s.flush()
     return req
@@ -431,15 +515,15 @@ def state_of(req: m.LogRequest, at: dt.datetime | None = None) -> str:
 
 
 COLUMNS = [("user_id", "学号"), ("name", "姓名"), ("time", "时间"), ("kind", "类型"), ("action", "交互"),
-           ("course", "课程"), ("problem_id", "题号"), ("problem", "题目"), ("submission_id", "提交编号"),
-           ("samples", "样例"), ("detail", "详情"), ("text", "原文")]
+           ("section", "栏目"), ("course", "课程"), ("problem_id", "题号"), ("problem", "题目"),
+           ("submission_id", "提交编号"), ("samples", "样例"), ("detail", "详情"), ("text", "原文"), ("code", "代码")]
 
 
 def versions() -> dict:
     """导出里各指标的版本（定义改了版本号就变，docs/研究数据与指标.md）。"""
     from . import config, decisions, diagnosis, helpeffect, stuckstats
 
-    return {"stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION, "decisions": decisions.VERSION,
+    return {"export": EXPORT_VERSION, "stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION, "decisions": decisions.VERSION,
             "prompt": config.PROMPT_VERSION,
             "diagnosis": diagnosis.VERSION, "quizProtocol": 2,
             "graph": config.GRAPH_VERSION,
@@ -448,9 +532,10 @@ def versions() -> dict:
 
 def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:
     """按申请时定下的范围现生成文件。返回 (内容, MIME 类型, 文件名)。"""
-    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text, req.course)
+    rows = collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text, req.course,
+                   req.include_code)
     stamp = req.created_at.astimezone(db.BEIJING).strftime("%Y%m%d-%H%M")
-    cols = [c for c in COLUMNS if c[0] != "text" or req.include_text]
+    cols = [c for c in COLUMNS if c[0] not in ("text", "code") or req.include_text]
 
     def value(r: Row, key: str):
         v = getattr(r, key)
@@ -464,6 +549,7 @@ def render(s: Session, req: m.LogRequest) -> tuple[bytes, str, str]:
         payload = {
             "request": {"id": req.id, "requester": req.requester_name, "createdAt": req.created_at.isoformat(),
                         "from": req.date_from.isoformat(), "to": req.date_to.isoformat(), "kinds": req.kinds,
+                        "includeText": req.include_text, "includeCode": req.include_code,
                         "students": req.granted_ids, "purpose": req.purpose, "versions": versions()},
             "rows": [{**{k: value(r, k) for k, _ in cols}, "data": r.data} for r in rows],
         }
@@ -481,7 +567,8 @@ def view(req: m.LogRequest, at: dt.datetime | None = None) -> dict:
     return {
         "id": req.id, "createdAt": req.created_at.isoformat(), "requester": req.requester_name,
         "from": req.date_from.isoformat(), "to": req.date_to.isoformat(), "kinds": req.kinds,
-        "kindNames": [KINDS.get(k, k) for k in req.kinds], "includeText": req.include_text, "format": req.fmt,
+        "kindNames": [KINDS.get(k, k) for k in req.kinds], "includeText": req.include_text,
+        "includeCode": req.include_code, "format": req.fmt,
         "purpose": req.purpose, "granted": len(req.granted_ids), "denied": req.denied_ids, "rows": req.rows,
         "status": state_of(req, at), "expiresAt": req.expires_at.isoformat(), "downloads": req.downloads,
         "token": req.token if state_of(req, at) == "ready" else None,

@@ -8,7 +8,8 @@
 - 作业里还没标注的题按 XDOJ 的标签兜底标上，以前没记上的“第一次通过”补记（掌握程度不再只剩失败）；
 - 以前的程序处理的 PDF 题面重新抽一遍，抽好了还没交给大模型整理的整理一遍（pdftext.py）；
 - 给最近来过、有到期复习的学生提前备好一道复习题（review.prepare_active），进“复习提升”就能做；
-- 给作业里的题提前做好解题步骤（chat/plan.py 的流程图，大模型按题面分，每道题一次，所有学生共用）。
+- 给作业里的题提前做好解题步骤（chat/plan.py 的流程图，大模型按题面分，每道题一次，所有学生共用）；
+- 每天备份一次整个库（backup.py，全部保留）。
 
 每天夜里（graphmodel.nightly）：把没评完的回合评完、图模型全图更新、补记预测、重新学融合权重、
 跨课程联系自动补充、检验、采用或不用（cross.auto_links）。
@@ -19,7 +20,7 @@ import logging
 import threading
 import time
 
-from . import assess, db, graphmodel, mastery, pdftext, pipeline, review
+from . import assess, backup, db, graphmodel, mastery, pdftext, pipeline, review
 from .labeling import problems
 from .chat import workflow
 
@@ -27,7 +28,7 @@ log = logging.getLogger("automation")
 
 _last: dict[str, float] = {}
 EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0,
-         "plans": 60.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
+         "plans": 60.0, "backup": 600.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
 
 
 def _due(name: str) -> bool:
@@ -99,4 +100,10 @@ def idle_work() -> int:
         if planned:
             _last["plans"] = -1e9
         done += planned
+    if _due("backup"):
+        # 每天一份整个库的备份（已有就不做）；出错只记日志，十分钟后再试
+        try:
+            done += 1 if backup.run() else 0
+        except Exception:
+            log.exception("备份库失败")
     return done

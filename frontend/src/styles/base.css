@@ -258,6 +258,16 @@ select.field {
   accent-color: var(--ink);
 }
 
+.check-sub {
+  display: flex;
+  margin-left: calc(16px + var(--sp-8));   /* 缩进到上一项的文字下面 */
+}
+
+.check:has(input:disabled) {
+  color: var(--ink-3);
+  cursor: default;
+}
+
 /* ---------- 文字 ---------- */
 .muted {
   color: var(--ink-2);

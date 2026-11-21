@@ -593,7 +593,7 @@ def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(stu
                               answer)
     except llm.LLMUnavailable:
         raise HTTPException(status_code=503, detail="复习答疑暂时连不上。你可以保留问题，稍后重试。")
-    a.discussion = [*turns, {"id": body.requestId, "question": question, "answer": reply}]
+    a.discussion = [*turns, {"id": body.requestId, "question": question, "answer": reply, "t": db.now().isoformat()}]
     return {"turns": a.discussion}
 
 

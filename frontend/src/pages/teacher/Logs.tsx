@@ -18,7 +18,7 @@ interface LogMeta {
 
 interface RequestView {
   id: number; createdAt: string; requester: string; from: string; to: string; kinds: string[]; kindNames: string[];
-  includeText: boolean; format: string; purpose: string; granted: number; denied: string[]; rows: number;
+  includeText: boolean; includeCode: boolean; format: string; purpose: string; granted: number; denied: string[]; rows: number;
   status: "ready" | "expired" | "revoked"; expiresAt: string; downloads: number; token: string | null;
 }
 
@@ -47,6 +47,7 @@ export default function Logs() {
   const [to, setTo] = useState(() => isoDay(new Date()));
   const [kinds, setKinds] = useState<string[] | null>(null);
   const [includeText, setIncludeText] = useState(false);
+  const [includeCode, setIncludeCode] = useState(false);
   const [format, setFormat] = useState<"csv" | "json">("csv");
   const [purpose, setPurpose] = useState("");
   const [busy, setBusy] = useState(false);
@@ -65,7 +66,8 @@ export default function Logs() {
     setError(null);
     try {
       const r = await post<CreateResult>("/api/teacher/logs", {
-        ids, classKeys, dateFrom: from, dateTo: to, kinds: chosenKinds, includeText, format, purpose,
+        ids, classKeys, dateFrom: from, dateTo: to, kinds: chosenKinds, includeText,
+        includeCode: includeText && includeCode, format, purpose,
       });
       setResult(r);
       meta.reload();
@@ -129,7 +131,12 @@ export default function Logs() {
               </div>
               <label className="check">
                 <input type="checkbox" checked={includeText} onChange={(e) => setIncludeText(e.target.checked)} />
-                包括学生提问和智能体回复的原文（默认不给，只给长度和类型）
+                包含原文：对话文字和贴的代码、复习小题的作答过程和问答
+              </label>
+              <label className="check check-sub">
+                <input type="checkbox" checked={includeText && includeCode} disabled={!includeText}
+                  onChange={(e) => setIncludeCode(e.target.checked)} />
+                包含提交的源码
               </label>
             </fieldset>
             <fieldset>
@@ -206,7 +213,7 @@ export default function Logs() {
                   <tr key={r.id}>
                     <td className="nowrap muted">{shortTime(r.createdAt)}</td>
                     {m.admin && <td>{r.requester}</td>}
-                    <td><span className="cell-title">{r.granted} 人 · {r.rows} 条</span><span className="cell-sub">{r.from.slice(0, 10)} 到 {r.to.slice(0, 10)} · {r.format.toUpperCase()}{r.includeText ? " · 含原文" : ""}</span></td>
+                    <td><span className="cell-title">{r.granted} 人 · {r.rows} 条</span><span className="cell-sub">{r.from.slice(0, 10)} 到 {r.to.slice(0, 10)} · {r.format.toUpperCase()}{r.includeText ? (r.includeCode ? " · 含原文和源码" : " · 含原文") : ""}</span></td>
                     <td className="muted">{r.kindNames.join("、")}</td>
                     <td>{r.purpose}</td>
                     <td><span className={STATUS[r.status].cls}>{STATUS[r.status].text}</span>{r.status === "ready" && <span className="cell-sub">{shortTime(r.expiresAt)} 失效</span>}</td>
