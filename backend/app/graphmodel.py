@@ -97,7 +97,11 @@ def infer(evidence: dict[str, tuple[float, float]], rng: random.Random | None = 
 
 def evidence_of(s: Session, user_id: str, at: dt.datetime | None = None) -> dict[str, tuple[float, float]]:
     """采用 v2 的作答证据权重，包括失败和通过可信度，排除对话的智能体估分。"""
-    states = mastery.skill_states(s, user_id, at=at, model="v2", include_agent=False, replay=at is not None)
+    if at is None:
+        states = mastery.skill_states(s, user_id, at=at, model="v2", include_agent=False)
+    else:
+        # 夜间回算采用历史时点可用的参数和标注。
+        states = mastery.skill_states(s, user_id, at=at, model="v2", include_agent=False, replay=True)
     return {code: (st.s, st.f) for code, st in states.items() if st.s + st.f > 0}
 
 
