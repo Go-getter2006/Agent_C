@@ -47,8 +47,8 @@ interface Props {
   emptyTitle: string;
   emptyText: string;
   placeholder?: string;
-  emptyReady?: boolean;
   waitingContext?: boolean;
+  pollHistory?: boolean;
   latestNotice?: number;
   onNoticeRead?: () => void;
   context?: ThreadContext | null;
@@ -62,12 +62,14 @@ function looksLikeCode(text: string): boolean {
 }
 
 export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, onNoticeRead, context, contextOffer,
-  emptyReady = true, waitingContext = false, onThread, onActivity }: Props) {
+  waitingContext = false, pollHistory = true, onThread, onActivity }: Props) {
   const cache = useStudentCache().threads;
   const request = useRef<AbortController | null>(null);
   const [messages, setMessages] = useState<Message[] | null>(() => cache.get(threadKey) ?? null);
   const [owner, setOwner] = useState(threadKey);
   const stale = owner !== threadKey;
+  const waitingMessages = messages === null;
+  const hasNewNotice = !stale && (latestNotice ?? 0) > (messages?.[messages.length - 1]?.id ?? 0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
   const [failed, setFailed] = useState<{ payload: Payload; message: string } | null>(null);
@@ -89,7 +91,6 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   const followBottom = useRef(true);
   const [newBelow, setNewBelow] = useState(false);
   const reading = useRef(new Set<number>());
-  const requestedNotice = useRef<number>();
 
   const load = useCallback((silent: boolean) => {
     const key = keyRef.current;
@@ -120,7 +121,6 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     setMessages(cached ?? null);
     setOwner(threadKey);
     followBottom.current = true;
-    requestedNotice.current = undefined;
     setNewBelow(false);
     setLoadError(null);
     setPending(sending.current.get(threadKey) ?? null);
@@ -131,21 +131,20 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     return () => { request.current?.abort(); loadSeq.current += 1; };
   }, [threadKey, load]);
 
-  // 当前题的提醒和对话，切回标签后也会在下一次轮询时更新。
+  // 作业引导复用侧栏的提醒轮询；只在首次读取或收到提醒失败时定时重试。
   useEffect(() => {
+    if (!pollHistory && !waitingMessages && !hasNewNotice) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && !busy) load(true);
     }, 15000);
     return () => window.clearInterval(timer);
-  }, [busy, load]);
+  }, [busy, load, pollHistory, waitingMessages, hasNewNotice]);
 
   useEffect(() => {
-    if (latestNotice && !stale && messages && !busy && requestedNotice.current !== latestNotice
-        && latestNotice > (messages[messages.length - 1]?.id ?? 0)) {
-      requestedNotice.current = latestNotice;
+    if (hasNewNotice && !waitingMessages && !busy && document.visibilityState === "visible") {
       load(true);
     }
-  }, [latestNotice, threadKey, stale, busy, messages, load]);
+  }, [hasNewNotice, latestNotice, threadKey, busy, waitingMessages, load]);
 
   useEffect(() => {
     const root = scroller.current;
@@ -262,11 +261,11 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
         if (followBottom.current) setNewBelow(false);
         saveScroll(threadKey, el.scrollTop);
       }}>
-        {(stale || messages === null || (!list.length && !emptyReady && !shown)) && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
+        {(stale || messages === null) && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
         {loadError && <div className="chat-list"><Problem message={loadError} onRetry={() => load(false)} /></div>}
         {!stale && messages !== null && (
           <div className="chat-list" aria-live="polite">
-            {list.length === 0 && !shown && emptyReady && !loadError && (
+            {list.length === 0 && !shown && !loadError && (
               <div className="chat-empty">
                 <EmptyScene />
                 <strong>{emptyTitle}</strong>
