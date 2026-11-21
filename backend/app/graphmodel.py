@@ -163,13 +163,19 @@ def log_predictions(s: Session, user_id: str) -> int:
         from . import profile
 
         feats, fused, v2_base = profile.prediction_snapshot(s, user_id, label.primary_skill, before)
+        # 掌握分：这一周学到的参数，和经验值参数（app/learn.py），同时记下来比谁准
+        fixed = mastery.skill_states(s, user_id, at=before, model="v2", params=mastery.PRIOR,
+                                     graph_prior=False).get(label.primary_skill)
+        learned = v2 if v2 is not None and not v2.predicted else None
         s.add(m.PredictionLog(
             user_id=user_id, skill_code=label.primary_skill, source_key=source_key, ts=sub.submit_time,
             outcome=sub.judgement == "AC", p_simple=round(simple.p if simple else 0.5, 4),
             p_v2=round(v2.p if v2 else 0.5, 4),
             p_graph=round(graph_pass, 4),
             p_fused=round(fused, 4) if fused is not None else None, p_v2_base=round(v2_base, 4), features=feats,
-            model_version=config.GRAPH_VERSION))
+            model_version=config.GRAPH_VERSION,
+            p_score=round(learned.score if learned else 0.5, 4), p_score_fixed=round(fixed.score if fixed else 0.5, 4),
+            params_version=(learned.params_version if learned else mastery.active_params(s, label.primary_skill[0]).version)))
         n += 1
     return n
 
@@ -195,7 +201,12 @@ def nightly(user_ids: list[str] | None = None) -> dict:
     with db.session_scope() as s:
         weights = profile.refit(s)
         links = cross.auto_links(s)   # 跨课程的联系：智能体补充、用新记下的预测检验、按检验结果采用或不用
-    return {"students": len(ids), "predictions": n_pred, "assessed": assessed, "weights": weights, "links": links}
+    from . import learn
+
+    with db.session_scope() as s:
+        params = learn.weekly(s)   # 每周一次：学掌握程度的参数（先补预测、后学，这一周的预测用的是上一版）
+    return {"students": len(ids), "predictions": n_pred, "assessed": assessed, "weights": weights, "links": links,
+            "params": params}
 
 
 # ------------------------------------------------------------ 教师端用的汇总
@@ -302,7 +313,11 @@ def _weekly_accuracy(rows: list[m.PredictionLog], at: dt.datetime, weeks: int) -
         newer = [r for r in items if r.p_fused is not None and r.p_v2_base is not None]
         nb = len(newer)
         brier_new = lambda get: round(sum((get(r) - (1.0 if r.outcome else 0.0)) ** 2 for r in newer) / nb, 3) if nb else None  # noqa: E731
+        scored = [r for r in items if r.p_score is not None and r.p_score_fixed is not None]
+        ns = len(scored)
+        brier_s = lambda get: round(sum((get(r) - (1.0 if r.outcome else 0.0)) ** 2 for r in scored) / ns, 3) if ns else None  # noqa: E731
         out.append({"weekStart": start.date().isoformat(), "n": n,
+                    "nScore": ns, "scoreBrier": brier_s(lambda r: r.p_score), "scoreFixedBrier": brier_s(lambda r: r.p_score_fixed),
                     "simpleAccuracy": acc(lambda r: r.p_simple), "v2Accuracy": acc(lambda r: r.p_v2),
                     "graphAccuracy": acc(lambda r: r.p_graph),
                     "simpleBrier": brier(lambda r: r.p_simple), "v2Brier": brier(lambda r: r.p_v2),

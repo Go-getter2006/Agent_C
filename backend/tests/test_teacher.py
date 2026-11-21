@@ -147,6 +147,11 @@ def test_stuck_list_and_graph_page(client, demo):
     assert g["edges"] and {"parent", "child", "n", "withParent", "withoutParent", "doubtful"} <= set(g["edges"][0])
     assert all(abs(x["v2"] - x["graph"]) >= config.GRAPH["big_gap"] - 0.006 for x in g["gaps"])
     assert all(x["name"] in ("林晓", "周航") or len(x["name"]) <= 4 for x in g["gaps"]) and all("code" in x["skill"] for x in g["gaps"])
+    # 掌握分每周学的参数：演示数据入库时学了一版；之后的预测同时记这一版和经验值算的分数
+    p = g["masteryParams"]
+    assert p["version"].startswith("C-") and p["learned"] and p["n"] >= config.LEARN["min_opportunities"]
+    assert p["keys"] and all(k["name"] and k["scale"] > 0 for k in p["keys"])
+    assert any(w.get("nScore") for w in g["weekly"]) and all("scoreFixedBrier" in w for w in g["weekly"])
 
 
 def test_other_teacher_sees_nothing(client, demo):

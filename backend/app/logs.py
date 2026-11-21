@@ -235,6 +235,9 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                       "firstFixPass": a.first_fix_pass, "firstFixClean": a.first_fix_clean, "hints": a.hints,
                       "sampleRuns": a.sample_runs, "skipped": a.skipped, "durationMs": a.duration_ms,
                       "challenge": challenge_state(a) if a.protocol >= 3 else None,
+                      # 随机分组：这次分到追问（True）还是不追问（False）；没到这一步的是 None
+                      "challengeAssigned": True if any(e.get("kind") == "challenge" for e in a.events or [])
+                      else False if any(e.get("kind") == "no_challenge" for e in a.events or []) else None,
                       "challengeVersion": CHALLENGE_VERSION if a.protocol >= 3 else None,
                       "events": [{k: v for k, v in e.items() if k in ("t", "kind", "misjudge", "pass", "triggerAt", "triggerReason", "phase", "secondsSinceTrigger", "keep")}
                                  for e in (a.events or [])]})

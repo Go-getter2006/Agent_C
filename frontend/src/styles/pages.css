@@ -2741,8 +2741,6 @@
 .dims-why { font-size: var(--fs-12); color: var(--ink-3); }
 
 /* 分数不低但还不是“已掌握”时的原因（教师端知识图谱、学生明细） */
-.kg-people-why { margin: var(--sp-2) 0 0; font-size: var(--fs-12); color: var(--warn); }
-td .kg-people-why { margin: 0; }
 
 /* 复习安排：每一项右边的“去复习” */
 .review-list .review-go { flex-shrink: 0; }

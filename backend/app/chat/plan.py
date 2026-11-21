@@ -182,6 +182,8 @@ _GUIDE = """你是 C 语言课程的助教。学生在做一道题，解题步�
 不要直接给出答案，不要写完整代码（最多可以提一个很短的写法），不要提测试数据和具体的输入输出。
 如果说明他前面没答上，就讲得更具体一点（把原理说清楚，或举一个和本题不同的小例子），仍然以问题结尾。
 如果说明这是最后一次，就把这一步怎么做直接讲清楚（仍然不写完整代码），不用再问。
+看“最近的对话”：你上一句问了什么、他答了什么，接着他的话说，不重复问同一个问题；他答对了一部分就先肯定那一部分。
+看“他的情况”：哪些知识点他还薄弱、以前在别的题上卡过什么，薄弱的地方讲得更细；不要把这些情况原样说给他听。
 只输出 JSON：{"reply":"……"}"""
 
 
@@ -201,8 +203,10 @@ def guide_template(steps: list[dict], i: int, tries: int) -> str:
 
 
 def guide(steps: list[dict], i: int, tries: int, said: str, statement: str, course: str,
-          tests: list[dict], document=None) -> tuple[str, str]:
-    """引导第 i 步（从 0 数）：(话, llm / template)。tries：这一步他已经没答上几次。"""
+          tests: list[dict], document=None, recent: str = "", situation: list[str] | None = None,
+          who: tuple[str, str] = ("", "")) -> tuple[str, str]:
+    """引导第 i 步（从 0 数）：(话, llm / template)。tries：这一步他已经没答上几次。
+    recent：最近的对话（chat/talk.py）；situation：他的学情、以前卡过的地方；who：(学号, 姓名)，发出去之前去掉。"""
     from .validate import _leaks
 
     fallback = guide_template(steps, i, tries)
@@ -225,7 +229,9 @@ def guide(steps: list[dict], i: int, tries: int, said: str, statement: str, cour
     user = ("【题面】\n" + pdftext.for_llm(statement)[:1500] + "\n【解题步骤】\n" + flow
             + f"\n【现在引导第 {i + 1} 步】" + ("\n【说明】这是最后一次，直接讲清楚这一步" if last
                                               else "\n【说明】他前面没答上，讲得更具体一点" if tries else "")
-            + ("\n【他刚才说的】\n" + llm.strip_identity(said) if said else ""))
+            + ("\n【他的情况】\n" + "\n".join(situation) if situation else "")
+            + ("\n【最近的对话】\n" + recent if recent else "")
+            + ("\n【他刚才说的】\n" + llm.strip_identity(said, *who) if said else ""))
     try:
         return llm.call_json("plan_guide", course_prompt(_GUIDE, course), user, validate, retries=1, max_tokens=300,
                              pages=pdftext.guide_pages(document, statement, said)), "llm"

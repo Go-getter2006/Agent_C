@@ -24,10 +24,17 @@ interface GraphData {
   weekly: {
     weekStart: string; n: number; simpleAccuracy: number; v2Accuracy: number; graphAccuracy: number; simpleBrier: number; v2Brier: number; graphBrier: number;
     nFused: number; fusedBrier: number | null; v2BaseBrier: number | null; v2SameBrier: number | null;
+    nScore?: number; scoreBrier?: number | null; scoreFixedBrier?: number | null;
   }[];
   predictionHistory?: { version: string; weekly: GraphData["weekly"]; legacyGraph: boolean }[];
   fusionWeekly?: GraphData["weekly"];
   fusion: { learned: boolean; n: number; minSamples: number; updatedAt: string | null; weights: { dim: string; name: string; w: number; default: number }[] };
+  masteryParams?: {
+    version: string; learned: boolean; n: number; fittedAt: string; minOpportunities: number; reason: string | null;
+    h0: number; g: number; h0Prior: number; gPrior: number; nllPrior: number | null; nllFit: number | null;
+    keys: { key: string; name: string; opportunities: number; scale: number }[];
+    history: { version: string; learned: boolean; n: number }[];
+  } | null;
 }
 
 /** 几周合起来的 Brier：按每周的预测条数加权。 */
@@ -84,6 +91,55 @@ function FusionWeights({ d }: { d: GraphData }) {
           </table>
           <p className="card-foot">融合：把有数据的维度取 logit 加权相加再变回概率。哪个维度更能预测“下一道新题能不能一次做对”，学出来的权重就越大；橙色是负的权重（在本班的数据里，这一维越高，下一题反而越难一次做对）。</p>
         </Card>
+    </>
+  );
+}
+
+/** 掌握分的参数（learn.py）：每周学一版、冻结；之后的预测里同时记这一版和经验值算的掌握分，比谁准。 */
+function MasteryParams({ d }: { d: GraphData }) {
+  const p = d.masteryParams;
+  const weeks = d.weekly.filter((w) => (w.nScore ?? 0) > 0);
+  const n = weeks.reduce((s, w) => s + (w.nScore ?? 0), 0);
+  const pool = (key: "scoreBrier" | "scoreFixedBrier") => {
+    const rows = weeks.filter((w) => w[key] !== null && w[key] !== undefined);
+    const k = rows.reduce((s, w) => s + (w.nScore ?? 0), 0);
+    return k ? rows.reduce((s, w) => s + (w[key] as number) * (w.nScore ?? 0), 0) / k : null;
+  };
+  const stats = [{ name: "每周学的参数", v: pool("scoreBrier") }, { name: "经验值（对照）", v: pool("scoreFixedBrier") }];
+  return (
+    <>
+      <div className="stats">
+        {stats.map((s) => (
+          <div key={s.name} className="card stat">
+            <span className="stat-label">{s.name}</span>
+            <div className="stat-row"><span className="stat-value num">{s.v === null ? "—" : s.v.toFixed(3)}</span></div>
+            <span className="stat-foot">掌握分预测下一道新题，平均 Brier（{n} 次预测）</span>
+          </div>
+        ))}
+      </div>
+      {p && (
+        <div className="sec-narrow">
+          <Card title={`这一周的参数 · ${p.version}`} sub={p.learned
+              ? `用 ${p.n} 次“新题第一次提交”学的，${fullTime(p.fittedAt)}；经验值是先验，数据少的类别几乎不动`
+              : (p.reason ?? `机会不到 ${p.minOpportunities} 次，沿用经验值`)} bodyClass="">
+            {p.learned && p.keys.length > 0 && (
+              <table className="table">
+                <thead><tr><th scope="col">证据</th><th scope="col" className="num">出现在几次机会里</th><th scope="col" className="num">系数（经验值 1）</th></tr></thead>
+                <tbody>
+                  {p.keys.map((k) => (
+                    <tr key={k.key}><td>{k.name}</td><td className="num">{k.opportunities}</td><td className="num">{k.scale.toFixed(2)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="card-foot">
+              掌握分 = (1 + 会) / (2 + 会 + 不会)，每条证据乘这一类的系数、按半衰期衰减。半衰期起点 {p.h0} 天（经验值 {p.h0Prior}），
+              每多一次隔天的独立成功乘 {p.g}（经验值 {p.gPrior}）。
+              {p.nllPrior !== null && p.nllFit !== null ? ` 拟合时平均对数损失 ${p.nllPrior.toFixed(3)} → ${p.nllFit.toFixed(3)}；好不好看上面之后的预测。` : ""}
+            </p>
+          </Card>
+        </div>
+      )}
     </>
   );
 }
@@ -199,6 +255,9 @@ export default function Models({ cls }: { cls: ClassInfo }) {
           ? "旧版的图模型列直接使用掌握估计计算误差，供历史查看。"
           : "Brier 分数是预估首次通过概率和实际结果（通过 = 1）之差的平方的平均。"}</p>
       </Card>
+
+      <h2 className="sec-head">掌握分的参数<span>每周学一版，下一周都用它；和经验值比之后的预测</span></h2>
+      <MasteryParams d={d} />
 
       <h2 className="sec-head">多维融合<span>每个维度的权重按数据学，每天夜里更新</span></h2>
       <FusionStats d={d} />

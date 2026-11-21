@@ -37,6 +37,22 @@ def _fresh_page_cache():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_mastery_params():
+    """每周学到的掌握程度参数在进程里缓存（mastery.active_params）：换了库的测试不能拿到上一个库学的那一版。"""
+    from app import mastery
+
+    mastery.forget_active_params()
+    yield
+    mastery.forget_active_params()
+
+
+@pytest.fixture(autouse=True)
+def _always_challenge(monkeypatch):
+    """小题判断“满足要求”以后追不追问是随机的（一半）；测试里默认一定追问，测随机的测试自己改。"""
+    monkeypatch.setitem(config.QUIZ, "challenge_p", 1.0)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_xdoj(monkeypatch):
     """测试不连真实的 XDOJ：登录时没注入假 XDOJ 的，一律当作连不上（代码里写着 C 语言那台的真实地址）。"""
     import httpx

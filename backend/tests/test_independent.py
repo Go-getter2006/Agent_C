@@ -203,8 +203,19 @@ def test_old_protocol_attempts_still_work(bank):
         assert a.state == "edit"
 
 
+def _only_bank_skills_due(s):
+    """演示环境没有大模型：只让题库里有题的复习项到期（先出哪项是随机抽的，抽到哪项都要出得了题）。"""
+    import datetime as dt
+
+    bank = set(s.scalars(select(m.QuizItem.skill_code).where(m.QuizItem.verified.is_(True))).all())
+    for item in s.scalars(select(m.ReviewItem).where(m.ReviewItem.user_id == UID)).all():
+        if item.skill_code not in bank:
+            item.due_at = db.now() + dt.timedelta(days=30)
+
+
 def test_review_page_prepares_one_ready_question(demo):
     with db.session_scope() as s:
+        _only_bank_skills_due(s)
         assert review.ready_count(s, UID, "C") == 0
         status = review.prepare(s, UID, "C")
         assert status == "ready" and review.ready_count(s, UID, "C") == 1
@@ -215,18 +226,49 @@ def test_review_page_prepares_one_ready_question(demo):
 
 
 def test_one_item_that_cannot_be_made_does_not_block_the_rest(demo, monkeypatch):
-    """排在最前面的一项这会儿出不了题：换下一项，不让一项卡住全部。"""
+    """抽到的一项这会儿出不了题：从剩下的里再抽，不让一项卡住全部；每一次抽样都记在决策记录里。"""
     from app import quizgen
 
     with db.session_scope() as s:
-        due = review.due_items(s, UID, course="C")
+        due = review.due_items(s, UID, course="C", candidates=True)
         assert len(due) >= 2
-        first, second = due[0].skill_code, due[1].id
-        # 第一项出不了题；别的项能出（演示数据没有大模型，有的技能题库里没有题：直接给一道题库里验证过的题）
+        bad = due[0].skill_code
         bank = s.scalars(select(m.QuizItem).where(m.QuizItem.verified.is_(True))).first()
         assert bank is not None
-        monkeypatch.setattr(quizgen, "generate", lambda s_, u, skill, *a, **k: None if skill == first else bank)
+        monkeypatch.setattr(quizgen, "generate", lambda s_, u, skill, *a, **k: None if skill == bad else bank)
+        # 让第一次抽样一定抽到排在最前、出不了题的那一项（第一个数最小），之后随便
+        calls = iter([0.0] + [0.5] * 100)
+        monkeypatch.setattr(review._rng, "betavariate", lambda a, b: next(calls))
         assert review.prepare(s, UID, "C") == "ready"
         pending = s.scalars(select(m.QuizAttempt).where(m.QuizAttempt.reason == "review",
                                                         m.QuizAttempt.state != "done")).all()
-        assert len(pending) == 1 and pending[0].review_item_id == second
+        assert len(pending) == 1 and s.get(m.ReviewItem, pending[0].review_item_id).skill_code != bad
+        pick = s.scalars(select(m.DecisionLog).where(m.DecisionLog.kind == "review_pick")
+                         .order_by(m.DecisionLog.id.desc())).first()
+        assert len(pick.context["draws"]) >= 2 and pick.context["missed"]
+
+
+def test_challenge_is_randomized_and_recorded(bank, monkeypatch):
+    """判断“满足要求”以后追不追问是随机的（config.QUIZ['challenge_p']），每一次都记进决策记录，记真实概率。
+    不追问的直接出反馈；坚持率、改判率只算追问了的。"""
+    from app import config, diagnosis
+
+    monkeypatch.setitem(config.QUIZ, "challenge_p", 0.5)
+    with db.session_scope() as s:
+        monkeypatch.setattr(quiz._challenge_rng, "random", lambda: 0.9)     # 0.9 ≥ 0.5：这次不追问
+        a = attempt_for(s, "max-plain-judge")
+        quiz.judge2(s, a, False)
+        assert a.state == "done" and a.outcome == "right_judge" and "challenge" not in quiz.view(s, a)
+        assert kinds(a) == ["prepared", "judge", "no_challenge", "feedback"]
+        log = s.scalars(select(m.DecisionLog).where(m.DecisionLog.kind == "challenge")).one()
+        assert (log.chosen, log.probability, log.rule, log.ref["attempt"]) == ("none", 0.5, "challenge-random-1", a.id)
+
+        monkeypatch.setattr(quiz._challenge_rng, "random", lambda: 0.1)     # 这次追问
+        b = attempt_for(s, "max-plain-judge")
+        quiz.judge2(s, b, False)
+        assert b.state == "challenge"
+        logs = s.scalars(select(m.DecisionLog).where(m.DecisionLog.kind == "challenge").order_by(m.DecisionLog.id)).all()
+        assert (logs[-1].chosen, logs[-1].probability) == ("challenge", 0.5)
+        quiz.challenge_reply(s, b, keep=True)
+        d = diagnosis.count([(a, s.get(m.QuizItem, a.item_id)), (b, s.get(m.QuizItem, b.item_id))])["C06.03"]
+        assert (d.held.n, d.held.d) == (1, 1)                              # 没追问的那次不进坚持率

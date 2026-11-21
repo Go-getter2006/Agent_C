@@ -226,6 +226,11 @@ _SYSTEM = """你是大学 C 语言课程的答疑助手，在帮一名学生看�
 5. 只做下面“这次的任务”要求的事，不多给。"""
 
 
+def _squash(text: str) -> str:
+    """比较两句话是不是一个意思：去掉标点、空白和“自己”。"""
+    return re.sub(r"[\s，。、！？,.!?“”\"'`]|自己", "", text)
+
+
 def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: list[tuple[str, str]],
                  prior_ref: str = "", feedback: str = "") -> Draft:
     """让大模型写回复。结构不对就抛 LLMUnavailable，由调用方退回模板。"""
@@ -236,6 +241,8 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         before, after = str(d.get("before") or "").strip(), str(d.get("after") or "").strip()
         if not (before or after):
             raise ValueError("回复是空的")
+        if before and after and _squash(after) in _squash(before):
+            after = ""   # 结尾那句和前面说过的重复了（大模型常把“改完再交一次”写两遍）
         quote = None
         q = d.get("quote")
         if isinstance(q, dict) and n_lines:
@@ -277,7 +284,9 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         f"能不能给自己构造的小例子：{'能' if decision.reveal_level == '乙' else '不能，只说是哪类情况'}",
         f"他以前卡过的那道题：{prior_ref}" if prior_ref else "",
     ]
-    talk = "\n".join(f"{'学生' if who == 'student' else '助手'}：{what[:300]}" for who, what in history[-4:])
+    from .talk import dialogue
+
+    talk = dialogue(history, ctx.user_id, ctx.user_name)
     evidence = llm.evidence_for_model(ctx.evidence or {}, ctx.user_id, ctx.user_name)
     statement = pdftext.for_llm(llm.strip_identity(ctx.statement, ctx.user_id, ctx.user_name)) or evidence.get("problemText")
     evidence.pop("problemText", None)   # 题面已单独提供一次

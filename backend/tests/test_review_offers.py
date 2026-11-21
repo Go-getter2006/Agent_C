@@ -85,12 +85,18 @@ def test_background_preparation_during_chat_does_not_interrupt(database, monkeyp
         assert all(msg.role == "student" for msg in s.scalars(select(m.ChatMessage)))
 
 
-def test_failures_are_prioritized_over_spot_checks(database):
+def test_failures_are_more_likely_picked_than_spot_checks(database):
+    """后验抽样：有失败证据的（掌握分低）比只做对过、被抽查的更可能先出；概率算得出来。"""
     now=db.now()
     with db.session_scope() as s:
         wrong,_=setup(s,now)
+        mastery.record_stuck(s,UID,wrong.skill_code,1,"stuck:1",ts=now-dt.timedelta(days=3))
         spot=review.enqueue(s,UID,"C02.01.02","spot_check",at=now-dt.timedelta(days=60))
-        assert review.due_items(s,UID,now,"C")[0].id==wrong.id
+        mastery.add_evidence(s,UID,"C02.01.02","pass_first_try",True,1.0,"pass:9:1",now-dt.timedelta(days=60),True)
+        due=review.due_items(s,UID,now,"C",candidates=True)
+        states=mastery.skill_states(s,UID,at=now,model="v2")
+        probs=dict(zip([r.id for r in due],review.lowest_probabilities([review.beta_of(states.get(r.skill_code)) for r in due])))
+        assert probs[wrong.id]>probs[spot.id]>0
 
 
 def test_fixed_submission_retains_review_and_upgrades_reason(database):
@@ -222,7 +228,7 @@ def test_worker_waits_before_preparing_corrections(database, monkeypatch):
 
 
 
-def test_review_ranks_evidence_above_age_and_waits_before_rechecking(database):
+def test_review_samples_by_evidence_and_waits_before_rechecking(database):
     now = db.now()
     with db.session_scope() as s:
         oldest = review.enqueue(s, UID, "C02.01.02", "stuck", at=now - dt.timedelta(days=60))
@@ -231,7 +237,12 @@ def test_review_ranks_evidence_above_age_and_waits_before_rechecking(database):
         verify = review.enqueue(s, UID, "C04.03.01", "verify", 1, 402, now - dt.timedelta(days=2), 200)
         recent = review.enqueue(s, UID, "C05.02.01", "repeated_fix", 1, 405, now - dt.timedelta(hours=10), 300)
         mastery.record_stuck(s, UID, weak.skill_code, 2, "stuck:201", ts=now - dt.timedelta(days=2))
-        assert [r.id for r in review.due_items(s, UID, now, "C", candidates=True)] == [
-            weak.id, repeated.id, verify.id, oldest.id]
+        due = review.due_items(s, UID, now, "C", candidates=True)
+        assert {r.id for r in due} == {weak.id, repeated.id, verify.id, oldest.id}   # 刚记的还没到期
+        assert due[0].id == oldest.id                                                # 列出来按到期先后
+        # 先出哪个由后验抽样定：有卡住证据的掌握分最低，被选中的概率最大
+        states = mastery.skill_states(s, UID, at=now, model="v2")
+        probs = review.lowest_probabilities([review.beta_of(states.get(r.skill_code)) for r in due])
+        assert max(zip(probs, [r.id for r in due]))[1] == weak.id
         assert not review.item_view(s, UID, recent, now)["dueNow"]
         assert "雷同" not in review.ORIGIN_TEXT[verify.origin]

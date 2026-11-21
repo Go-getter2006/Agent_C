@@ -8,12 +8,13 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 
 from sqlalchemy.orm import Session
 
-from .. import catalog, changes, llm
+from .. import catalog, changes, llm, pdftext
 from ..taxonomy import course_prompt, error_name
 
 log = logging.getLogger("chat.retro")
@@ -38,6 +39,22 @@ def history(s: Session, user_id: str, server_id: int, problem_id: int) -> list[d
             "fixed": ch.get("fixed", []), "still": ch.get("still", []), "new": ch.get("new", []),
         })
     return out
+
+
+def last_failure(s: Session, user_id: str, server_id: int, problem_id: int, name: str = "") -> str:
+    """最后一次没过的那次：他的代码（带行号）和没通过的测试点。只给大模型分析“当时错在哪”，回复里不能出现测试数据。"""
+    from ..xdoj.assemble import assemble_submission
+
+    subs = catalog.user_submissions(s, user_id, server_id, problem_id)
+    failed = [(i, x) for i, x in enumerate(subs, start=1) if x.judgement not in ("AC", "PENDING", "UNKNOWN", "")]
+    if not failed:
+        return ""
+    no, sub = failed[-1]
+    ev = assemble_submission(s, server_id, sub.submission_id, include_problem_text=False)
+    code = llm.numbered(ev.get("sourceCode") or "", user_id, name)
+    cases = llm.failed_cases(ev, user_id, name)
+    return (f"第 {no} 次（最后一次没过）的代码：\n{code or '（没有取到）'}\n"
+            f"没通过的测试点：{json.dumps(cases, ensure_ascii=False) if cases else '（没有取到）'}")
 
 
 def _where(lines: list[tuple[int, int]]) -> str:
@@ -97,12 +114,14 @@ _SYSTEM = """你是 C 语言课程的助教。一名学生的一道题已经通�
 下面是这道题他每一次提交的结果和改动（程序算出来的，可信）。请直接回答他问的那句话：
 - 说清楚前面几次分别卡在哪、后来是怎么改对的，点出最主要的那个问题；
 - 如果有几次代码没改就重交，温和地提醒他先想清楚再交；
+- 他问当时错在哪：对照题目、最后一次没过时的代码和没通过的测试点，说清是哪一行、哪种写法、哪类情况出的错（只说是哪类情况，不说具体数据）；
 - 不超过 150 个字，不要贴大段代码，不要提测试数据和具体的输入输出，不要提学号姓名，用“你”称呼他。
 只输出 JSON：{"reply":"……"}"""
 
 
-def reply(hist: list[dict], text: str, tests: list[dict], course: str) -> tuple[str, str]:
-    """(回答, llm / template)。"""
+def reply(hist: list[dict], text: str, tests: list[dict], course: str, statement: str = "", recent: str = "",
+          failure: str = "", who: tuple[str, str] = ("", "")) -> tuple[str, str]:
+    """(回答, llm / template)。statement：题面；recent：最近的对话；failure：last_failure()；who：(学号, 姓名)。"""
     from .validate import _leaks
 
     fallback = template(hist)
@@ -120,9 +139,12 @@ def reply(hist: list[dict], text: str, tests: list[dict], course: str) -> tuple[
         return out
 
     trouble = main_trouble(hist)
-    user = ("【每一次提交】\n" + facts_text(hist)
+    user = (("【题目】\n" + pdftext.for_llm(llm.strip_identity(statement, *who))[:1500] + "\n" if statement else "")
+            + "【每一次提交】\n" + facts_text(hist)
             + (f"\n【没过的那几次里出现最多的问题】{trouble[0]}（{trouble[1]} 次）" if trouble else "")
-            + "\n【他问的】\n" + llm.strip_identity(text))
+            + (f"\n【最后一次没过时（只给你分析用，不能把测试数据告诉他）】\n{failure}" if failure else "")
+            + (f"\n【最近的对话】\n{recent}" if recent else "")
+            + "\n【他问的】\n" + llm.strip_identity(text, *who))
     try:
         return llm.call_json("retro_reply", course_prompt(_SYSTEM, course), user, validate,
                              retries=1, max_tokens=300), "llm"

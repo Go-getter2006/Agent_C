@@ -123,12 +123,12 @@ TAXONOMY_VERSION = "0.2"      # 知识点表、技能表。0.2（2026-11-21）�
 RELABEL_SKILLS = frozenset({"C06.03.01", "C06.06.03", "C07.02.01", "C07.02.02"})
 ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
 LABELER_VERSION = "2026-11-20a"   # 次技能只列题目专门要求的
-PROMPT_VERSION = "2026-11-21a"
+PROMPT_VERSION = "2026-11-21b"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
 WORKFLOW_VERSION = "2026-11-18a"
 # 2026-11-20：次技能分“有测试点专门考”和“顺带用到”，见 MASTERY 里的说明（SECONDARY_SPLIT_VERSION）
 # 2026-11-20b：顺带用到的通过不改变“最近一次是不是独立做对”，知识点按最近一条直接证据定档
-MASTERY_VERSION = "2026-11-20b"
+MASTERY_VERSION = "2026-11-21"   # 掌握分 (1+S)/(2+S+F)，档位只看分数；证据系数和半衰期每周学（app/learn.py）
 SECONDARY_SPLIT_VERSION = "2026-11-20"   # 这一版以前记下的通过证据，次技能一律按 1.0 记的（mastery.reweigh_passes 只重算这些）
 GRAPH_VERSION = "graph-2026-11-19b"
 
@@ -188,7 +188,9 @@ MASTERY_V2 = {
     "resolved_fail_factor": 0.2,
     "repeated_fail_factor": 0.55,  # 多次在同一技能上出错，后续改对后仍保留更多失败证据
     "resolved_fix_credit": 1.0,
-    "mastered_lower": 0.5,      # 80% 区间的下限不低于它，才算已掌握（大约三道题做得好：一次做对或很快改对）
+    "mastered_lower": 0.5,      # （2026-11-21 起不再用来定档，只留给研究对照）
+    "mastered_score": 75,       # 掌握分（四舍五入到整数）不低于它：已掌握
+    "basic_score": 50,          # 不低于它：基本掌握；再低：待加强
     "min_current_success": 0.3, # 只有成功证据时：衰减后还剩这么多，才算基本掌握；否则算还没练到（太久没练）
     # 雷同：和班里更早的通过代码规范化后一样，这种写法少见（不到这个比例的人这样写），时间挨得近
     "copy_rare_share": 0.3,
@@ -209,6 +211,16 @@ QUIZ = {
     "pass_after_submissions": 5,
     "careless_same_choice_run": 10,
     "careless_min_ms": 1000,
+    "challenge_p": 0.5,         # 判断“满足要求”以后追问的概率（随机分组，决策记录里记 challenge）
+}
+
+# ---------------------------------------------------------------- 每周学一次掌握程度的参数（app/learn.py）
+LEARN = {
+    "min_opportunities": 60,    # “新题第一次提交”少于这么多次：不学，沿用经验值
+    "prior_sd": 0.5,            # 系数在对数尺度上的先验标准差（以经验值为中心）
+    "half_life_prior_sd": 0.5,  # 半衰期起点、增长率在对数尺度上的先验标准差
+    "steps": 300,               # Adam 迭代次数
+    "lr": 0.05,
 }
 
 # ---------------------------------------------------------------- 复习（回访），见 app/review.py

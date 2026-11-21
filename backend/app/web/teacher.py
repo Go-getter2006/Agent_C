@@ -624,7 +624,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     kp2 = mastery.kp_states(s, user_id, model="v2", with_predicted=True)
     recs = kpdesc.records(s, [user_id], course, problem_set).get(user_id, {})
     kps = [{"code": code, "name": KNOWLEDGE_POINTS.get(code, ""), "level": kp.level, "p": round(kp.p, 2),
-            "score": score(kp.score), "text": kpdesc.describe(recs.get(code), teacher=True), "why": kp.why,
+            "score": score(kp.score), "text": kpdesc.describe(recs.get(code), teacher=True),
             "v1": round(kp1[code].p, 2) if code in kp1 else None, "v1Level": kp1[code].level if code in kp1 else None}
            for code, kp in sorted(kp2.items(), key=lambda kv: kp_rank(kv[0])) if not kp.predicted and in_course(code, course)]
     # 数据结构：还没有证据的知识点，按 C 语言里的先修推出来的准备度；C 语言这边没有这一块
@@ -821,7 +821,43 @@ def graph(key: str, user: m.User = Depends(teacher), s: Session = Depends(get_se
         "predictionHistory": comparisons["predictionHistory"],
         "fusionWeekly": comparisons["fusionWeekly"],
         "fusion": _fusion_view(s, course),
+        "masteryParams": _params_view(s, course),
     }
+
+
+_EVIDENCE_NAMES = {
+    "pass_first_try": "一次做对", "pass_self_fixed": "自己改对", "pass_after_h0_h1": "反问或指出位置后做对",
+    "pass_after_h2": "讲了原理后做对", "pass_after_h3": "给了示例代码后做对", "submit_failed": "没过",
+    "submit_failed:resolved": "没过、后来改对了", "submit_failed:repeated": "没过、反复没改对", "fix_credit": "改对算会",
+    "stuck_first": "第一次卡住", "stuck_again": "又卡住", "agent_understanding": "智能体评的理解",
+    "streak_bonus": "连续做对", "quiz_streak_bonus": "小题连续做对", "quiz_judge_right": "小题判断对",
+    "quiz_judge_wrong": "小题判断错", "quiz_fix_right": "小题改对", "quiz_fix_second_try": "小题第二次才改对",
+    "quiz_fix_bypass": "小题换写法改对", "quiz_fix_failed": "小题没改对", "quiz_wrong": "小题做错",
+}
+
+
+def _evidence_name(key: str) -> str:
+    base, sign = key[:-1], key[-1:]
+    return _EVIDENCE_NAMES.get(base, base) + ("（会）" if sign == "+" else "（不会）" if sign == "-" else "")
+
+
+def _params_view(s: Session, course: str) -> dict | None:
+    """掌握分每周学的参数（learn.py）：现在这一版、学到的系数、以前几版。好不好看 weekly 里的 scoreBrier。"""
+    rows = s.scalars(select(m.MasteryParams).where(m.MasteryParams.course == course)
+                     .order_by(m.MasteryParams.fitted_at.desc(), m.MasteryParams.id.desc()).limit(8)).all()
+    if not rows:
+        return None
+    cur, mv = rows[0], config.MASTERY_V2
+    detail = cur.detail or {}
+    keys = sorted((detail.get("keys") or {}).items(), key=lambda kv: (-kv[1].get("opportunities", 0), kv[0]))
+    return {"version": cur.version, "learned": bool(cur.learned), "n": cur.n, "fittedAt": cur.fitted_at.isoformat(),
+            "minOpportunities": config.LEARN["min_opportunities"], "reason": detail.get("reason"),
+            "h0": (cur.params or {}).get("h0") or mv["half_life_base"], "g": (cur.params or {}).get("g") or mv["half_life_growth"],
+            "h0Prior": mv["half_life_base"], "gPrior": mv["half_life_growth"],
+            "nllPrior": cur.nll_prior, "nllFit": cur.nll_fit,
+            "keys": [{"key": k, "name": _evidence_name(k), "opportunities": v.get("opportunities", 0),
+                      "scale": v.get("scale", 1.0)} for k, v in keys],
+            "history": [{"version": r.version, "learned": bool(r.learned), "n": r.n} for r in rows]}
 
 
 def _fusion_view(s: Session, course: str) -> dict:
@@ -997,7 +1033,7 @@ def knowledge_node(key: str, kp: str, user: m.User = Depends(teacher), s: Sessio
         st = kps.get(kp)
         row = {"userId": p.user_id, "name": p.name, "level": st.level if st else "还没练到",
                "p": round(st.p, 2) if st else None, "score": score(st.score) if st and not st.predicted else None,
-               "predicted": bool(st and st.predicted), "why": "" if other or st is None else st.why,
+               "predicted": bool(st and st.predicted),
                # 数据结构的班看 C 语言的知识点：只有档位和估计，不说答题记录
                "text": "" if other else kpdesc.describe(recs.get(p.user_id, {}).get(kp), teacher=True)}
         everyone.append(row)

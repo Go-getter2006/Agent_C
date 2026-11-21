@@ -9,8 +9,9 @@
   → 再选位置（判断有问题）或依据（判断满足要求）→ 判断有问题的修改（可以运行公开样例、看提示，
   可以原样提交）→ 反馈。首次判断、首次选行、首稿各记一次不再改，运行、提示、重试按顺序记进 events。
   第一步界面上不给任何能猜出答案的东西；反馈之前不下发错在哪、标准改法、解释。
-- 3（现在新出的题都是）：和 2 一样，只是判断“满足要求”以后不再点依据，智能体追问一句（CHALLENGE，
-  对正确和有错的代码说的一样，不透露对错）：坚持就出反馈；改判就去选有问题的位置、再修改。
+- 3（现在新出的题都是）：和 2 一样，只是判断“满足要求”以后不再点依据。按 config.QUIZ["challenge_p"]（一半）
+  随机决定追不追问（决策记录 challenge，记真实概率）：追问的，智能体说一句（CHALLENGE，对正确和有错的代码
+  说的一样，不透露对错），坚持就出反馈，改判就去选有问题的位置、再修改；不追问的直接出反馈（事件 no_challenge）。
   首次判断照样只记一次（judged_has_bug 不改），追问和回答记进 events（challenge、challenge_reply）。
   改判以后选的行、改的代码不算独立定位和独立修改；有错的代码改判后改对，按“提示后改对”记（right_second）。
 """
@@ -473,10 +474,33 @@ def judge2(s: Session, attempt: m.QuizAttempt, says_bug: bool, confidence: str |
         timing["secondsSinceTrigger"] = max(0, int(delta.total_seconds()))
     _event(attempt, "judge", says="bug" if says_bug else "ok", confidence=confidence or "", **timing)
     if attempt.protocol >= 3 and not says_bug:
-        _event(attempt, "challenge")   # 判断满足要求：智能体追问一句（对正确和有错的代码一样）
-        attempt.state = "challenge"
+        # 判断满足要求：按概率随机决定追不追问（随机分组，才能估计追问本身的效果），概率记进决策记录
+        p = float(config.QUIZ["challenge_p"])
+        ask = _challenge_rng.random() < p
+        _record_challenge(s, attempt, item, ask, p)
+        if ask:
+            _event(attempt, "challenge")   # 智能体追问一句（对正确和有错的代码一样）
+            attempt.state = "challenge"
+        else:
+            _event(attempt, "no_challenge")
+            _finish(s, attempt, item, "right_judge" if attempt.judge_correct else "wrong_judge")
+            _event(attempt, "feedback")
     else:
         attempt.state = "locate"
+
+
+_challenge_rng = random.Random()
+
+
+def _record_challenge(s: Session, attempt: m.QuizAttempt, item: m.QuizItem, ask: bool, p: float) -> None:
+    """决策记录：这次追不追问（challenge-random-1），真实概率。结果在这次作答里（坚持、改判、最后的结果）。"""
+    from . import decisions
+
+    decisions.record(s, attempt.user_id, course_of(attempt.skill_code or "C"), "challenge",
+                     [{"challenge": True, "p": round(p, 4)}, {"challenge": False, "p": round(1 - p, 4)}],
+                     "challenge" if ask else "none", p if ask else 1 - p,
+                     context={"hasBug": item.has_bug, "skill": attempt.skill_code, "reason": attempt.reason},
+                     ref={"attempt": attempt.id, "quizItem": item.id})
 
 
 def challenge_reply(s: Session, attempt: m.QuizAttempt, keep: bool) -> None:

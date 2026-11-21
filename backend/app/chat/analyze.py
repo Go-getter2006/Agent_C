@@ -118,6 +118,7 @@ _SYSTEM = """你在分析一名学 C 语言课程的学生发给答疑助手的�
 {"intent":"DEBUG","skillCode":"","hasAttempt":true,"icap":"constructive","answerCorrect":null,"understood":false}
 intent 只能取：DEBUG 调试求助；CONCEPT 概念提问；TASK 题意澄清；ANSWER 索要答案或要代码；
 REPLY 回答助手刚才的问题（包括表示懂了）；STUCK 表示不会、没思路；OTHER 和学习无关。
+“前面的对话”只用来理解指代和上下文（比如“那数组呢”“还是不行”接的是哪件事），判断的对象是学生这一条消息。
 定义、事实、语法、函数作用或参数含义归 CONCEPT，即使它出现在某道题的对话里；当前代码为何失败才归 DEBUG。
 skillCode 只能从“可选技能”里选一个，选不出填空字符串。
 hasAttempt：消息里有没有他自己的尝试或想法。
@@ -128,7 +129,7 @@ understood：学生是否表示已经懂了或已经通过。"""
 
 def analyze(text: str, has_code: bool, awaiting_answer: bool, last_agent_text: str = "",
             diagnosis_note: str = "", skill_options: list[tuple[str, str]] | None = None,
-            bound: bool = False, course: str = "C") -> Analysis:
+            bound: bool = False, course: str = "C", recent: str = "") -> Analysis:
     fallback = analyze_rules(text, has_code, awaiting_answer, bound)
     if factual_question(text):
         return fallback  # 事实类直接解答，不受“正在反问”或已绑定题目的影响。
@@ -156,7 +157,8 @@ def analyze(text: str, has_code: bool, awaiting_answer: bool, last_agent_text: s
                         understood=bool(d.get("understood")), source="llm")
 
     user = (f"【可选技能】\n" + ("\n".join(f"{c} {n}" for c, n in options) or "（无）") +
-            f"\n\n【助手上一条消息】\n{last_agent_text[:600] or '（无）'}\n\n"
+            f"\n\n【前面的对话】\n{recent or '（无）'}"
+            f"\n\n【助手上一条消息】\n{last_agent_text[:1200] or '（无）'}\n\n"
             f"【助手那个问题的正确方向（学生看不到）】\n{diagnosis_note[:300] or '（无）'}\n\n"
             f"【学生的消息】\n{text[:1500]}\n\n【消息里是否贴了代码】{'是' if has_code else '否'}")
     try:

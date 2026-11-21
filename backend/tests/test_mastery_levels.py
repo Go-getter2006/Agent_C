@@ -103,18 +103,24 @@ def test_mistake_fixed_in_the_next_submission_counts_before_passing(database):
         assert "1 道改对了" in kpdesc.describe(recs["C01.01"])
 
 
-def test_same_mistake_again_after_fixing_is_weak(database):
+def test_same_mistake_again_after_fixing_lowers_the_score(database):
+    """改对过又犯：不再另外压成待加强，分数照实下降，档位跟着分数走；又改对了分数回升。"""
     t = db.now() - dt.timedelta(hours=3)
+
+    def score(s):
+        return round(mastery.skill_states(s, UID)[SKILL].score * 100)
+
     with db.session_scope() as s:
         _setup(s)
         _fail(s, 1, 100, t)
         _pass(s, 2, 100, t + dt.timedelta(minutes=5), earlier=1)
         _pass(s, 3, 101, t + dt.timedelta(minutes=10), earlier=0)
-        assert _level(s) == LEVEL_BASIC
+        before = score(s)
         _fail(s, 4, 102, t + dt.timedelta(minutes=20))                  # 新的题上又错，还没改对
-        assert _level(s) == LEVEL_WEAK
+        again = score(s)
+        assert again < before and _level(s) == mastery.level_from_score(again / 100, 1, 1)
         _pass(s, 5, 102, t + dt.timedelta(minutes=25), earlier=1)      # 又改对了
-        assert _level(s) == LEVEL_BASIC
+        assert score(s) > again
 
 
 # ------------------------------------------------------------ 没有大模型标注：按标签兜底
