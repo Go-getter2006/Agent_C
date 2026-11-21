@@ -1329,6 +1329,7 @@ class LogBody(BaseModel):
     dateTo: str
     kinds: list[str]
     includeText: bool = False
+    includeCode: bool = False
     format: str = "csv"
     purpose: str = ""
 
@@ -1363,11 +1364,12 @@ def log_create(body: LogBody, user: m.User = Depends(teacher), s: Session = Depe
         raise HTTPException(status_code=403, detail="选的班级里有不在你名下的。")
     try:
         req = logs.create(s, user, body.ids, body.classKeys, _day(body.dateFrom, False), _day(body.dateTo, True),
-                          body.kinds, body.includeText, body.format, body.purpose, course=user.course)
+                          body.kinds, body.includeText, body.format, body.purpose, course=user.course,
+                          include_code=body.includeCode)
     except logs.RequestError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     rows = logs.collect(s, list(req.granted_ids), req.date_from, req.date_to, list(req.kinds), req.include_text,
-                        req.course)
+                        req.course, req.include_code)
     preview = [{"userId": r.user_id, "name": r.name, "time": r.time.isoformat(), "kind": logs.KINDS.get(r.kind, r.kind),
                 "action": r.action, "problem": r.problem, "problemId": r.problem_id, "samples": r.samples,
                 "detail": r.detail} for r in rows[-12:]]

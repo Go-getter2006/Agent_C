@@ -356,6 +356,33 @@ def doctor() -> None:
                 typer.echo(f"  出错的任务：{t.kind} {t.target_id}，{state}：{t.last_error[:120]}")
             _doctor_requests(s, server.id)
             _doctor_coverage(s, server.id)
+    _doctor_backup()
+
+
+def _doctor_backup() -> None:
+    """每天自动备份：最近一份是哪天、有几份、一共多大。"""
+    from . import backup
+
+    if backup.database_path() is None:
+        typer.echo("\n备份：不是 SQLite 文件库，不在这里备份")
+        return
+    found = backup.listing()
+    if not found:
+        typer.echo(f"\n备份：{backup.backup_dir()} 里还没有（每天 {config.BACKUP_HOUR} 点以后后台空闲时做）")
+        return
+    total = sum(x["bytes"] for x in found) / 1e6
+    late = (db.now().astimezone(db.BEIJING).date() - found[0]["day"]).days
+    typer.echo(f"\n备份：最近一份 {found[0]['day']}（{found[0]['bytes'] / 1e6:.1f} MB），一共 {len(found)} 份 {total:.1f} MB，"
+               f"在 {backup.backup_dir()}" + (f"  ← 已经 {late} 天没备份了" if late > 1 else ""))
+
+
+@cli.command("backup")
+def backup_now() -> None:
+    """马上备份一份整个库（平时后台每天自动做；今天已有就不再做）。"""
+    from . import backup
+
+    path = backup.run(force=True)
+    typer.echo(f"已备份：{path}" if path else "今天已经有备份了，或者用的不是 SQLite 文件库")
 
 
 def _doctor_requests(s, server_id: int) -> None:

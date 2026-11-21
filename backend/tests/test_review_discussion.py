@@ -41,6 +41,8 @@ def test_finished_review_has_private_retryable_followups(demo, monkeypatch):
         assert response.status_code == 200 and response.json()["turns"][0]["answer"] == "先看初始化语句。"
         assert client.post(url, json=question).json() == client.get(url).json() == response.json()
         assert len(calls) == 1 and client.get("/api/threads/general").json() == before
+        with db.session_scope() as s:   # 每问记了时间，存进了库（导出给研究用）
+            assert s.get(m.QuizAttempt, aid).discussion[0]["t"]
         client.post("/api/auth/logout")
         login("2500000003")
         assert client.get(url).status_code == client.post(url, json=question).status_code == 404

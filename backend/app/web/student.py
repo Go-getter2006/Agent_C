@@ -594,6 +594,7 @@ def ask_review(attempt_id: int, body: ReviewQuestion, user: m.User = Depends(stu
     except llm.LLMUnavailable:
         raise HTTPException(status_code=503, detail="复习答疑暂时连不上。你可以保留问题，稍后重试。")
     a.discussion = [*turns, {"id": body.requestId, "question": question, "answer": reply}]
+    a.discussion[-1]["t"] = db.now().isoformat()   # 每问记时间（导出给研究用）；整个列表是新赋的值，提交时一起写进去
     return {"turns": a.discussion}
 
 

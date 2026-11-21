@@ -739,6 +739,7 @@ class LogRequest(Base):
     date_to: Mapped[Dt] = mapped_column(UTCDateTime)
     kinds: Mapped[list] = mapped_column(JSON, default=list)
     include_text: Mapped[bool] = mapped_column(Boolean, default=False)
+    include_code: Mapped[bool] = mapped_column(Boolean, default=False)   # 再带提交的源码（要先有 include_text）
     deidentified: Mapped[bool] = mapped_column(Boolean, default=False)   # 不再使用（导出一律带学号）；列留着，免得再迁移
     fmt: Mapped[str] = mapped_column(String(8), default="csv")
     purpose: Mapped[str] = mapped_column(String(200), default="")
