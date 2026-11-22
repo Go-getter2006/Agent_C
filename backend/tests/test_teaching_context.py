@@ -44,6 +44,10 @@ def test_vision_reply_transports_public_page_and_selected_judge_run(ctx, fake, m
         assert "第 1 页" in content[1]["text"]
         prompt = content[0]["text"]
         assert who not in prompt and "a*b+1" in prompt and "PUBLIC_PAGE" in prompt
+        system = calls[0]["messages"][0]
+        assert system["role"] == "system"
+        assert system["content"].index("按同一测试点对照") < system["content"].index("再根据每类差异回溯")
+        assert prompt.index("【没通过的测试点") < prompt.index("【他的代码】")
         cases = json.loads(prompt.split("【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n")[1].split("\n\n")[0])["testCases"]
         assert [(c["standardInput"], c["standardOutput"], c["programOutput"]) for c in cases] == [
             ("1 1\n", "2\n", None), ("2 3\n", "5\n", "7\n")]

@@ -212,6 +212,39 @@ def ctx_located(ctx: Ctx) -> bool:
     return bool(getattr(ctx, "_located", False))
 
 
+_ALL_FAILED = re.compile(r"全(?:部)?(?:错|失败|没过|没通过|未过|未通过)|都(?:错|失败|没过|没通过|未过|未通过)|一组都[没未]")
+
+
+def all_failed_overview(ctx: Ctx, text: str) -> str:
+    """固定回复只概括已取得的评测证据，不能从主要错误推断每一组都为什么失败。"""
+    if not ctx.has_failure or not _ALL_FAILED.search(text):
+        return ""
+    rows = (ctx.evidence or {}).get("testCases", [])
+    if not rows:
+        return "目前还没有取到逐组评测明细，代码里的一个问题不足以解释所有组为什么失败。"
+    if any(row.get("passed") is True for row in rows):
+        return ""
+    whitespace, content = 0, 0
+    for row in rows:
+        expected, actual = row.get("standardOutput"), row.get("programOutput")
+        if (row.get("resultCode") != "WA" or expected is None or actual is None
+                or row.get("base64") or row.get("outputTruncated") or expected == actual):
+            continue
+        if "".join(expected.split()) == "".join(actual.split()):
+            whitespace += 1
+        else:
+            content += 1
+    notes = []
+    if whitespace:
+        notes.append(f"有 {whitespace} 组的输出只差空格或换行。")
+    if content:
+        notes.append(f"{'另有' if notes else '有'} {content} 组的输出内容也有差异。")
+    if whitespace + content < len(rows):
+        notes.append("其余组的失败原因还需要更多评测细节才能确认。" if notes
+                     else "目前还无法从评测细节确认各组失败的原因。")
+    return "按目前能核对的记录，" + "".join(notes)
+
+
 def explain(ctx: Ctx, hint: hints.Hint, with_example: bool) -> str:
     """讲原理：有结论句（so）时，例子代替原理句，再接结论；否则原理句后面跟例子。"""
     why, example, so = ctx.fill(hint.why), ctx.fill(hint.example), ctx.fill(hint.so)
@@ -308,7 +341,7 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
     facts = [
         f"这道题：{ctx.problem.title}（{ctx.problem.brief}）" if ctx.problem else "没有绑定到具体的题",
         f"他的第 {ctx.attempt_no} 次提交，结果：{ctx.submission.judgement}" if ctx.submission else "",
-        f"问题类型：{error_name(ctx.root_error)}" if ctx.root_error else "",
+        f"已有错误线索：{error_name(ctx.root_error)}" if ctx.root_error else "",
         f"涉及的技能：{skill_name(ctx.root_skill)}" if ctx.root_skill else "",
         f"他在这个知识点上的情况：{ctx.profile_note}（据此调整讲法：讲不清原因的多问为什么，常要提示的先让他自己说）"
         if ctx.profile_note else "",
@@ -316,7 +349,7 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         ("他在别的题上纠结过的地方：" + "；".join(ctx.struggles) + "（如果这次是同一类问题，可以提醒他想想上次怎么解决的）")
         if ctx.struggles else "",
         ("这道题他每次的提交：" + "；".join(ctx.history)) if ctx.history else "",
-        f"出问题的行：第 {ctx.diag_line} 行" if ctx.diag_line else "",
+        f"可以核对的代码位置：第 {ctx.diag_line} 行" if ctx.diag_line else "",
         f"没通过的是哪类情况：{ctx.situation}" if ctx.situation else "",
         f"能不能给自己构造的小例子：{'能' if decision.reveal_level == '乙' else '不能，只说是哪类情况'}",
         f"他以前卡过的那道题：{prior_ref}" if prior_ref else "",
@@ -330,16 +363,18 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
     cases = json.dumps(evidence, ensure_ascii=False)
     tests = json.dumps(ctx.all_tests, ensure_ascii=False)
     statement = statement or "（没有取到）"
-    user = ("【这次的任务】" + task + "\n\n【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) +
+    user = ("【这次的任务】" + task +
             f"\n\n【题目】\n{statement}\n\n【这道题的测试点（只给你分析用，绝不能告诉学生）】\n{tests}" +
+            f"\n\n【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n{cases}"
             f"\n\n【他的代码】\n{numbered}\n\n"
-            f"【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n{cases}\n\n"
+            "【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) + "\n\n"
             f"【最近的对话】\n{talk or '（无）'}\n\n"
             f"【学生这条消息】\n{llm.strip_identity(text, ctx.user_id, ctx.user_name)[:1500]}")
     if feedback:
         user += f"\n\n【上一次写的不合格】{feedback}。请改正后重新输出。"
     user += "\n\n【证据完整性】空字符串表示确实没有输出，null 表示没有取到。代码的标准输入来自对应测试点的 standardInput，程序实际输出在 programOutput。缺失时不要自行运行、推算或编造评测输出。"
     system = _SYSTEM + "\n\n【可调整的教学指导】\n" + teaching.guidance()
+    system += "\n\n" + teaching.JUDGE_EVIDENCE_GUIDANCE
     user += ("\n公开题面的样例与隐藏评测分开。firstDiffLine 是两份输出文本首次不同的行；格式差异本身不能证明判错原因。"
              "有 base64 或 outputTruncated 标志时，不对编码或截断处猜测。若未附原页，不声称看到了图。")
     draft = llm.call_json("reply", course_prompt(system, ctx.course), user, validate, retries=1, max_tokens=900,

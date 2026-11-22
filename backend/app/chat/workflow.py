@@ -14,7 +14,7 @@ from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
 from . import context, hints, reply, teaching, validate
-from . import talk
+from . import retro, talk
 from .analyze import Analysis, analyze, dialogue_act
 from .policy import Decision, PolicyInput, decide, willingness_of
 from .text import split_message
@@ -254,8 +254,11 @@ def _stuck_step(s: Session, ctx: context.Ctx, rnd: m.ChatRound, answer_ok: bool 
 def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history: list[tuple[str, str]],
              prior: m.StuckPoint | None, prior_ref: str, kind: str,
              visible_titles: dict[str, str], reflect=None, retro_hist=None,
-             plan_text: str | None = None, retro_fail: str = "") -> tuple[validate.Draft, str, dict, int]:
+             plan_text: str | None = None, retro_fail: str = "",
+             compare: retro.Comparison | None = None) -> tuple[validate.Draft, str, dict, int]:
     testcases = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)   # 全部测试点都不能出现在回复里
+    if compare is not None:
+        testcases += compare.tests
 
     def run_check(d: validate.Draft) -> list[str]:
         return validate.check(
@@ -268,16 +271,16 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
         problems = run_check(draft)
         return draft, ("llm" if llm.available() else "template"), {"ok": not problems, "problems": problems}, 0
 
-    if flow == "retro":   # 已经通过的题回头问：按每一次提交回答（chat/retro.py）
-        from . import retro
-
+    if flow == "retro":   # 回看或对比提交：按对应版本的评测记录回答
         said, source = retro.reply(retro_hist or [], text, testcases, ctx.course, statement=ctx.statement,
                                    recent=talk.dialogue(history, ctx.user_id, ctx.user_name), failure=retro_fail,
-                                   who=(ctx.user_id, ctx.user_name))
+                                   who=(ctx.user_id, ctx.user_name), compare=compare)
         draft = validate.Draft(before=said)
         problems = run_check(draft)
         if problems and source == "llm":
-            draft, source = validate.Draft(before=retro.template(retro_hist or [])), "template"
+            fallback = compare.fallback(retro_hist or [], complete=True) if compare is not None \
+                else retro.template(retro_hist or [])
+            draft, source = validate.Draft(before=fallback), "template"
             problems = run_check(draft)
         return draft, source, {"ok": not problems, "problems": problems}, 0
 
@@ -312,6 +315,10 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
             feedback = "；".join(problems)
         log.info("回复两次没通过校验，改用固定模板")
     draft = reply.template(ctx, decision, flow, text, prior, prior_ref)
+    if flow in ("help", "locate", "example", "reveal_line", "explain"):
+        overview = reply.all_failed_overview(ctx, text)
+        if overview:
+            draft.before = "\n".join(part for part in (overview, draft.before) if part)
     problems = run_check(draft)
     return draft, "template", {"ok": not problems, "problems": problems}, retries
 
@@ -342,7 +349,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         sync_api.request_priority(s, picked[0], picked[1])
 
     prose, pasted = (text, "") if action else split_message(text)
-    last_agent = next((x for x in reversed(thread_messages(s, user_id, thread, course, topic)) if x.role == "agent"), None)
+    earlier_messages = thread_messages(s, user_id, thread, course, topic)
+    last_agent = next((x for x in reversed(earlier_messages) if x.role == "agent"), None)
     last_agent_text = message_text(last_agent) if last_agent is not None and last_agent.kind == "text" else ""
     awaiting = last_agent_text.rstrip().endswith(("？", "?"))
     if awaiting and thread is not None and last_agent is not None:
@@ -356,9 +364,16 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     since_reply = (now - last_agent.created_at).total_seconds() if last_agent is not None else None
 
     # 第 2 步 绑定 → 回合
-    key, _sub, _by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now, course,
-                                          knowledge=knowledge, pin=pin)
-    reflect_on = None if knowledge else _reflect_target(s, user_id, thread, last_agent, action, pasted, prose)
+    key, selected, bind_by, _cands = context.bind(s, user_id, thread, submission_key, text, pasted, now, course,
+                                                  knowledge=knowledge, pin=pin)
+    switched_from = None
+    if bind_by == "ask_why" and selected is not None and not action and not pasted:
+        previous_question = next((msg for msg in reversed(earlier_messages)
+                                  if msg.role == "student" and msg.kind == "text"), None)
+        if previous_question is not None:
+            switched_from = retro.previous_focus(s, selected, previous_question.id)
+    reflect_on = None if knowledge or switched_from is not None \
+        else _reflect_target(s, user_id, thread, last_agent, action, pasted, prose)
     reflect = None
     if reflect_on is not None:
         from . import summary
@@ -371,7 +386,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     awaiting = awaiting or rnd.recall_stage in ("asked", "blanked")  # 让他回忆时也在等他回答
     # 解题流程图（chat/plan.py）：上一条带着的状态；他贴了代码、之后又交过，就不接着走流程图了
     plan_state = None
-    if thread is not None and not knowledge and not pasted and reflect_on is None and not action:
+    if thread is not None and not knowledge and not pasted and reflect_on is None and not action and switched_from is None:
         from . import plan as plan_mod
 
         plan_state = plan_mod.active(last_agent)
@@ -384,6 +399,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         awaiting = True   # 他在回答“这一步你打算怎么做”
     if not awaiting and not action and rnd.help_count > 0 and _PUSHBACK.search(prose or text):
         awaiting = True
+    if switched_from is not None:
+        awaiting = False  # 重新选了一版，接着问的是当前提交
     blocks = [{"t": "p", "text": p} for p in prose.split("\n") if p.strip()]
     if pasted:
         blocks.append({"t": "code", "caption": "我贴的代码", "start": 1, "lines": pasted.split("\n"), "mark": []})
@@ -393,7 +410,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     s.add(student_msg)
     s.flush()
     # 给大模型看的最近对话（含消息里的代码块）；他刚发的这条单独给
-    history = talk.history(thread_messages(s, user_id, thread, course, topic)[-(talk.TURNS + 1):], exclude=student_msg.id)
+    history = talk.history(earlier_messages[-talk.TURNS:])
 
     # 第 3~5 步 取证、诊断、状态
     ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course, knowledge=knowledge, pin=pin)
@@ -495,6 +512,13 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
                 and flow not in ("affirm",):
             # 已经通过的题回头问：按这道题每一次提交的结果和改动回答（chat/retro.py），不再只说“已经通过了”
             decision, flow = Decision("R00", "NA", "甲", "retro"), "retro"
+    compare = None
+    if thread is not None and ctx.submission is not None and not action and not pasted \
+            and reflect_on is None and plan_step is None:
+        compare = retro.comparison(s, ctx.submission, ctx.attempt_no, prose, now,
+                                   switched_from=switched_from if flow not in ("concept", "task") else None)
+        if compare is not None:
+            decision, flow = Decision("R00", "NA", "甲", "retro"), "retro"
     if flow == "stuck":
         if not ctx.root_skill:
             decision, flow = Decision(decision.rule_id, "H3", "乙", "help"), "example"
@@ -523,15 +547,13 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             visible_titles[info.title] = info.brief
     retro_hist, retro_fail = None, ""
     if flow == "retro" and ctx.problem is not None:
-        from . import retro
-
         retro_hist = retro.history(s, user_id, ctx.problem.server_id, ctx.problem.problem_id)
         retro_fail = retro.last_failure(s, user_id, ctx.problem.server_id, ctx.problem.problem_id, ctx.user_name) \
-            if llm.available() else ""
+            if compare is None and llm.available() else ""
     draft, source, check_result, retries = _produce(ctx, decision, flow, text, history, prior, prior_ref,
                                                     decision.kind, visible_titles, reflect, retro_hist,
                                                     plan_step[1] if plan_step else None,
-                                                    retro_fail if flow == "retro" else "")
+                                                    retro_fail, compare)
     reply_model = llm.last_model.get() if source == "llm" else ""
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
         stuck_point.given_code, stuck_point.key_line = draft.code, draft.key_line or 1
