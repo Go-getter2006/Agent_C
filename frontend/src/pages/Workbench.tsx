@@ -192,7 +192,8 @@ export default function Workbench() {
   const brief = d?.brief ?? row?.brief ?? "";
   const pickedSub = d?.submissions.find((x) => x.key === picked) ?? null;
   const context: ThreadContext | null = pickedSub
-    ? { label: `针对第 ${pickedSub.attemptNo} 次提交`, submissionKey: pickedSub.key, onClear: () => setParam("sub", null) } : null;
+    ? { label: `针对第 ${pickedSub.attemptNo} 次提交`, submissionKey: pickedSub.key,
+      quotedAttemptNo: pickedSub.attemptNo, onClear: () => setParam("sub", null) } : null;
   const xdoj = status?.xdoj;
 
   const listPane = (onNavigate?: () => void) => (

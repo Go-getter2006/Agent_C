@@ -160,6 +160,16 @@ def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
 
 def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None, topic: int | None = None) -> list[dict]:
     msgs = workflow.thread_messages(s, user.student_id, thread, user.course, topic)
+    quoted_attempts = {}
+    if msgs and thread is not None:
+        # 用提问当时记录的次数。默认绑定到最新提交的消息没有引用标记。
+        quoted_attempts = dict(s.execute(
+            select(m.ChatStep.message_id, m.ChatStep.evidence_card["attemptNo"].as_integer())
+            .join(m.ChatMessage, m.ChatMessage.id == m.ChatStep.message_id)
+            .where(*workflow.thread_filter(user.student_id, thread, user.course, topic),
+                   m.ChatMessage.role == "student", m.ChatStep.user_id == user.student_id,
+                   m.ChatStep.bind_by == "ask_why", m.ChatStep.submission_id.is_not(None))
+        ).all())
     rnd = workflow.open_round(s, user.student_id, user.course) if msgs else None
     now = db.now()
     if rnd and now - rnd.last_message_at > dt.timedelta(minutes=config.CHAT["round_timeout_minutes"]):
@@ -176,7 +186,11 @@ def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None, topic
         # 求助按钮只出现在智能体最新一条回复下面，而且这个回合还没结束
         live = (i == len(msgs) - 1 and msg.role == "agent" and msg.kind == "text"
                 and rnd is not None and msg.round_id == rnd.id)
-        out.append(_message_view(s, msg, live))
+        view = _message_view(s, msg, live)
+        attempt_no = quoted_attempts.get(msg.id)
+        if isinstance(attempt_no, int) and attempt_no > 0:
+            view["quotedAttemptNo"] = attempt_no
+        out.append(view)
     return out
 
 

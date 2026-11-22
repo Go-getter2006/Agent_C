@@ -175,6 +175,15 @@ def test_ask_why_from_submission(client, demo):
                       json={"text": "这次提交为什么错了？", "submissionKey": subs[0]["key"]}).json()["messages"]
     code = [b for b in out[-1]["blocks"] if b["t"] == "code"][0]
     assert code["caption"].startswith("你的第 2 次提交") and out[-1]["actions"] == ["think", "hint", "tell"]
+    asked = out[-2]
+    assert asked["role"] == "student" and asked["quotedAttemptNo"] == subs[0]["attemptNo"]
+    assert "quotedAttemptNo" not in out[-1]
+
+    path = f"/api/threads/p{sid}-408"
+    messages = client.post(f"{path}/messages", json={"text": "我现在该先检查什么？"}).json()["messages"]
+    assert messages[-2]["role"] == "student" and "quotedAttemptNo" not in messages[-2]
+    history = client.get(path).json()["messages"]
+    assert next(row for row in history if row["id"] == asked["id"]) == asked
 
 
 def test_review_flow_over_api(client, demo, monkeypatch):

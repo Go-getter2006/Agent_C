@@ -123,6 +123,7 @@ export interface QuizView {
 
 export interface Message {
   unreadNotice?: boolean;
+  quotedAttemptNo?: number;
   id: number;
   role: "student" | "agent";
   kind: "text" | "quiz";

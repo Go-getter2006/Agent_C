@@ -31,6 +31,7 @@ interface Payload {
   action?: HelpAction;
   submissionKey?: string;
   problemKey?: string;
+  quotedAttemptNo?: number;
 }
 
 /** 输入框上面的一枚标签：这条消息带着什么一起问（结合哪道题、针对哪次提交）。可以去掉。 */
@@ -38,6 +39,7 @@ export interface ThreadContext {
   label: string;
   problemKey?: string;
   submissionKey?: string;
+  quotedAttemptNo?: number;
   onClear: () => void;
 }
 
@@ -59,6 +61,11 @@ interface Props {
 
 function looksLikeCode(text: string): boolean {
   return text.includes("\n") && /[;{}]|#include/.test(text);
+}
+
+function SubmissionQuote({ attemptNo }: { attemptNo?: number }) {
+  if (attemptNo === undefined) return null;
+  return <div className="msg-submission-quote">引用第 {attemptNo} 次提交</div>;
 }
 
 export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, onNoticeRead, context, contextOffer,
@@ -181,7 +188,8 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     setFailed(null);
     let still = true;   // 发出去以后还在这个对话里（中途换了别的对话，结果就不管了）
     try {
-      const r = await api.send(key, payload);
+      const { quotedAttemptNo: _preview, ...body } = payload;
+      const r = await api.send(key, body);
       still = key === keyRef.current;
       cache.delete(key);
       cache.put(r.thread || key, r.messages);
@@ -233,7 +241,8 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     const value = text.trim();
     if (!value || busy || waitingContext || stale) return;
     setText("");
-    void send({ text: value, problemKey: context?.problemKey, submissionKey: context?.submissionKey });
+    void send({ text: value, problemKey: context?.problemKey, submissionKey: context?.submissionKey,
+      quotedAttemptNo: context?.quotedAttemptNo });
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -285,6 +294,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
                   <div className={looksLikeCode(pendingText) ? "bubble bubble-code" : "bubble"}>
                     {looksLikeCode(pendingText) ? pendingText : pendingText.split("\n").filter((p) => p.trim()).slice(0, 12).map((p, i) => <p key={i}>{p}</p>)}
                   </div>
+                  <SubmissionQuote attemptNo={shown.quotedAttemptNo} />
                 </div>
               </div>
             )}
@@ -375,6 +385,7 @@ function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend
                   : b.t === "code" ? <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} copyable={false} /> : null,
               )}
             </div>
+            <SubmissionQuote attemptNo={message.quotedAttemptNo} />
           </div>
         </div>
       </>
