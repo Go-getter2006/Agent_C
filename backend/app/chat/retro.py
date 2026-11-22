@@ -23,6 +23,7 @@ from .. import catalog, changes, config, llm, pdftext
 from .. import models as m
 from ..taxonomy import course_prompt, error_name
 from ..xdoj.assemble import assemble_submission
+from .prompt_context import PromptContext
 from .teaching import JUDGE_EVIDENCE_GUIDANCE
 from .text import visible_chars
 
@@ -288,29 +289,15 @@ def template(hist: list[dict]) -> str:
     return "\n".join(lines)
 
 
-_SYSTEM = """你是 C 语言课程的助教。一名学生的一道题已经通过了，他回头问了一个问题（比如为什么交了这么多次、当时错在哪）。
-下面是这道题他每一次提交的结果和改动（程序算出来的，可信）。请直接回答他问的那句话：
-- 说清楚前面几次分别卡在哪、后来是怎么改对的，点出最主要的那个问题；
-- 如果有几次代码没改就重交，温和地提醒他先想清楚再交；
-- 他问当时错在哪：对照题目、最后一次没过时的代码和没通过的测试点，说清是哪一行、哪种写法、哪类情况出的错（只说是哪类情况，不说具体数据）；
-- 不超过 150 个字，不要贴大段代码，不要提测试数据和具体的输入输出，不要提学号姓名，用“你”称呼他。
-只输出 JSON：{"reply":"……"}"""
-
-_COMPARISON_SYSTEM = """你是 C 语言助教。学生在问同一道题两次提交的区别。请根据这两版代码和对应测试点的实际评测证据回答。
-- 同一测试点的标准输入和标准输出是共用的。before/after 是两版代码在该测试点上的结果。不能把结果的变化解释成两次输入抽样不同。
-- 程序会在你的回复前展示它核对出的评测事实。只补充哪些代码改动能解释差异，以及接下来怎么检查，不要复述通过数和评测事实。
-- 仍然存在的错误，可以说它在某类输入下才会触发，不能用碰巧、运气或猜测两次换了数据解释通过数的变化。
-- 如果学生切换了选中的提交并接着问，先回答本轮选中的版本，并说清相对上一轮哪处改了、哪处还在。两版中一直没改的错误本身不能解释通过数为何变化。
-- 对照改过的代码，解释它怎样改变相同输入下的表现。代码能解释的现象和评测记录里已观察到的事实要分清楚。
-- 提交摘要里的改动是相对各自上一次的。两次提交不相邻时，请直接比较给出的两版代码。旧对话只用于理解问题指代。
-- programOutput 为 null 表示未取到原始输出（通过的组通常没有），空字符串表示实际没有输出。通过只能确认判题器认可，不能声称看到了这组的实际输出。
-- 如果证据只支持一部分原因，就说明能确认的部分。已有的错误标注也是线索。引导学生去看两版中具体改过的地方。
-- 不要透露任何隐藏测试点的原始输入、标准输出或学生在该点的实际输出，不能贴隐藏数据的变体。不要写大段代码。不超过 150 字。
+_SYSTEM = """你是 C 语言课程的助教。一名学生回头问了一个问题。直接回答他问的这句话。
+先看评测事实，再解释相关源码怎样产生这样的结果，给一个具体的检查步骤。已有错误标注只作为线索。
+已经列明的评测事实无需复述。不超过 150 字，不贴大段代码，不泄露隐藏测试数据，不提学生姓名或学号。
 只输出 JSON：{"reply":"……"}"""
 
 
 def reply(hist: list[dict], text: str, tests: list[dict], course: str, statement: str = "", recent: str = "",
-          failure: str = "", who: tuple[str, str] = ("", ""), compare: Comparison | None = None) -> tuple[str, str]:
+          failure: str = "", who: tuple[str, str] = ("", ""), compare: Comparison | None = None,
+          materials: PromptContext | None = None, focus: int = 0, student_notes: str = "") -> tuple[str, str]:
     """(回答, llm / template)。statement：题面；recent：最近的对话；failure：last_failure()；who：(学号, 姓名)。"""
     from .validate import _leaks
 
@@ -345,40 +332,37 @@ def reply(hist: list[dict], text: str, tests: list[dict], course: str, statement
             raise ValueError("补充说明太长")
         return out
 
+    system = course_prompt(_SYSTEM + "\n\n" + JUDGE_EVIDENCE_GUIDANCE, course)
+    document = materials.document if materials else (
+        f"【题目】\n{pdftext.for_llm(llm.strip_identity(statement, *who))[:1500]}" if statement else "")
+    images = materials.images if materials else []
+    user = (materials.prefix + f"\n\n【全部提交目录】\n{materials.index}\n\n") if materials else ""
     if compare is not None:
-        versions = [{"attempt": no, "result": sub["judgementCode"],
-                     "code": llm.numbered(sub["sourceCode"], *who, limit=len(sub["sourceCode"].split("\n")))}
-                    for no, sub in zip(compare.nos, compare.submissions)]
-        focus = (f"\n\n【上下文中的版本切换】\n上一条学生消息选中第 {compare.nos[0]} 次提交，"
-                 f"本轮选中第 {compare.nos[1]} 次提交。“这次”指本轮选中的版本。") if compare.switched_focus else ""
-        user = ("【题目】\n" + pdftext.for_llm(llm.strip_identity(statement, *who))
-                + "\n\n【每一次提交】\n" + facts_text([h for h in hist if h["no"] in compare.nos])
-                + focus
-                + f"\n\n【已确认的评测事实】\n{case_facts}"
-                + "\n\n【按测试点对齐的评测证据】\n" + json.dumps(aligned, ensure_ascii=False)
-                + "\n\n【要比较的两版代码】\n" + json.dumps(versions, ensure_ascii=False)
-                + "\n\n【实际改动（del 为前一版，add 为后一版）】\n"
-                + json.dumps([{**row, "text": llm.strip_identity(row["text"], *who)} for row in diff.excerpt],
-                             ensure_ascii=False)
-                + (f"\n\n【最近的对话】\n{recent}" if recent else "")
-                + "\n\n【他问的】\n" + llm.strip_identity(text, *who))
-        try:
-            system = course_prompt(_COMPARISON_SYSTEM + "\n\n" + JUDGE_EVIDENCE_GUIDANCE, course)
-            guidance = llm.call_json("retro_compare", system, user, validate, retries=0, max_tokens=450)
-            return case_facts + "\n" + guidance, "llm"
-        except llm.LLMUnavailable:
-            return fallback, "template"
-
-    trouble = main_trouble(hist)
-    user = (("【题目】\n" + pdftext.for_llm(llm.strip_identity(statement, *who))[:1500] + "\n" if statement else "")
-            + "【每一次提交】\n" + facts_text(hist)
-            + (f"\n【没过的那几次里出现最多的问题】{trouble[0]}（{trouble[1]} 次）" if trouble else "")
-            + (f"\n【最后一次没过时（只给你分析用，不能把测试数据告诉他）】\n{failure}" if failure else "")
-            + (f"\n【最近的对话】\n{recent}" if recent else "")
-            + "\n【他问的】\n" + llm.strip_identity(text, *who))
+        first, second = compare.nos
+        user += f"【本轮相关提交次数】\n[{first},{second}]\n\n"
+        if compare.switched_focus:
+            user += f"【提交引用】\n上一条消息是第 {first} 次，本轮是第 {second} 次。\n\n"
+        user += f"【已确认的评测事实】\n{case_facts}\n\n"
+        user += "【源码改动（del 为原行，add 为新行）】\n" + json.dumps(
+            [{**row, "text": llm.strip_identity(row["text"], *who)} for row in diff.excerpt],
+            ensure_ascii=False) + "\n\n"
+    elif focus:
+        user += f"【本轮相关提交次数】\n[{focus}]\n\n"
+    related = hist if compare is None else [h for h in hist if h["no"] in compare.nos]
+    user += "【提交摘要（改动相对于各自上一次提交）】\n" + facts_text(related)
+    if failure and materials is None:
+        user += f"\n\n【最后一次没过时】\n{failure}"
+    if student_notes:
+        user += f"\n\n【学生情况】\n{student_notes}"
+    if recent:
+        user += f"\n\n【最近的对话】\n{recent}"
+    user += "\n\n【他问的】\n" + llm.strip_identity(text, *who)
     try:
-        system = course_prompt(_SYSTEM + "\n\n" + JUDGE_EVIDENCE_GUIDANCE, course)
-        return llm.call_json("retro_reply", system, user, validate,
-                             retries=1, max_tokens=300), "llm"
+        if compare is not None:
+            guidance = llm.call_json("retro_compare", system, user, validate, retries=0, max_tokens=450,
+                                     images=images, document=document)
+            return case_facts + "\n" + guidance, "llm"
+        return llm.call_json("retro_reply", system, user, validate, retries=1, max_tokens=300,
+                             images=images, document=document), "llm"
     except llm.LLMUnavailable:
         return fallback, "template"

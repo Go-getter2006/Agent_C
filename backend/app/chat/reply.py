@@ -6,18 +6,17 @@
 """
 from __future__ import annotations
 
-import json
 import re
 from itertools import groupby
 
-from .. import llm, pdftext
+from .. import llm
 from ..taxonomy import HELP_ORDER, course_prompt
 from . import hints
 from .context import Ctx
 from .policy import Decision
 from .text import dedent, quote_range
 from .validate import Draft
-from . import teaching
+from . import prompt_context, teaching
 
 HELP_ACTIONS = ["think", "hint", "tell"]
 BLANK = "______"
@@ -44,6 +43,11 @@ def to_blocks(draft: Draft, ctx: Ctx) -> list[dict]:
     blocks: list[dict] = []
     for para in [p.strip() for p in draft.before.split("\n") if p.strip()]:
         blocks.append({"t": "p", "text": para})
+    if draft.flow_steps:
+        from .plan import block
+
+        blocks.append(block({"steps": [{"title": name, "how": ""} for name in draft.flow_steps],
+                             "current": draft.flow_gap}))
     if draft.quote is not None and ctx.lines:
         a, b, marks = draft.quote
         a, b = quote_range(ctx.lines, a, b)
@@ -146,6 +150,16 @@ def template(ctx: Ctx, decision: Decision, flow: str, text: str = "", prior=None
         if "懂" in text or "明白" in text or "过了" in text or "会了" in text:
             return Draft(before="好。改完再交一次，有新的问题随时接着说。")
         return Draft(before="对，就是这个原因。你来改这一处，改完再交一次看看。")
+    if flow == "diagnose":
+        kinds, body, chart = teaching.first_hint(ctx)
+        head = _diagnosis_heading(kinds)
+        return Draft(before=head, after=body, flow_steps=chart, flow_gap=1 if chart else None, actions=HELP_ACTIONS)
+    if flow == "diagnose_where":
+        if quote and ctx.diag_confidence >= 0.5:
+            return Draft(before=f"先核对高亮的第 {ctx.diag_line} 行及它前后的处理。", quote=quote,
+                         after="用上一轮讨论的那类情况走一遍，看看从哪一步开始和预期不一致？", actions=HELP_ACTIONS)
+        return Draft(before="目前还不能确定具体行号。用一个公开样例跟踪变量，先找值最早偏离预期的那一步。",
+                     actions=HELP_ACTIONS)
     if flow == "locate":
         if ctx.situation:
             return Draft(before=f"我还不能确定问题出在哪。没过的是{ctx.situation}的情况，这种情况下你的程序打算怎么处理？",
@@ -266,12 +280,24 @@ _FLOW_RULES = {
     "task": "他在问题意。用你自己的话解释题意和输入输出格式，不涉及解法。",
     "affirm": "他答对了或表示懂了。简短肯定，让他自己去改、再交一次。不要夸张的表扬。",
     "locate": "现在还不能确定问题在哪。问一个帮助定位的问题，只说是哪类情况，不给例子。",
+    "diagnose": "先指出有哪些证据支持的问题类型，说明相关的评测现象。不同失败组的原因可以不同。"
+                "只给一个能推进的检查步骤，不指出源码行号，不引用代码，不给修改写法。"
+                "逻辑问题给出学生当前做法的 3～5 个流程节点，标出最先偏离预期的步骤，解释漏洞。"
+                "边界问题说清该检查的端点、空值、极端规模或特殊情况，只说证据支持的类别。"
+                "编译先看第一条诊断；输入输出对照读入、格式与内容；类型精度检查范围与舍入；"
+                "运行异常核对异常前的操作和访问范围；超时或内存超限估算规模；题意理解核对要求和计算目标。"
+                "证据不足可以说明能确认的现象，再提一个具体检查问题。"
+                "issues 只填写确认或有证据支持的候选类型：logic、boundary、io、compile、runtime、performance、numeric、task。"
+                "没有结论就给空列表。逻辑问题把节点名称放进 steps（每步最多 12 字），gap 为高亮节点的下标（从 0 开始）。"
+                "before 是评测现象，after 是下一步。不要重复类型名称，程序会显示。",
+    "diagnose_where": "根据学生刚才的尝试继续推进，指出当前源码中最值得检查的一处并用 quote 引用上下文。"
+                      "解释这处和之前讨论的评测现象有什么关系。证据不足时说明边界。不给改法或替换代码。",
     "recall": "他以前在同一个地方卡过。用给出的那道题的写法提醒他上次在哪里卡过，请他先说思路。不给新代码。",
     "recalled": "他回忆出了思路。肯定，让他自己写，不给代码。",
     "explain": "示例代码已经给过了，他还不明白。针对他的话再解释一下那段代码，不给新代码。",
 }
 _SYSTEM = """你是大学 C 语言课程的答疑助手，在帮一名学生看他自己的作业。说话像一位认真的助教：平实、简短、直接。
-输出 JSON：{"before":"代码块前面的话","quote":{"from":10,"to":12,"mark":[10]},"code":null,"after":"代码块后面的话","keyLine":null}
+输出 JSON：{"before":"代码块前面的话","quote":{"from":10,"to":12,"mark":[10]},"code":null,"after":"代码块后面的话","keyLine":null,"issues":[],"steps":[],"gap":null}
 - quote：引用学生代码时，选出包含前置变量、条件和相关循环体的连续范围（最多 8 行），mark 只标问题行。不要只选孤立一行；系统还会尽量补充前后文。不引用填 null。你不要自己抄他的代码。
 - code：只有这一级允许给新代码时才填，否则填 null。多行代码只写在 code 里，直接填源码，不加 Markdown 围栏。before 和 after 只写说明，行内代码可以用单个反引号。keyLine 是 code 里最关键的那一行的序号。
 - 提到变量名用反引号。提到行号必须是他代码里真实的行号。
@@ -290,8 +316,14 @@ def _squash(text: str) -> str:
     return re.sub(r"[\s，。、！？,.!?“”\"'`]|自己", "", text)
 
 
+def _diagnosis_heading(kinds: list[str]) -> str:
+    if not kinds:
+        return ""
+    return "先检查" + "、".join(teaching.DIAGNOSIS_NAMES[k] for k in kinds) + "。"
+
+
 def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: list[tuple[str, str]],
-                 prior_ref: str = "", feedback: str = "") -> Draft:
+                 prior_ref: str = "", feedback: str = "", materials: prompt_context.PromptContext | None = None) -> Draft:
     """让大模型写回复。结构不对就抛 LLMUnavailable，由调用方退回模板。"""
     n_lines = len(ctx.lines)
     allow_code = decision.help_level in ("H2", "H3") or flow == "concept"
@@ -329,25 +361,35 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
         if code and not allow_code:
             raise ValueError("这一级不能给新代码")
         key = d.get("keyLine") if isinstance(d.get("keyLine"), int) else None
-        return Draft(before=before, quote=quote, code=code, after=after, key_line=key)
+        draft = Draft(before=before, quote=quote, code=code, after=after, key_line=key)
+        if flow == "diagnose":
+            issues = d.get("issues")
+            if not isinstance(issues, list) or any(not isinstance(i, str) or i not in teaching.DIAGNOSIS_NAMES for i in issues):
+                raise ValueError("issues 要列出有证据支持的问题类型，证据不足填空列表")
+            kinds = list(dict.fromkeys(issues))
+            if "logic" in kinds:
+                steps, gap = d.get("steps"), d.get("gap")
+                if not isinstance(steps, list) or not 3 <= len(steps) <= 5 \
+                        or any(not isinstance(st, str) or not 1 <= len(st.strip()) <= 12 or "\n" in st for st in steps) \
+                        or type(gap) is not int or not 0 <= gap < len(steps):
+                    raise ValueError("逻辑问题的流程图需要 3～5 个短节点和高亮节点的下标")
+                draft.flow_steps, draft.flow_gap = [st.strip() for st in steps], gap
+            draft.before = "\n".join(p for p in (_diagnosis_heading(kinds), before) if p)
+        return draft
 
     task = _FLOW_RULES.get(flow) or _LEVEL_RULES.get(decision.help_level, "")
     if flow == "example":
         task = _LEVEL_RULES["H3"]
-    numbered = "\n".join(f"{i + 1:>3}| {line}" for i, line in enumerate(ctx.lines)) if ctx.lines else "（没有代码）"
-    numbered = llm.strip_identity(numbered, ctx.user_id, ctx.user_name)
     from ..taxonomy import error_name, skill_name
 
     facts = [
         f"这道题：{ctx.problem.title}（{ctx.problem.brief}）" if ctx.problem else "没有绑定到具体的题",
         f"他的第 {ctx.attempt_no} 次提交，结果：{ctx.submission.judgement}" if ctx.submission else "",
         f"已有错误线索：{error_name(ctx.root_error)}" if ctx.root_error else "",
+        ("已有的诊断线索，仍要用评测和源码核对：" + "、".join(
+            teaching.DIAGNOSIS_NAMES[k] for k in teaching.diagnosis_types(ctx))) if flow == "diagnose" else "",
         f"涉及的技能：{skill_name(ctx.root_skill)}" if ctx.root_skill else "",
-        f"他在这个知识点上的情况：{ctx.profile_note}（据此调整讲法：讲不清原因的多问为什么，常要提示的先让他自己说）"
-        if ctx.profile_note else "",
-        ("他的学情（薄弱的地方）：" + "；".join(ctx.learning)) if ctx.learning else "",
-        ("他在别的题上纠结过的地方：" + "；".join(ctx.struggles) + "（如果这次是同一类问题，可以提醒他想想上次怎么解决的）")
-        if ctx.struggles else "",
+        prompt_context.student_notes(ctx),
         ("这道题他每次的提交：" + "；".join(ctx.history)) if ctx.history else "",
         f"可以核对的代码位置：第 {ctx.diag_line} 行" if ctx.diag_line else "",
         f"没通过的是哪类情况：{ctx.situation}" if ctx.situation else "",
@@ -357,28 +399,20 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
     from .talk import dialogue
 
     talk = dialogue(history, ctx.user_id, ctx.user_name)
-    evidence = llm.evidence_for_model(ctx.evidence or {}, ctx.user_id, ctx.user_name)
-    statement = pdftext.for_llm(llm.strip_identity(ctx.statement, ctx.user_id, ctx.user_name)) or evidence.get("problemText")
-    evidence.pop("problemText", None)   # 题面已单独提供一次
-    cases = json.dumps(evidence, ensure_ascii=False)
-    tests = json.dumps(ctx.all_tests, ensure_ascii=False)
-    statement = statement or "（没有取到）"
-    user = ("【这次的任务】" + task +
-            f"\n\n【题目】\n{statement}\n\n【这道题的测试点（只给你分析用，绝不能告诉学生）】\n{tests}" +
-            f"\n\n【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n{cases}"
-            f"\n\n【他的代码】\n{numbered}\n\n"
+    materials = materials or prompt_context.build(None, ctx)
+    user = (materials.prefix + f"\n\n【全部提交目录】\n{materials.index or '（无）'}"
+            f"\n\n【这次的任务】\n{task}\n\n"
             "【已知情况（学生看不到这些）】\n" + "\n".join(f for f in facts if f) + "\n\n"
-            f"【最近的对话】\n{talk or '（无）'}\n\n"
-            f"【学生这条消息】\n{llm.strip_identity(text, ctx.user_id, ctx.user_name)[:1500]}")
+            f"【最近的对话】\n{talk or '（无）'}\n\n")
+    if ctx.source_kind == "pasted" or (ctx.source and not ctx.evidence):
+        user += "【本轮贴的代码】\n" + llm.numbered(ctx.source, ctx.user_id, ctx.user_name, limit=n_lines) + "\n\n"
     if feedback:
-        user += f"\n\n【上一次写的不合格】{feedback}。请改正后重新输出。"
-    user += "\n\n【证据完整性】空字符串表示确实没有输出，null 表示没有取到。代码的标准输入来自对应测试点的 standardInput，程序实际输出在 programOutput。缺失时不要自行运行、推算或编造评测输出。"
+        user += f"【上一次写的不合格】{feedback}。请改正后重新输出。\n\n"
+    user += f"【学生这条消息】\n{llm.strip_identity(text, ctx.user_id, ctx.user_name)[:1500]}"
     system = _SYSTEM + "\n\n【可调整的教学指导】\n" + teaching.guidance()
     system += "\n\n" + teaching.JUDGE_EVIDENCE_GUIDANCE
-    user += ("\n公开题面的样例与隐藏评测分开。firstDiffLine 是两份输出文本首次不同的行；格式差异本身不能证明判错原因。"
-             "有 base64 或 outputTruncated 标志时，不对编码或截断处猜测。若未附原页，不声称看到了图。")
     draft = llm.call_json("reply", course_prompt(system, ctx.course), user, validate, retries=1, max_tokens=900,
-                          pages=pdftext.guide_pages(ctx.document, ctx.statement, text))
-    if HELP_ORDER.get(decision.help_level, -1) >= 0 and flow in ("help", "locate"):
+                          images=materials.images, document=materials.document)
+    if HELP_ORDER.get(decision.help_level, -1) >= 0 and flow in ("help", "locate", "diagnose", "diagnose_where"):
         draft.actions = list(HELP_ACTIONS)
     return draft

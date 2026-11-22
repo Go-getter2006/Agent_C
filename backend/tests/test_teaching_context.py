@@ -9,12 +9,12 @@ import pytest
 from app import config, db, llm
 from app import models as m
 from app.catalog import ProblemInfo
-from app.chat import context, reply, teaching, workflow
+from app.chat import context, prompt_context, reply, teaching, workflow
 from app.chat.policy import Decision, PolicyInput, decide
 
 
-@pytest.mark.parametrize("reject_image", [False, True])
-def test_vision_reply_transports_public_page_and_selected_judge_run(ctx, fake, monkeypatch, reject_image):
+@pytest.mark.parametrize("display", ["figure", "page", "rejected"])
+def test_vision_reply_reuses_sidebar_and_selected_judge_run(ctx, fake, monkeypatch, display):
     from app import pdftext
     from tests.test_pdftext import make_pdf
     from tests.test_xdoj_sync import full_sync
@@ -24,38 +24,52 @@ def test_vision_reply_transports_public_page_and_selected_judge_run(ctx, fake, m
     calls = []
     def post(url, *, json, **kwargs):
         calls.append(json)
-        if reject_image and len(calls) == 1:
+        if display == "rejected" and len(calls) == 1:
             return httpx.Response(400)
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"before":"先检查计算表达式。"}'}}]})
 
     with db.session_scope() as s:
         who = fake.submissions[537101].user_id
-        bound = context.build(s, who, (ctx.server_id, 406), None, "看图", "", None)
+        question = "这次为什么错？"
+        bound = context.build(s, who, (ctx.server_id, 406), None, question, "", None)
         context.tutor_context(s, bound, db.now())
-        png = pdftext.page_png(bound.document, 1)
+        if display == "figure":
+            png = s.get(m.ProblemFigure, (ctx.server_id, 406, 1)).png
+        else:
+            bound.document.extracted_text += "\n[图999]"
+            bound.statement = pdftext.usable_text(bound.document)
+            png = pdftext.page_png(bound.document, 1)
         monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "local-test")
         monkeypatch.setattr(config, "DEEPSEEK_VISION_MODEL", "deepseek-flash")
         monkeypatch.setattr(httpx, "post", post)
-        draft = reply.generate_llm(bound, Decision("R00", "H1", "甲", "help"), "help", "看图", [])
+        materials = prompt_context.build(s, bound)
+        draft = reply.generate_llm(bound, Decision("R00", "H1", "甲", "help"), "help", question, [],
+                                   materials=materials)
         assert draft.before == "先检查计算表达式。"
         assert calls[0]["model"] == "deepseek-flash"
         content = calls[0]["messages"][1]["content"]
         assert base64.b64decode(content[2]["image_url"]["url"].split(",")[1]) == png
-        assert "第 1 页" in content[1]["text"]
-        prompt = content[0]["text"]
-        assert who not in prompt and "a*b+1" in prompt and "PUBLIC_PAGE" in prompt
+        assert ("[图1]" if display == "figure" else "第 1 页") in content[1]["text"]
+        assert content[0]["text"] == "【题目】\n" + bound.statement
+        prompt = content[-1]["text"]
+        assert who not in prompt and "a*b+1" in prompt and prompt.endswith(question)
         system = calls[0]["messages"][0]
         assert system["role"] == "system"
         assert system["content"].index("按同一测试点对照") < system["content"].index("再根据每类差异回溯")
-        assert prompt.index("【没通过的测试点") < prompt.index("【他的代码】")
-        cases = json.loads(prompt.split("【没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）】\n")[1].split("\n\n")[0])["testCases"]
-        assert [(c["standardInput"], c["standardOutput"], c["programOutput"]) for c in cases] == [
+        key = f"【第 {bound.attempt_no} 次提交】"
+        assert prompt.index("【共用测试点】") < prompt.index(key)
+        standard = json.loads(prompt.split("【共用测试点】\n")[1].split("\n\n")[0])
+        expected = {c["testcaseId"]: c for c in standard}
+        cases = json.loads(prompt.split(key + "\n")[1].split("\n\n")[0])["testCases"]
+        assert [(expected[c["testcaseId"]]["standardInput"], expected[c["testcaseId"]]["standardOutput"],
+                 c["programOutput"]) for c in cases] == [
             ("1 1\n", "2\n", None), ("2 3\n", "5\n", "7\n")]
         assert cases[1]["firstDiffLine"] == 1
-        if reject_image:
+        if display == "rejected":
             assert len(calls) == 2 and calls[1]["model"] == config.DEEPSEEK_MODEL
             fallback = calls[1]["messages"][1]["content"]
-            assert isinstance(fallback, str) and "没有附上可用的题面页图" in fallback and "a*b+1" in fallback
+            assert isinstance(fallback, str) and "a*b+1" in fallback and fallback.endswith(question)
+            assert "没有附上可用的题面图片" in calls[1]["messages"][0]["content"]
         else:
             assert len(calls) == 1
 
@@ -69,6 +83,68 @@ def test_teaching_prompt_is_editable_without_restarting(tmp_path, monkeypatch):
     assert teaching.guidance() == "这轮先分析学生的尝试。"
     prompt.unlink()
     assert "代码示例" in teaching.guidance()
+
+
+def test_stable_evidence_prefix_appends_new_attempts():
+    tests = [{"testcaseId": 11, "standardInput": "PRIVATE_INPUT", "standardOutput": "PRIVATE_EXPECTED"}]
+    bound = context.Ctx(user_id="masked-student", statement="公开题面", all_tests=tests)
+    versions = [
+        {"attemptNo": n, "sourceCode": f"int n = {n};",
+         "testCases": [{**tests[0], "programOutput": f"ACTUAL_{n}", "passed": n == 3}]}
+        for n in range(1, 4)
+    ]
+
+    original = prompt_context.build(None, bound, tuple(versions[:2]))
+    updated = prompt_context.build(None, bound, tuple(versions))
+
+    assert original.document == updated.document
+    assert updated.prefix.startswith(original.prefix + "\n\n【第 3 次提交】")
+    assert updated.prefix.count("PRIVATE_INPUT") == updated.prefix.count("PRIVATE_EXPECTED") == 1
+
+
+def test_homework_stages_cover_logic_and_format_without_early_code(demo):
+    from app import catalog
+    from app.chat import talk
+
+    uid, sid = "2500000001", demo["server_id"]
+    with db.session_scope() as s:
+        sub = s.get(m.Submission, (sid, 537201))
+        pid = sub.problem_id
+        if (rnd := workflow.open_round(s, uid)) is not None:
+            workflow.close_round(s, rnd, "换题", db.now())
+        quoted = catalog.submission_key(sid, sub.submission_id)
+        messages = []
+
+        def backend(turns, *_args):
+            system, user = turns[0]["content"], turns[1]["content"]
+            if "intent 只能取" in system:
+                return '{"intent":"DEBUG","icap":"active"}', 10, 10
+            messages.append(user)
+            if "issues 只填写" in user:
+                output = {"before": "几组的输出分隔有问题。", "issues": ["logic", "io"],
+                          "steps": ["读入数据", "比较并更新", "输出结果"], "gap": 1,
+                          "after": "什么时候初值会一直保留下来？"}
+            elif "源码中最值得检查" in user:
+                output = {"before": "先看更新结果之前的初始化。", "quote": {"from": 9, "to": 12, "mark": [10]}}
+            else:
+                output = {"before": "先把初值设成读到的第一个数。", "code": "int max = a[0];"}
+            return json.dumps(output, ensure_ascii=False), 10, 10
+
+        llm.set_backend(backend)
+        try:
+            ask = workflow.handle(s, uid, (sid, pid), "这题哪儿有问题？", submission_key=quoted)[-1]
+            blocks = ask.content["blocks"]
+            assert "处理逻辑、输入输出" in workflow.message_text(ask)
+            assert next(b for b in blocks if b["t"] == "flow")["current"] == 1
+            assert not any(b["t"] == "code" for b in blocks)
+            assert "比较并更新（标出的步骤）" in talk.message_for_model(ask)
+            locate = workflow.handle(s, uid, (sid, pid), action="hint", submission_key=quoted)[-1]
+            assert next(b for b in locate.content["blocks"] if b["t"] == "code")["mark"] == [10]
+            fix = workflow.handle(s, uid, (sid, pid), action="hint", submission_key=quoted)[-1]
+            assert any(b.get("caption") == "示例" and b["lines"] == ["int max = a[0];"] for b in fix.content["blocks"])
+            assert ["issues 只填写" in messages[0], "源码中最值得检查" in messages[1]] == [True, True]
+        finally:
+            llm.set_backend(None)
 
 
 def test_explicit_beginner_can_receive_partial_code():
@@ -107,7 +183,7 @@ def test_model_receives_code_and_exact_test_io_with_missingness(monkeypatch, tmp
         assert "按学生的具体困难调整" in seen[0]["content"]
         user = seen[1]["content"]
         assert all(value in user for value in ("21 32 43 54", "150", "149", "int total = 0;"))
-        assert '"programOutputAvailable": false' in user
+        assert '"programOutputAvailable":false' in user
         evidence = llm.evidence_for_model(ctx.evidence)
         assert evidence["testCases"][1]["programOutputAvailable"] is True
         assert evidence["testCases"][1]["programOutput"] == ""
@@ -173,19 +249,21 @@ def test_homework_reply_is_grounded_in_the_failing_case_and_the_code(demo):
         llm.set_backend(None)
 
 
-def test_failure_notice_asks_about_the_diagnosed_spot(demo):
-    """提交没过时智能体先说的那句：按程序对这次提交的诊断问（哪类情况、哪个变量），不说测试数据。"""
+def test_failure_notice_starts_with_the_kind_and_situation(demo):
+    """提交没过时先给检查方向，隐藏输入和源码定位留在后台。"""
     from app.chat import proactive
     from app.xdoj.assemble import assemble_submission
 
     sid = demo["server_id"]
     with db.session_scope() as s:
         sub = s.get(m.Submission, (sid, 537200))
-        text = proactive._failure_text(s, sub, 2, proactive._primary(s, sub))
-        assert text.startswith("你的第 2 次提交没有通过（5 组过 3 组）。") and "全是负数" in text and "`max`" in text
+        blocks = proactive._failure_blocks(s, sub, 2)
+        text = "\n".join(b["text"] for b in blocks if b["t"] == "p")
+        assert text.startswith("你的第 2 次提交没有通过（5 组过 3 组）。") and "全是负数" in text and "边界条件" in text
+        assert not any(b["t"] == "code" for b in blocks)
         for case in assemble_submission(s, sid, 537200)["testCases"]:
             for value in (case.get("standardInput"), case.get("standardOutput"), case.get("programOutput")):
                 if value and len(value.strip()) > 2:
                     assert value.strip() not in text
-        ce = proactive._failure_text(s, s.get(m.Submission, (sid, 537199)), 1, proactive._primary(s, s.get(m.Submission, (sid, 537199))))
+        ce = proactive._failure_blocks(s, s.get(m.Submission, (sid, 537199)), 1)[0]["text"]
         assert ce.startswith("你的第 1 次提交编译没有通过。") and ce.count("编译没有通过") == 1

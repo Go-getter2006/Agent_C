@@ -22,6 +22,8 @@ class Draft:
     after: str = ""
     key_line: int | None = None                      # 示例代码里最关键的一行
     actions: list[str] = field(default_factory=list)
+    flow_steps: list[str] = field(default_factory=list)
+    flow_gap: int | None = None
 
     def text(self) -> str:
         return f"{self.before}\n{self.after}".strip()
@@ -64,7 +66,7 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
     """返回不合格的原因；空列表表示通过。"""
     problems: list[str] = []
     text = draft.text()
-    everything = text + "\n" + (draft.code or "")
+    everything = "\n".join([text, draft.code or "", *draft.flow_steps])
     n_source = len(source.split("\n")) if source else 0
 
     # 1 新写的代码行数：H3 不超过 8 行，其余级别不超过 2 行；引用他自己的代码、以前给过的代码不计
@@ -87,8 +89,11 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
     # 3 不能出现测试点的原始输入或标准输出；构造的例子只能在乙级出现
     if _leaks(everything, testcases):
         problems.append("出现了测试点的原始数据")
-    if reveal_level == "甲" and kind in ("help", "locate") and _EXAMPLE_DATA.search(re.sub(r"第\s*\d+\s*(到|至)\s*\d+\s*行", "", text)):
+    if reveal_level == "甲" and kind in ("help", "locate", "diagnose", "diagnose_where") \
+            and _EXAMPLE_DATA.search(re.sub(r"第\s*\d+\s*(到|至)\s*\d+\s*行", "", everything)):
         problems.append("这一级只能说是哪类情况，不能给具体的例子")
+    if kind == "diagnose" and (draft.quote or _LINE_REF.search(everything) or "```" in everything):
+        problems.append("先解释问题类型和要检查的步骤，留到下一轮再指出代码行")
 
     # 4 提到的行号、变量名必须真实存在
     if source:
@@ -131,7 +136,7 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
         problems.append("回复是空的")
 
     # 8 不能出现内部用语，不用 emoji
-    if _INTERNAL.search(text):
+    if _INTERNAL.search("\n".join([text, *draft.flow_steps])):
         problems.append("出现了内部用语")
     if EMOJI.search(everything):
         problems.append("用了 emoji")

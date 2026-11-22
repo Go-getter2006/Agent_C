@@ -25,12 +25,12 @@ NAME = "林晓"
 
 
 def _capture(seen: dict, replies: list[tuple[str, dict]]):
-    """按系统提示里的一句话认出是哪个调用，记下发给它的内容，回一个合格的 JSON。"""
+    """认出调用，记下发给它的内容，回一个合格的 JSON。"""
     def backend(messages, json_mode, max_tokens, temperature):
         system, user = messages[0]["content"], messages[1]["content"]
         user = user if isinstance(user, str) else json.dumps(user, ensure_ascii=False)
         for key, out in replies:
-            if key in system:
+            if key in system or (key.startswith("【") and key in user):
                 seen.setdefault(key, []).append(user)
                 return json.dumps(out, ensure_ascii=False), 10, 10
         seen.setdefault("other", []).append(user)
@@ -61,9 +61,9 @@ def test_reply_and_analysis_read_the_conversation_with_code(demo):
     assert "max 是 0 也没关系吧" in talk                     # 前面几轮的话也在（以前只给最近 4 条）
     assert "[代码：" in talk and "int max = 0;" in talk       # 智能体摘出的他的代码，大模型也看得到
     assert prompt.count("那我到底该怎么改？") == 1              # 他刚发的这条只出现在“学生这条消息”
-    for head in ("题目", "他的代码", "没通过的测试点（只给你分析用，绝不能把这些数据告诉学生）"):
+    for head in ("题目", "共用测试点", "第 3 次提交"):
         assert _section(prompt, head).strip()
-    assert '"programOutput": "0\\n"' in prompt                # 他的程序在没过的那组上的输出
+    assert '"programOutput":"0\\n"' in prompt                 # 他的程序在没过的那组上的输出
     assert "他的学情" in prompt and "这道题他每次的提交" in prompt
     assert UID not in prompt and NAME not in prompt
 
@@ -100,7 +100,8 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
         model_reply = "两次测试数据不一样，第二次更简单。"
     elif scenario == "switch_named_wrong_line":
         model_reply = "第 2 次把第 11 行的 || 改成了 &&，所以多过三组。"
-    reply = ("两次提交的区别", {"reply": model_reply})
+    comparison_section = "【已确认的评测事实】"
+    reply = (comparison_section, {"reply": model_reply})
     first_fallback = scenario == "switch_first_fallback"
     single_reply = (REPLY[0], {"before": ""}) if first_fallback else REPLY
     prior_reply = ("回头问了一个问题", {"reply": "第 3 次把条件中的 || 改成了 &&。"})
@@ -189,35 +190,38 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
         assert "第 11 行" not in shown and "改成了 &&" not in shown
     if progress_question:
         assert "其中 3 组原来的实际输出与标准输出只差空白字符" in shown
-        assert "两次提交的区别" not in seen
+        assert comparison_section not in seen
     elif missing_output or scenario == "changed_tests":
         assert "第 1 次通过 0/5 组，第 2 次通过 3/5 组" in shown
         assert ("测试点有更新记录" if scenario == "changed_tests" else "无法确定通过数变化的原因") in shown
-        assert "两次提交的区别" not in seen
+        assert comparison_section not in seen
     else:
-        prompt = seen["两次提交的区别"][0]
+        prompt = seen[comparison_section][0]
         if switches_focus and not names_baseline:
-            assert "上一条学生消息选中第 1 次提交，本轮选中第 2 次提交" in prompt
+            assert "上一条消息是第 1 次，本轮是第 2 次" in prompt
         if switches_focus:
             assert first_question in _section(prompt, "最近的对话")
             assert follow_up in _section(prompt, "他问的")
-        versions = json.loads(_section(prompt, "要比较的两版代码"))
-        assert [row["attempt"] for row in versions] == [1, 2]
+        assert json.loads(_section(prompt, "本轮相关提交次数")) == [1, 2]
+        versions = [json.loads(_section(prompt, f"第 {n} 次提交")) for n in (1, 2, 3)]
+        assert [v["judgementCode"] for v in versions] == ["WA", "WA", "AC"]
         if names_baseline:
-            assert all("||" in row["code"] and "&&" not in row["code"] for row in versions)
+            assert all("||" in row["sourceCode"] and "&&" not in row["sourceCode"] for row in versions[:2])
             assert "改成了 &&" not in _section(prompt, "最近的对话")
-            delta = json.loads(_section(prompt, "实际改动（del 为前一版，add 为后一版）"))
+            delta = json.loads(_section(prompt, "源码改动（del 为原行，add 为新行）"))
             assert {row["n"] for row in delta} == {10, 14, 16}
         else:
-            assert all(f"return {row['attempt']};" in row["code"] for row in versions)
-        pairs = json.loads(_section(prompt, "按测试点对齐的评测证据"))
-        assert prompt.index("【按测试点对齐的评测证据】") < prompt.index("【要比较的两版代码】")
-        assert [row["testcaseId"] for row in pairs] == tids
-        assert pairs[0]["standardInput"] == "PRIVATE_INPUT_0"
-        assert pairs[0]["standardOutput"] == "PRIVATE_EXPECTED_0"
-        assert pairs[0]["before"]["programOutput"] == "PRIVATE_OUTPUT_1_0"
-        assert pairs[0]["after"]["programOutput"] == "PRIVATE_OUTPUT_2_0"
-        assert all(row["after"]["passed"] and row["after"]["programOutput"] is None for row in pairs[2:])
+            assert all(f"return {n};" in row["sourceCode"] for n, row in enumerate(versions, 1))
+        standard = json.loads(_section(prompt, "共用测试点"))
+        assert prompt.index("【共用测试点】") < prompt.index("【第 1 次提交】") < prompt.index("【第 2 次提交】")
+        assert [row["testcaseId"] for row in standard] == tids
+        assert standard[0]["standardInput"] == "PRIVATE_INPUT_0"
+        assert standard[0]["standardOutput"] == "PRIVATE_EXPECTED_0"
+        assert prompt.count("PRIVATE_INPUT_0") == 1
+        assert all([row["testcaseId"] for row in v["testCases"]] == tids for v in versions)
+        assert versions[0]["testCases"][0]["programOutput"] == "PRIVATE_OUTPUT_1_0"
+        assert versions[1]["testCases"][0]["programOutput"] == "PRIVATE_OUTPUT_2_0"
+        assert all(row["passed"] and row["programOutput"] is None for row in versions[1]["testCases"][2:])
         assert uid not in prompt and NAME not in prompt
         rejected = scenario in ("leak_old_output", "switch_luck", "different_input_claim", "switch_named_wrong_line")
         assert ("先对照两版改动" if rejected else "输出格式改动") in shown
@@ -225,7 +229,7 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
         if scenario in ("switch_luck", "switch_first_fallback"):
             assert "其中 3 组原来的实际输出与标准输出只差空白字符" in shown
         assert "碰巧" not in shown and "测试数据不一样" not in shown
-        assert len(seen["两次提交的区别"]) == 1
+        assert len(seen[comparison_section]) == 1
 
 
 def test_plan_guide_sees_its_own_question_and_his_situation(demo):

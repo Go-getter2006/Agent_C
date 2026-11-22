@@ -165,14 +165,15 @@ def test_first_time_stuck_gets_example_and_tell_escalates(demo):
     with db.session_scope() as s:
         out = workflow.handle(s, UID, thread, "为什么运行错误？", submission_key=None)
         st = last_step(s)
-        assert (st.rule_id, st.help_level, st.root_error_code, st.root_skill_code) == ("R11", "H1", "AR02", "C06.01.02")
-        assert "数据很多的时候，数组放不下" in texts(out[1]) and codes(out[1])[0]["mark"] == [6]
+        assert (st.rule_id, st.help_level, st.root_error_code, st.root_skill_code) == ("R12", "H0", "AR02", "C06.01.02")
+        assert "边界条件" in texts(out[1]) and "数据很多" in texts(out[1]) and not codes(out[1])
         out = workflow.handle(s, UID, thread, action="tell")
         st = last_step(s)
-        assert (st.rule_id, st.help_level, st.willingness) == ("R10", "H2", "LOW") and "数组要按题目给的最大数据量来开" in texts(out[1])
+        assert (st.rule_id, st.help_level, st.willingness) == ("R12", "H1", "LOW") and codes(out[1])[0]["mark"] == [6]
         out = workflow.handle(s, UID, thread, action="tell")
         st = last_step(s)
         assert (st.help_level, st.reply["flow"]) == ("H3", "example") and out[1].content["actions"] == []
+        assert "数组要按题目给的最大数据量来开" in texts(out[1])
         sp = s.get(m.StuckPoint, st.stuck_point_id)
         assert (sp.nth, sp.resolution, sp.skill_code) == (1, "example_given", "C06.01.02")
         assert mastery.skill_state(s, UID, "C06.01.02").f > 0.99
@@ -188,9 +189,11 @@ def test_ask_why_binds_that_submission(demo):
         out = workflow.handle(s, UID, (sid, 406), workflow.ASK_WHY_TEXT, submission_key=f"s{sid}-{ce.submission_id}")
         st = last_step(s)
         assert (st.bind_by, st.submission_id, st.root_error_code) == ("ask_why", ce.submission_id, "CE01")
-        assert "编译没有通过" in texts(out[1]) and codes(out[1])[0]["caption"].startswith("你的第 1 次提交")
+        assert "编译没有通过" in texts(out[1]) and not codes(out[1])
         trig = s.scalars(select(m.Trigger).where(m.Trigger.kind == "submission_priority")).all()
         assert [t.target_id for t in trig] == [str(ce.submission_id)]
+        out = workflow.handle(s, UID, (sid, 406), action="hint", submission_key=f"s{sid}-{ce.submission_id}")
+        assert codes(out[1])[0]["caption"].startswith("你的第 1 次提交")
 
 
 def test_general_thread_binding_and_other_intents(demo):
@@ -315,7 +318,7 @@ def test_llm_reply_is_validated_and_falls_back(demo):
                                "icap": "constructive", "answerCorrect": None, "understood": False}), 50, 20
         # 写回复的大模型两次都乱来：编了测试数据，还带了内部编码
         return json.dumps({"before": "这是 TY09。测试数据是 -12 -7 -30 -7 -19 -25，你输出了 0。", "quote": None,
-                           "code": None, "after": ""}, ensure_ascii=False), 200, 60
+                           "code": None, "after": "", "issues": ["boundary"]}, ensure_ascii=False), 200, 60
 
     with db.session_scope() as s:
         workflow.close_round(s, workflow.open_round(s, UID), "换题", db.now())
@@ -327,7 +330,7 @@ def test_llm_reply_is_validated_and_falls_back(demo):
             assert st.analysis_source == "llm" and st.skill_code == "C06.03.02"
             assert (st.reply_source, st.retries) == ("template", 2) and st.check_result["ok"]
             assert "TY09" not in texts(out[1]) and "-12" not in texts(out[1])
-            assert codes(out[1])[0]["start"] == 8 and codes(out[1])[0]["mark"] == [10]
+            assert "边界条件" in texts(out[1]) and not codes(out[1])
             sent = json.dumps([c for c in calls], ensure_ascii=False)
             assert len(calls) == 3 and sent
     finally:
@@ -343,7 +346,7 @@ def test_llm_good_reply_used_and_sees_failed_tests(demo):
         if "分析" in messages[0]["content"][:20]:
             return json.dumps({"intent": "DEBUG", "skillCode": "", "hasAttempt": False, "icap": "active",
                                "answerCorrect": None, "understood": False}), 50, 20
-        return json.dumps({"before": "循环没有问题。看你这几行：", "quote": {"from": 10, "to": 12, "mark": [10]},
+        return json.dumps({"before": "循环在普通输入里能产生正确结果。", "issues": ["boundary"],
                            "code": None, "after": "成绩全是负数的时候，`max` 最后会是多少？"}, ensure_ascii=False), 200, 60
 
     with db.session_scope() as s:
@@ -354,10 +357,10 @@ def test_llm_good_reply_used_and_sees_failed_tests(demo):
             out = workflow.handle(s, UID, (sid, 406), "有一组不过，是循环写错了吗？")
             st = last_step(s)
             assert (st.reply_source, st.retries, st.model_version) == ("llm", 0, config.DEEPSEEK_MODEL)
-            assert texts(out[1]).startswith("循环没有问题") and out[1].content["actions"] == ["think", "hint", "tell"]
+            assert texts(out[1]).startswith("先检查边界条件") and out[1].content["actions"] == ["think", "hint", "tell"]
         everything = "\n".join(seen)
         # 大模型能看到没通过的那组输入（用来判断错在哪），但看不到学号和姓名
-        assert "-12 -7 -30" in everything and "绝不能把这些数据告诉学生" in everything
+        assert "-12 -7 -30" in everything and "回复里绝不能出现这些数据" in everything
         assert UID not in everything and "林晓" not in everything
         assert "全是负数" in everything
     finally:

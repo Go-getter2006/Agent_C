@@ -579,6 +579,34 @@ def needs_vision(text: str, question: str = "") -> bool:
                 or re.search(r"看图|这张图|图中|图里|如图|图示|示意图|图片|图案|图形|(?:输出|输入)(?:样例|示例)|(?:样例|示例)(?:输入|输出)", question))
 
 
+def sidebar_page_count(row, statement: str, figure_ids: set[int]) -> int:
+    missing = {int(n) for n in FIG_MARK.findall(statement)} - figure_ids
+    return page_count(row) if missing or needs_original_pages(statement) else 0
+
+
+def sidebar_images(s, row, statement: str) -> list[tuple[str, bytes]]:
+    """使用与学生题目栏一致的图和 PDF 原页选择。"""
+    from sqlalchemy import select
+
+    from . import models as m
+
+    if row is None:
+        return []
+    figures = s.scalars(select(m.ProblemFigure).where(m.ProblemFigure.server_id == row.server_id,
+                        m.ProblemFigure.problem_id == row.problem_id).order_by(m.ProblemFigure.seq)).all() if s is not None else []
+    count = sidebar_page_count(row, statement, {f.seq for f in figures})
+    if count:
+        pages = []
+        for n in range(1, count + 1):
+            try:
+                if png := page_png(row, n):
+                    pages.append((f"题面原页第 {n} 页", png))
+            except Exception as exc:
+                log.warning("题面第 %d 页未能渲染：%s", n, type(exc).__name__)
+        return pages
+    return [(f"题面中的[图{fig.seq}]", fig.png) for fig in figures if statement.strip() and fig.png]
+
+
 def guide_pages(row, text: str, question: str = "") -> list[tuple[int, bytes]]:
     """仅针对已经绑定的公开题面。原页保留样例标题和图的位置，不猜占位符属于哪张图。"""
     from . import config

@@ -19,6 +19,11 @@ def message_for_model(msg: m.ChatMessage) -> str:
     for b in (msg.content or {}).get("blocks", []):
         if b.get("t") == "p" and (b.get("text") or "").strip():
             parts.append(b["text"])
+        elif b.get("t") == "flow" and not b.get("pick"):
+            names = [st["title"] + ("（标出的步骤）" if i == b.get("current") else "")
+                     for i, st in enumerate(b.get("steps") or []) if st.get("title")]
+            if names:
+                parts.append("[流程] " + " → ".join(names))
         elif b.get("t") == "code" and b.get("lines"):
             lines = list(b["lines"])
             start = int(b.get("start") or 1)

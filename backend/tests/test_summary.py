@@ -118,7 +118,7 @@ def test_tutor_sees_everything_but_student_never_sees_tests(demo):
             assert step.reply_source == "template"                       # 泄露的回复没有用
             assert "试试这组输入" not in workflow.message_text(out[1])
         prompt = next(x for x in seen if "【这次的任务】" in x)
-        assert "【题目】" in prompt and "【这道题的测试点" in prompt and "这道题他每次的提交" in prompt
+        assert "【题目】" in prompt and "【共用测试点】" in prompt and "这道题他每次的提交" in prompt
         assert UID not in prompt and "林晓" not in prompt
     finally:
         llm.set_backend(None)
@@ -240,4 +240,4 @@ def test_retro_reply_uses_the_model_with_facts_only(demo):
     finally:
         llm.set_backend(None)
     assert source == "llm" and "第 17 行" in said
-    assert "【每一次提交】" in seen[0] and "为什么改这么多次" in seen[0]
+    assert "【提交摘要" in seen[0] and "为什么改这么多次" in seen[0]

@@ -87,24 +87,31 @@ def flush_records(s) -> int:
 
 def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict], T],
               retries: int = 1, max_tokens: int = 800, *, pages: list[tuple[int, bytes]] | None = None,
-              text_fallback: bool = True) -> T:
+              text_fallback: bool = True, images: list[tuple[str, bytes]] | None = None,
+              document: str = "") -> T:
     """要求输出 JSON，并用 validate 校验（不合格就抛 ValueError）。不合格时带着原因重试。"""
     if not available():
         raise LLMUnavailable("没有配置大模型")
     if "json" not in system.lower():
         system += "\n只输出一个 JSON 对象，不要输出别的内容。"
-    if pages and config.DEEPSEEK_VISION_MODEL.lower() not in ("", "off"):
-        parts = [{"type": "text", "text": user}]
-        for number, png in pages:
+    attachments = images or [(f"公开题面第 {n} 页（图文按原位置，精确输出以评测记录为准）", png) for n, png in pages or []]
+    if attachments and config.DEEPSEEK_VISION_MODEL.lower() not in ("", "off"):
+        parts = [{"type": "text", "text": document or user}]
+        for label, png in attachments:
             data = base64.b64encode(png).decode("ascii")
-            parts.extend([{"type": "text", "text": f"公开题面第 {number} 页（图文按原位置）；精确输出以评测记录为准。"},
+            parts.extend([{"type": "text", "text": label},
                           {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}", "detail": "high"}}])
+        if document:
+            parts.append({"type": "text", "text": user})
         try:
             return _json_request(prompt_id, system, parts, validate, retries, max_tokens, config.DEEPSEEK_VISION_MODEL)
         except LLMUnavailable:
             if not text_fallback:
                 raise
-            user += "\n本次没有附上可用的题面页图。只根据文字和已有评测证据回答，不能推测图案。"
+    if attachments:
+        system += "\n本次没有附上可用的题面图片。只根据文字和已有评测证据回答，不能推测图案。"
+    if document:
+        user = document + "\n\n" + user
     return _json_request(prompt_id, system, user, validate, retries, max_tokens, config.DEEPSEEK_MODEL)
 
 

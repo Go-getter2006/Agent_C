@@ -32,6 +32,7 @@ class Ctx:
     statement: str = ""
     document: m.ProblemText | None = None   # 仅绑定的公开题面，用于实际回复时取页图
     all_tests: list[dict] = field(default_factory=list)   # [{"standardInput", "standardOutput"}]，也用于回复的泄露检查
+    attempts: list[m.Submission] = field(default_factory=list)
     history: list[str] = field(default_factory=list)      # 这道题每次提交：第几次、结果、错误、改了几行
     learning: list[str] = field(default_factory=list)     # 学情：薄弱的知识点和提示
     struggles: list[str] = field(default_factory=list)    # 在别的题上卡过、纠结过的地方
@@ -330,6 +331,7 @@ def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
             ctx.all_tests.append({"testcaseId": tc.testcase_id, "standardInput": inp, "standardOutput": out,
                                   "standardInputAvailable": inp is not None, "standardOutputAvailable": out is not None})
         subs = catalog.user_submissions(s, ctx.user_id, sid, pid, until=now)
+        ctx.attempts = subs
         prev_lines = None
         for i, sub in enumerate(subs[-8:], start=max(1, len(subs) - 7)):
             lines = changes.code_lines(s, sub)
