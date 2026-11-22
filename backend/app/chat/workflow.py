@@ -272,8 +272,10 @@ def _produce(ctx: context.Ctx, decision: Decision, flow: str, text: str, history
         return draft, ("llm" if llm.available() else "template"), {"ok": not problems, "problems": problems}, 0
 
     if flow == "retro":   # 回看或对比提交：按对应版本的评测记录回答
+        # 对比只用之前的学生问题解指代，避免把旧回复谈到的其他版本当作本轮证据。
+        conversation = history if compare is None else [turn for turn in history if turn[0] == "student"]
         said, source = retro.reply(retro_hist or [], text, testcases, ctx.course, statement=ctx.statement,
-                                   recent=talk.dialogue(history, ctx.user_id, ctx.user_name), failure=retro_fail,
+                                   recent=talk.dialogue(conversation, ctx.user_id, ctx.user_name), failure=retro_fail,
                                    who=(ctx.user_id, ctx.user_name), compare=compare)
         draft = validate.Draft(before=said)
         problems = run_check(draft)

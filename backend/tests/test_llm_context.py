@@ -74,7 +74,8 @@ def test_reply_and_analysis_read_the_conversation_with_code(demo):
 
 @pytest.mark.parametrize("scenario", ["complete", "missing_output", "changed_tests", "leak_old_output",
                                       "switch_focus", "switch_missing_output", "switch_first_fallback",
-                                      "switch_luck", "different_input_claim"])
+                                      "switch_luck", "different_input_claim", "switch_named_progress",
+                                      "switch_named_wrong_line"])
 def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
     """复现左边追问第 1、2 次，右边同时已有第 3 次的情况。"""
     from app import catalog
@@ -84,6 +85,11 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
     first_question, follow_up = "这次怎么能全错呢", "那这次呢"
     switches_focus = scenario.startswith("switch_")
     missing_output = scenario.endswith("missing_output")
+    names_baseline = scenario in ("switch_named_progress", "switch_named_wrong_line")
+    progress_question = scenario == "switch_named_progress"
+    if names_baseline:
+        first_question = "第三次为什么通过了？"
+        follow_up = "和第一次比 这次有没有好处" if progress_question else "和第一次比 为什么这次多过三组"
     seen = {}
     model_reply = "先看两版的输出格式改动，再对照还没有修好的条件判断。"
     if scenario == "leak_old_output":
@@ -92,10 +98,13 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
         model_reply = "前一次的输入更难，第二次碰巧过了。"
     elif scenario == "different_input_claim":
         model_reply = "两次测试数据不一样，第二次更简单。"
+    elif scenario == "switch_named_wrong_line":
+        model_reply = "第 2 次把第 11 行的 || 改成了 &&，所以多过三组。"
     reply = ("两次提交的区别", {"reply": model_reply})
     first_fallback = scenario == "switch_first_fallback"
     single_reply = (REPLY[0], {"before": ""}) if first_fallback else REPLY
-    llm.set_backend(_capture(seen, [ANALYZE, reply, single_reply]))
+    prior_reply = ("回头问了一个问题", {"reply": "第 3 次把条件中的 || 改成了 &&。"})
+    llm.set_backend(_capture(seen, [ANALYZE, reply, single_reply, prior_reply]))
     try:
         with db.session_scope() as s:
             uid = UID
@@ -115,11 +124,21 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
             for no in (1, 2, 3):
                 sub_id = 8000000 + no
                 result = "WA" if no < 3 else "AC"
+                source = f"int main() {{ return {no}; }}"
+                if names_baseline:
+                    lines = [f"/* 第 {line} 行 */" for line in range(1, 20)]
+                    space = "" if no == 1 else " "
+                    op = "&&" if no == 3 else "||"
+                    lines[9] = f'printf("yes{space}1");'
+                    lines[10] = f"else if (a + b > c {op} a + c > b {op} b + c > a) {{"
+                    lines[13] = f'printf("yes{space}2");'
+                    lines[15] = f'printf("no{space}3");'
+                    source = "\n".join(lines)
                 s.add_all([
                     m.Submission(server_id=sid, submission_id=sub_id, user_id=uid, problem_id=pid,
                                  submit_time=now, judgement=result, detail_status="done"),
                     m.SourceSnapshot(server_id=sid, submission_id=sub_id, encoding="utf-8",
-                                     source_bytes=f"int main() {{ return {no}; }}".encode("utf-8")),
+                                     source_bytes=source.encode("utf-8")),
                     m.Judge(server_id=sid, submission_id=sub_id, judge_id=sub_id, is_latest=True, result=result),
                 ])
                 for index, tid in enumerate(tids):
@@ -129,7 +148,7 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
                                      result="AC" if passed else "WA", passed=passed))
                     if not passed and not (missing_output and no == 1 and index == 0):
                         output = f"PRIVATE_OUTPUT_{no}_{index}"
-                        if (first_fallback or scenario == "switch_luck") and no == 1 and index >= 2:
+                        if (first_fallback or names_baseline or scenario == "switch_luck") and no == 1 and index >= 2:
                             output = f"PRIVATE_ EXPECTED_{index}"
                         s.add(m.RunOutput(server_id=sid, run_id=run_id, encoding="utf-8",
                                           program_output_bytes=output.encode("utf-8")))
@@ -144,11 +163,13 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
             key = catalog.problem_key(sid, pid)
             with TestClient(create_app()) as client:
                 assert client.post("/api/auth/login", json={"loginName": uid, "password": "test-pass"}).status_code == 200
-                for no, text in [(1, first_question), (2, follow_up)]:
+                for no, text in [(3 if names_baseline else 1, first_question), (2, follow_up)]:
                     result = client.post(f"/api/threads/{key}/messages", json={
                         "text": text, "submissionKey": catalog.submission_key(sid, 8000000 + no),
                     })
                     assert result.status_code == 200, result.text
+                    if names_baseline and no == 3:
+                        assert "第 3 次把条件中的 || 改成了 &&" in result.text
                     if first_fallback and no == 1:
                         assert "3 组的输出只差空格或换行" in result.text
                         assert "2 组的输出内容也有差异" in result.text
@@ -162,19 +183,33 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
     assert "PRIVATE_OUTPUT_" not in shown
     if scenario != "changed_tests":
         assert "两次使用同一组测试点" in shown
-    if missing_output or scenario == "changed_tests":
+    if names_baseline:
+        assert "第 1 次通过 0/5 组，第 2 次通过 3/5 组" in shown
+        assert "改动涉及第 2 次提交的第 10、14、16 行" in shown
+        assert "第 11 行" not in shown and "改成了 &&" not in shown
+    if progress_question:
+        assert "其中 3 组原来的实际输出与标准输出只差空白字符" in shown
+        assert "两次提交的区别" not in seen
+    elif missing_output or scenario == "changed_tests":
         assert "第 1 次通过 0/5 组，第 2 次通过 3/5 组" in shown
         assert ("测试点有更新记录" if scenario == "changed_tests" else "无法确定通过数变化的原因") in shown
         assert "两次提交的区别" not in seen
     else:
         prompt = seen["两次提交的区别"][0]
-        if switches_focus:
+        if switches_focus and not names_baseline:
             assert "上一条学生消息选中第 1 次提交，本轮选中第 2 次提交" in prompt
+        if switches_focus:
             assert first_question in _section(prompt, "最近的对话")
             assert follow_up in _section(prompt, "他问的")
         versions = json.loads(_section(prompt, "要比较的两版代码"))
         assert [row["attempt"] for row in versions] == [1, 2]
-        assert all(f"return {row['attempt']};" in row["code"] for row in versions)
+        if names_baseline:
+            assert all("||" in row["code"] and "&&" not in row["code"] for row in versions)
+            assert "改成了 &&" not in _section(prompt, "最近的对话")
+            delta = json.loads(_section(prompt, "实际改动（del 为前一版，add 为后一版）"))
+            assert {row["n"] for row in delta} == {10, 14, 16}
+        else:
+            assert all(f"return {row['attempt']};" in row["code"] for row in versions)
         pairs = json.loads(_section(prompt, "按测试点对齐的评测证据"))
         assert prompt.index("【按测试点对齐的评测证据】") < prompt.index("【要比较的两版代码】")
         assert [row["testcaseId"] for row in pairs] == tids
@@ -184,7 +219,7 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
         assert pairs[0]["after"]["programOutput"] == "PRIVATE_OUTPUT_2_0"
         assert all(row["after"]["passed"] and row["after"]["programOutput"] is None for row in pairs[2:])
         assert uid not in prompt and NAME not in prompt
-        rejected = scenario in ("leak_old_output", "switch_luck", "different_input_claim")
+        rejected = scenario in ("leak_old_output", "switch_luck", "different_input_claim", "switch_named_wrong_line")
         assert ("先对照两版改动" if rejected else "输出格式改动") in shown
         assert "有 3 组由未通过变为通过" in shown
         if scenario in ("switch_luck", "switch_first_fallback"):
