@@ -5,6 +5,7 @@ import base64
 
 import httpx
 import pytest
+from sqlalchemy.orm import Session
 
 from app import config, db, llm
 from app import models as m
@@ -86,21 +87,37 @@ def test_teaching_prompt_is_editable_without_restarting(tmp_path, monkeypatch):
     assert "代码示例" in teaching.guidance()
 
 
-def test_stable_evidence_prefix_appends_new_attempts():
+@pytest.mark.parametrize(("count", "output_length"), [(3, 10), (9, 10), (3, 6000)])
+def test_stable_evidence_prefix_appends_new_attempts(monkeypatch, count, output_length):
     tests = [{"testcaseId": 11, "standardInput": "PRIVATE_INPUT", "standardOutput": "PRIVATE_EXPECTED"}]
-    bound = context.Ctx(user_id="masked-student", statement="公开题面", all_tests=tests)
-    versions = [
-        {"attemptNo": n, "sourceCode": f"int n = {n};",
-         "testCases": [{**tests[0], "programOutput": f"ACTUAL_{n}", "passed": n == 3}]}
-        for n in range(1, 4)
+    versions = {
+        no: {"attemptNo": no, "sourceCode": f"int n = {no};",
+             "testCases": [{**tests[0], "programOutput": f"ACTUAL_{no}" + "x" * output_length, "passed": False}]}
+        for no in range(1, count + 1)
+    }
+    attempts = [
+        m.Submission(server_id=1, submission_id=no, judgement="WA", detail_status="done")
+        for no in versions
     ]
 
-    original = prompt_context.build(None, bound, tuple(versions[:2]))
-    updated = prompt_context.build(None, bound, tuple(versions))
+    def assemble(_session, _server_id, submission_id, *, include_problem_text):
+        assert include_problem_text is False
+        return versions[submission_id]
+
+    monkeypatch.setattr(prompt_context, "assemble_submission", assemble)
+    with Session() as session:
+        bound = context.Ctx(user_id="masked-student", statement="公开题面", all_tests=tests,
+                            attempts=attempts[:-1], attempt_no=count - 1, evidence=versions[count - 1])
+        original = prompt_context.build(session, bound)
+        bound.attempts, bound.attempt_no, bound.evidence = attempts, count, versions[count]
+        updated = prompt_context.build(session, bound)
 
     assert original.document == updated.document
-    assert updated.prefix.startswith(original.prefix + "\n\n【第 3 次提交】")
+    assert updated.prefix.startswith(original.prefix + f"\n\n【第 {count} 次提交】")
     assert updated.prefix.count("PRIVATE_INPUT") == updated.prefix.count("PRIVATE_EXPECTED") == 1
+    assert [row["programOutput"] for row in updated.tests] == [
+        f"ACTUAL_{no}" + "x" * output_length for no in versions
+    ]
 
 
 def test_homework_stages_cover_logic_and_format_without_early_code(demo):

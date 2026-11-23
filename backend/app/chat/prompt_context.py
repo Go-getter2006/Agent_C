@@ -10,10 +10,6 @@ from .. import llm, pdftext
 from ..xdoj.assemble import assemble_submission
 from .context import Ctx
 
-FULL_ATTEMPTS = 8
-FULL_DETAIL_CHARS = 16_000
-
-
 def _json(data) -> str:
     return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -46,17 +42,6 @@ def build(s: Session | None, ctx: Ctx, compared: tuple[dict, ...] = ()) -> Promp
     if current_no and current:
         cache[current_no] = current
     attempts = dict(enumerate(ctx.attempts, 1))
-    wanted = {row["attemptNo"] for row in compared}
-    if current_no and not wanted:
-        wanted.add(current_no)
-        current_sub = attempts.get(current_no)
-        if current_sub is not None and current_sub.judgement == "AC":
-            prior_failure = next((no for no, sub in reversed(attempts.items())
-                                  if no < ctx.attempt_no and sub.judgement not in ("AC", "PENDING", "UNKNOWN", "")), None)
-            if prior_failure is not None:
-                wanted.add(prior_failure)
-        elif ctx.attempt_no > 1:
-            wanted.add(ctx.attempt_no - 1)
 
     def load(no: int) -> dict | None:
         if no not in cache and s is not None and no in attempts:
@@ -80,30 +65,22 @@ def build(s: Session | None, ctx: Ctx, compared: tuple[dict, ...] = ()) -> Promp
                   "testCases": runs}
         return f"【第 {no} 次提交】\n{_json(record)}", rows
 
-    details = {}
-    candidates = set(attempts) | set(cache)
-    if len(candidates) <= FULL_ATTEMPTS:
-        for no in sorted(candidates):
-            if (record := render(no)) is not None:
-                details[no] = record
-        if sum(len(record[0]) for record in details.values()) > FULL_DETAIL_CHARS:
-            details = {no: record for no, record in details.items() if no in wanted}
-    else:
-        for no in sorted(wanted):
-            if (record := render(no)) is not None:
-                details[no] = record
+    details = []
+    for no in sorted(attempts.keys() | cache.keys()):
+        if (record := render(no)) is not None:
+            details.append(record)
 
     original = ctx.statement or current.get("problemText") or ""
     statement = llm.strip_identity(original, *who)
     document = f"【题目】\n{statement or '（没有取到文字）'}" if ctx.problem or statement or ctx.document else ""
     standard = {row["testcaseId"]: row for row in ctx.all_tests}
-    for _, rows in details.values():
+    for _, rows in details:
         for row in rows:
             standard.setdefault(row["testcaseId"], {k: row.get(k) for k in (
                 "testcaseId", "standardInput", "standardOutput", "standardInputAvailable", "standardOutputAvailable")})
-    tests = [row for _, rows in details.values() for row in rows]
+    tests = [row for _, rows in details for row in rows]
     prefix = "\n\n".join([f"【共用测试点】\n{_json([standard[tid] for tid in sorted(standard)])}",
-                          "【按次序排列的提交明细】\n\n" + "\n\n".join(record[0] for record in details.values())])
+                          "【按次序排列的提交明细】\n\n" + "\n\n".join(record[0] for record in details)])
     index = "\n".join(f"第 {no} 次：{sub.judgement_text or sub.judgement}（{sub.detail_status}）"
                       for no, sub in attempts.items())
     return PromptContext(document, pdftext.sidebar_images(s, ctx.document, original), prefix, index, tests)
