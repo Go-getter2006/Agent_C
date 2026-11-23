@@ -24,6 +24,7 @@ class Draft:
     actions: list[str] = field(default_factory=list)
     flow_steps: list[str] = field(default_factory=list)
     flow_gap: int | None = None
+    textbook_refs: list[dict] = field(default_factory=list)
 
     def text(self) -> str:
         return f"{self.before}\n{self.after}".strip()
@@ -31,7 +32,7 @@ class Draft:
 
 _INTERNAL = re.compile(
     r"(\b[A-Z]{2}\d{2}\b|\bC\d{2}\.\d{2}|\bH[0-3]\b|\bR\d{2}\b|帮助级别|透露级别|根据你的学情|你的学情|掌握程度|"
-    r"置信度|错误类型库|技能编码|工作流|意图|甲级|乙级|标注)")
+    r"置信度|错误类型库|技能编码|工作流|(?<!示)意图|甲级|乙级|标注)")
 _PROBLEM_NO = re.compile(r"(第\s*\d+\s*题|题号|\b\d{3,}\s*号题|[Pp]roblem\s*\d+)")
 _LINE_REF = re.compile(r"第\s*(\d+)\s*(?:到|至|-|~|、)?\s*(\d+)?\s*行")
 _CODE_MENTION = re.compile(r"(第\s*\d+\s*行|这几行|这段代码|看你这)")

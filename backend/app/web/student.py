@@ -149,6 +149,8 @@ def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
         blocks = reply.restore_knowledge_code(blocks)
     out = {"id": msg.id, "role": msg.role, "kind": msg.kind, "time": msg.created_at.isoformat(),
            "blocks": blocks, "actions": content.get("actions", []) if with_actions else []}
+    if msg.role == "agent" and msg.course == "C" and msg.problem_id is None and content.get("textbook"):
+        out["textbook"] = content["textbook"]
     if msg.failure_submission_id is not None and msg.notice_read_at is None:
         out["unreadNotice"] = True
     if msg.kind == "quiz" and msg.quiz_attempt_id:

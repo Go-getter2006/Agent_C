@@ -1,7 +1,7 @@
 // 和后端通信。出错时抛 ApiError，message 是可以直接给人看的一句中文。
 import type {
   AuthInfo, DiffView, Homework, Me, Message, ProblemDetail, ProblemRow, ProgressData, QuizRecap, QuizView, ReviewCurrent,
-  ReviewAttemptRow, ReviewPage, ReviewTurn, StatusInfo, SubmissionChange, SubmissionView, Topic,
+  ReviewAttemptRow, ReviewPage, ReviewTurn, StatusInfo, SubmissionChange, SubmissionView, TextbookContents, TextbookSection, Topic,
 } from "./types";
 
 export class ApiError extends Error {
@@ -72,6 +72,9 @@ export const api = {
   send: (key: string, body: { text?: string; action?: string; submissionKey?: string; problemKey?: string }) =>
     post<{ messages: Message[]; thread: string }>(`/api/threads/${key}/messages`, body),
   topics: () => get<{ topics: Topic[] }>("/api/topics"),
+  textbookContents: () => get<{ book: TextbookContents | null }>("/api/textbook/contents"),
+  textbookSection: (edition: number, section: number, anchor?: number) =>
+    get<TextbookSection>(`/api/textbook/${edition}/sections/${section}${anchor === undefined ? "" : `?anchor=${anchor}`}`),
 
   quizConfidence: (id: number, value: string, elapsedMs: number) =>
     post<QuizView>(`/api/quiz/${id}/confidence`, { value, elapsedMs }),

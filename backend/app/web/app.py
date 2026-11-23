@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from .. import config, db, quiz
 from .. import models as m
-from . import auth, student
+from . import auth, student, textbook
 
 log = logging.getLogger("web")
 
@@ -43,7 +43,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def _http_error(_request: Request, exc: HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+        return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
 
     @app.exception_handler(Exception)
     async def _server_error(_request: Request, exc: Exception):
@@ -52,6 +52,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(student.router)
+    app.include_router(textbook.router)
     try:
         from . import teacher
 

@@ -9,7 +9,7 @@ import time
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, db, llm, mastery, review
+from .. import catalog, config, db, llm, mastery, review, textbook
 from .. import models as m
 from ..taxonomy import HELP_ORDER, SKILLS
 from ..xdoj import api as sync_api
@@ -308,10 +308,11 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
     if llm.available() and flow not in TEMPLATE_ONLY:
         materials = prompt_context.build(s, ctx)
         testcases.extend(materials.tests)
+        book_evidence = textbook.retrieve(s, ctx.course, text, history) if ctx.knowledge and flow == "concept" else {}
         feedback = ""
         for attempt in range(2):
             try:
-                draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials)
+                draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials, book_evidence)
             except llm.LLMUnavailable:
                 break
             if draft.quote is None and flow == "help" and decision.help_level in ("H0", "H1") \
@@ -583,6 +584,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     if flow in ("help", "locate", "diagnose", "diagnose_where") and not actions:
         actions = list(reply.HELP_ACTIONS)
     content = {"blocks": reply.to_blocks(draft, ctx), "actions": actions}
+    if draft.textbook_refs:
+        content["textbook"] = draft.textbook_refs
     if plan_step is not None:   # 流程图跟着消息走：学生看到的块，和接着引导要用的状态（学生端看不到）
         from . import plan as plan_mod
 

@@ -1,14 +1,15 @@
 // 知识问答：查概念、语法、库函数怎么用。左边是问答记录（可以新建），中间是回答。
 // - 默认回到上次的问答；第一次来是新的问答。以前的“综合”对话列在里面，叫“以前的问答”。
 // - 不自动带上作业题；学生点了“结合当前题”才带上作业引导里最近打开的那道题（题名和代码），可以去掉。
-// - 课程资料（讲义、教材、课件）上传以后，回答引用了哪一页会在右边列出来；没有资料时这一栏不出现。
+// - C 语言教材按最小小节浏览，引用只定位右栏。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { List, Plus } from "lucide-react";
+import { BookOpen, List, Plus } from "lucide-react";
 import { api } from "../api";
 import { StudentShell } from "../components/Shell";
 import Thread, { type ThreadContext } from "../components/Thread";
 import { Drawer } from "../components/ui";
+import Textbook, { type ReadingTarget } from "../components/Textbook";
 import { useLayout, useLoad } from "../lib/hooks";
 import { forgetSection, lastProblemKey } from "../lib/memory";
 import { dayLabel } from "../lib/time";
@@ -47,6 +48,12 @@ export default function Knowledge() {
   const layout = useLayout();
   const { me } = useSession();
   const topics = useLoad(() => api.topics(), [], 60000, true, "s:topics");
+  const course = me?.course;
+  const textbook = useLoad(() => course === "C" ? api.textbookContents() : Promise.resolve({ book: null }),
+    [course], 0, false, `s:textbook:${course}`);
+  const book = textbook.data?.book;
+  const [reading, setReading] = useState<ReadingTarget | null>(null);
+  const [readerOpen, setReaderOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [withProblem, setWithProblem] = useState(false);
   const list = topics.data?.topics ?? [];
@@ -90,6 +97,7 @@ export default function Knowledge() {
   const pane = (
     <TopicList topics={list} current={key} onNew={() => open("new")} onNavigate={open} />
   );
+  const reader = book ? <Textbook book={book} target={reading} onOpen={setReading} onContents={() => setReading(null)} /> : null;
 
   return (
     <StudentShell>
@@ -104,6 +112,11 @@ export default function Knowledge() {
               <button type="button" className="btn btn-sm only-narrow" onClick={() => setDrawer(true)}>
                 <List size={15} aria-hidden="true" />问答记录
               </button>
+              {book && layout !== "four" && (
+                <button type="button" className="btn btn-sm" onClick={() => setReaderOpen(true)}>
+                  <BookOpen size={15} aria-hidden="true" />教材
+                </button>
+              )}
             </span>
           </header>
           {key && (
@@ -111,12 +124,20 @@ export default function Knowledge() {
               emptyTitle="问一个知识问题"
               emptyText={ds ? "链表、栈、树、图的概念和写法，都可以直接问。" : "概念、语法、库函数怎么用，都可以直接问。"}
               placeholder={ds ? "问一个数据结构知识问题…" : "问一个 C 语言知识问题…"}
-              context={context} contextOffer={offer} onThread={onThread} onActivity={topics.reload} />
+              context={context} contextOffer={offer} onThread={onThread} onActivity={topics.reload}
+              onTextbook={book ? (citation, time) => {
+                setReading({ ...citation, time });
+                if (layout !== "four") setReaderOpen(true);
+              } : undefined} />
           )}
         </main>
+        {reader && layout === "four" && <aside className="wb-side textbook-side" aria-label="教材阅读">{reader}</aside>}
       </div>
       {drawer && (
         <Drawer side="left" title="问答记录" onClose={() => setDrawer(false)}>{pane}</Drawer>
+      )}
+      {reader && readerOpen && layout !== "four" && (
+        <Drawer side="right" title={book?.title ?? "教材"} onClose={() => setReaderOpen(false)}>{reader}</Drawer>
       )}
     </StudentShell>
   );

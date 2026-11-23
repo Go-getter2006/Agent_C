@@ -131,6 +131,26 @@ export interface Message {
   blocks: Block[];
   actions: HelpAction[];
   quiz?: QuizView;
+  textbook?: TextbookCitation[];
+}
+
+export interface TextbookCitation {
+  edition: number;
+  section: number;
+  anchor: number;
+  path: string[];
+}
+
+export interface TextbookContents {
+  edition: number;
+  title: string;
+  sections: { id: number; parent: number | null; title: string }[];
+}
+
+export interface TextbookSection {
+  title: string;
+  pages: { url: string; width: number; height: number }[];
+  highlight: { text: string; figure: boolean; boxes: [number, number, number, number, number][] } | null;
 }
 
 export interface DiffRow {

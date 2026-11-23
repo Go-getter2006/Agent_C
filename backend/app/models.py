@@ -34,6 +34,31 @@ def _ts() -> Mapped[Dt]:
     return mapped_column(UTCDateTime, default=now)
 
 
+class TextbookEdition(Base):
+    __tablename__ = "textbook_editions"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    digest: Mapped[str] = mapped_column(String(64), unique=True)
+    title: Mapped[str] = mapped_column(String(255))
+    published_at: Mapped[Dt] = _ts()
+
+
+class TextbookSection(Base):
+    __tablename__ = "textbook_sections"
+    edition_id: Mapped[int] = mapped_column(ForeignKey("textbook_editions.id"), primary_key=True)
+    number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(String(255))
+    pages: Mapped[list] = mapped_column(JSON)
+    anchors: Mapped[list] = mapped_column(JSON)
+
+
+class TextbookFigure(Base):
+    __tablename__ = "textbook_figures"
+    edition_id: Mapped[int] = mapped_column(ForeignKey("textbook_editions.id"), primary_key=True)
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    png: Mapped[bytes] = mapped_column(LargeBinary)
+
+
 # ============================================================ XDOJ 原始数据
 class Server(Base):
     __tablename__ = "xdoj_servers"

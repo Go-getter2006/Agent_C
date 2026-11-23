@@ -1,12 +1,12 @@
 // 一条对话线程：消息、正在输入、求助按钮、输入栏。
 // 学生只看到自然的回复、代码块和“正在输入”；没有步骤条、标签、分数。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, X, type LucideIcon } from "lucide-react";
+import { ArrowUp, BookOpen, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, X, type LucideIcon } from "lucide-react";
 import { api } from "../api";
 import type { Layout } from "../lib/hooks";
 import { readDraft, readScroll, saveScroll, writeDraft } from "../lib/memory";
 import { dayLabel, sameDay } from "../lib/time";
-import type { HelpAction, Message, QuizView } from "../types";
+import type { HelpAction, Message, QuizView, TextbookCitation } from "../types";
 import { useSession, useStudentCache } from "../session";
 import CourseScene from "./CourseScene";
 import Attempt from "./Attempt";
@@ -57,6 +57,7 @@ interface Props {
   contextOffer?: { label: string; onPick: () => void } | null;   // 还没带上时：可以点一下带上
   onThread?: (key: string) => void;   // 新建问答发出第一条以后，有了自己的编号
   onActivity?: () => void;     // 有新消息、小题有进展：让外面刷新列表和右栏
+  onTextbook?: (citation: TextbookCitation, time: string) => void;
 }
 
 function looksLikeCode(text: string): boolean {
@@ -69,7 +70,7 @@ function SubmissionQuote({ attemptNo }: { attemptNo?: number }) {
 }
 
 export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, onNoticeRead, context, contextOffer,
-  waitingContext = false, pollHistory = true, onThread, onActivity }: Props) {
+  waitingContext = false, pollHistory = true, onThread, onActivity, onTextbook }: Props) {
   const cache = useStudentCache().threads;
   const request = useRef<AbortController | null>(null);
   const [messages, setMessages] = useState<Message[] | null>(() => cache.get(threadKey) ?? null);
@@ -286,7 +287,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
                 live={i === list.length - 1 && !shown} onSend={(value) => void send({ text: value })}
                 daySep={i === 0 ? (sameDay(m.time, new Date().toISOString()) ? null : dayLabel(m.time)) : sameDay(m.time, list[i - 1].time) ? null : dayLabel(m.time)}
                 onAction={(action) => void send({ action })} onQuiz={(q) => updateQuiz(m.id, q)}
-                onCopy={() => void api.event("copy_code", threadKey)} />
+                onCopy={() => void api.event("copy_code", threadKey)} onTextbook={onTextbook} />
             ))}
             {shown && (
               <div className="msg msg-student">
@@ -367,9 +368,10 @@ interface ItemProps {
   onSend: (text: string) => void;
   onQuiz: (quiz: QuizView) => void;
   onCopy: () => void;
+  onTextbook?: Props["onTextbook"];
 }
 
-function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend, onQuiz, onCopy }: ItemProps) {
+function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend, onQuiz, onCopy, onTextbook }: ItemProps) {
   const mine = message.role === "student";
   if (mine) {
     const text = message.blocks.filter((b) => b.t === "p").map((b) => (b as { text: string }).text).join("\n");
@@ -408,6 +410,17 @@ function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend
               <CodeBlock key={i} caption={b.caption} start={b.start} lines={b.lines} mark={b.mark} onCopy={onCopy} />
             ),
           )}
+          {onTextbook && message.textbook?.length ? (
+            <div className="textbook-citations" aria-label="教材引用">
+              {message.textbook.map((citation) => (
+                <button key={`${citation.edition}-${citation.section}-${citation.anchor}`} type="button"
+                  className="textbook-citation" onClick={() => onTextbook(citation, message.time)}
+                  title={citation.path.join(" › ")}>
+                  <BookOpen size={15} aria-hidden="true" /><span>{citation.path[citation.path.length - 1]}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
           {message.quiz && ((message.quiz.protocol ?? 1) >= 2
             ? <Attempt quiz={message.quiz} onChange={onQuiz} compact />
             : <Quiz quiz={message.quiz} layout={layout} onChange={onQuiz} />)}

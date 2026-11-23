@@ -2842,3 +2842,118 @@
 /* 开发者：每一页右上角的导出 */
 .export-links { display: inline-flex; gap: var(--sp-4); }
 .cand-near { display: block; white-space: nowrap; }
+.textbook-side {
+  flex: 0 0 clamp(365px, 35vw, 605px);
+  width: clamp(365px, 35vw, 605px);
+  overflow: hidden;
+}
+.textbook-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.textbook-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 59px;
+  padding: var(--sp-12) var(--sp-16);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.textbook-head h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  margin: 0;
+  font: 500 var(--fs-18)/1.2 var(--font-display);
+}
+.textbook-head h2 svg { color: var(--brand); }
+.textbook-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  padding: var(--sp-12);
+}
+.textbook-scroll[hidden] { display: none; }
+.textbook-book-title {
+  margin: var(--sp-4) 0 var(--sp-12) var(--sp-8);
+  font-size: var(--fs-14);
+  color: var(--ink-3);
+}
+.textbook-contents { margin: 0; padding: 0; list-style: none; }
+.textbook-contents .textbook-contents {
+  margin-inline-start: var(--sp-16);
+  border-inline-start: 1px solid var(--line);
+  padding-inline-start: var(--sp-8);
+}
+.textbook-contents summary, .textbook-leaf {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  width: 100%;
+  min-height: 38px;
+  padding: var(--sp-6) var(--sp-8);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-align: start;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.textbook-contents summary { font-weight: 650; list-style: none; }
+.textbook-contents summary::-webkit-details-marker { display: none; }
+.textbook-contents summary svg { flex: none; transform: rotate(-90deg); color: var(--ink-3); }
+.textbook-contents details[open] > summary svg { transform: rotate(0); color: var(--brand); }
+.textbook-contents summary:hover, .textbook-leaf:hover { background: var(--surface-3); }
+.textbook-contents details[open] > summary { color: var(--solid); }
+.textbook-leaf { padding-inline-start: var(--sp-12); }
+.textbook-intro {
+  width: auto;
+  margin-inline-start: var(--sp-20);
+  color: var(--ink-3);
+  font-size: var(--fs-13);
+}
+.textbook-location {
+  flex: none;
+  padding: var(--sp-12) var(--sp-16) 0;
+  color: var(--ink-3);
+  font-size: var(--fs-12);
+}
+.textbook-location h3 { margin: var(--sp-4) 0; color: var(--ink); }
+.textbook-location time { color: var(--solid); }
+.textbook-page {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  margin: 0 0 var(--sp-8);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.textbook-page img { display: block; width: 100%; height: 100%; object-fit: fill; }
+.textbook-mark {
+  position: absolute;
+  pointer-events: none;
+  background: var(--mark);
+  mix-blend-mode: multiply;
+}
+.textbook-mark.is-figure { background: transparent; outline: 2px solid var(--fail); }
+.textbook-citations { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-top: var(--sp-8); }
+.textbook-citation {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-4) var(--sp-8);
+  text-align: start;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  background: var(--accent-bg);
+  color: var(--solid);
+  font-size: var(--fs-13);
+  cursor: pointer;
+}
+.textbook-citation svg { flex: none; }
+.textbook-citation:hover { border-color: var(--brand); }
+.drawer-body:has(> .textbook-pane) { padding: 0; overflow: hidden; }
+@media print {
+  .textbook-side, .textbook-pane { display: none; }
+}

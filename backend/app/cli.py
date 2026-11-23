@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import typer
 from sqlalchemy import func, select
@@ -50,6 +51,27 @@ def demo_seed() -> None:
     from .demo.seed import seed
 
     typer.echo(json.dumps(seed(), ensure_ascii=False))
+
+
+@cli.command("textbook-prepare")
+def textbook_prepare(output: Path, documents: list[Path], pdf_directory: Path = typer.Option(..., "--pdf-dir"),
+                     contents: Path | None = None, title: str = "C 语言程序设计") -> None:
+    """离线从按章节顺序列出的 DOCX 和同名 PDF 生成私有教材阅读包。"""
+    from .textbook_word import prepare
+
+    typer.echo(json.dumps(prepare(output, title, documents, pdf_directory, contents), ensure_ascii=False))
+
+
+@cli.command("textbook-import")
+def textbook_import(bundle: Path) -> None:
+    """把离线阅读包发布到当前服务所用的数据库。"""
+    from .textbook import publish
+
+    db.migrate()
+    with db.session_scope() as s:
+        edition, created = publish(s, bundle)
+        message = f"教材版本 {edition.id} {'已发布' if created else '已导入过'}。"
+    typer.echo(message)
 
 
 @cli.command("serve")

@@ -36,9 +36,10 @@ def test_adopts_old_create_all_database(tmp_path, monkeypatch):
     insp = inspect(db.engine())
     assert "course" in {c["name"] for c in insp.get_columns("chat_messages")}
     assert "act" in {c["name"] for c in insp.get_columns("chat_steps")}
-    assert {"agent_assessments", "model_weights", "cross_links"} <= set(insp.get_table_names())
+    assert {"agent_assessments", "model_weights", "cross_links",
+            "textbook_editions", "textbook_sections", "textbook_figures"} <= set(insp.get_table_names())
     with db.engine().connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0021"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0022"
     assert "discussion" in {c["name"] for c in insp.get_columns("quiz_attempts")}
     assert "include_code" in {c["name"] for c in insp.get_columns("log_requests")}
     assert "tidy_version" in {c["name"] for c in insp.get_columns("xdoj_problem_texts")}
@@ -50,5 +51,5 @@ def test_new_database_is_created_and_stamped(tmp_path):
     db.init_engine(f"sqlite:///{tmp_path / 'new.sqlite3'}")
     assert db.migrate() == "created"
     with db.engine().connect() as conn:
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0021"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0022"
     db.engine().dispose()
