@@ -349,6 +349,16 @@ class Daemon:
     # ------------------------------------------------------------ 主循环
     def step(self) -> str | None:
         """做一件事，返回做了什么；没事可做返回 None。"""
+        source_ids = {ctx.source_id for ctx in self.contexts if ctx.source_id is not None}
+        if source_ids:
+            with db.session_scope() as s:
+                removed = set(s.scalars(select(m.DataSource.id).where(
+                    m.DataSource.id.in_(source_ids), m.DataSource.removed_at.is_not(None))).all())
+            if removed:
+                for ctx in self.contexts:
+                    if ctx.source_id in removed:
+                        ctx.client.close()
+                self.contexts[:] = [ctx for ctx in self.contexts if ctx.source_id not in removed]
         if self._handle_triggers():
             return "trigger"
         for ctx in self.contexts:  # 先同步名单：学生要在名单里才能登录

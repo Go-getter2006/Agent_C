@@ -129,9 +129,8 @@ def _developer_login(s: Session, password: str, course: str, key: str, response:
 
 
 def _student_servers(s: Session, user: m.User, course: str | None = None) -> list[m.Server]:
-    ids = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id or user.login_name)}
-    rows = [srv for srv in (s.get(m.Server, i) for i in sorted(ids)) if srv is not None]
-    return [srv for srv in rows if course is None or srv.course == course]
+    ids = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id or user.login_name, course)}
+    return [srv for srv in (s.get(m.Server, i) for i in sorted(ids)) if srv is not None]
 
 
 def _xdoj_check(server: m.Server, user_id: str, password: str) -> bool:
@@ -203,6 +202,8 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
         if not _dev_password_ok(body.password):
             record_failure(key)
             raise HTTPException(status_code=401, detail="账号或密码不对。")
+        if user.role == "teacher" and accounts.teacher_course_removed(s, user, course):
+            raise HTTPException(status_code=403, detail="这个教师账号已被移除。")
 
     accounts.touch_login(s, user)
     if user.role == "student" and user.student_id:

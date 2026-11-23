@@ -8,7 +8,7 @@ import logging
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .. import catalog, config, db
+from .. import accounts, catalog, config, db
 from .. import models as m
 from ..xdoj.assemble import source_text
 from .policy import Decision
@@ -142,6 +142,8 @@ def on_failed_submission(s: Session, sub: m.Submission, now: dt.datetime | None 
         return None
     if not catalog.is_visible(s, sub.user_id, sub.server_id, sub.problem_id):
         _log_notice(s, sub, "skip:not_visible", now)
+        return None
+    if accounts.submission_removed(s, sub.server_id, sub.user_id, sub.class_id, sub.contest_id):
         return None
     subs = catalog.user_submissions(s, sub.user_id, sub.server_id, sub.problem_id)
     upto = [x for x in subs if x.submission_id <= sub.submission_id]

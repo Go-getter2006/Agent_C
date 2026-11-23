@@ -97,10 +97,12 @@ def _verify_teacher(s: Session, body: TeacherLogin, key: str) -> tuple[m.Server,
 
 def _save_source(s: Session, server: m.Server, user_id: str, password: str) -> m.DataSource:
     source = s.scalar(select(m.DataSource).where(
-        m.DataSource.server_id == server.id, m.DataSource.teacher_user_id == user_id))
+        m.DataSource.server_id == server.id, m.DataSource.teacher_user_id == user_id).with_for_update())
     if source is None:
         source = m.DataSource(server_id=server.id, teacher_user_id=user_id)
         s.add(source)
+    elif source.removed_at is not None:
+        raise HTTPException(status_code=403, detail="这个教师账号在本课程中已被移除。")
     if not source.from_env:
         source.password_enc = crypto.encrypt_secret(password)  # 后台同步要长期使用，加密保存
     source.enabled, source.last_login_at = True, db.now()
@@ -162,7 +164,7 @@ def my_classes(s: Session, user: m.User) -> list[m.XClass]:
     """他名下、这次登录的这门课的班。"""
     servers = course_server_ids(s, user.course)
     if user.role == "admin":
-        return list(s.scalars(select(m.XClass).where(m.XClass.server_id.in_(servers or [-1]))
+        return list(s.scalars(select(m.XClass).where(m.XClass.server_id.in_(servers or [-1]), m.XClass.removed_at.is_(None))
                               .order_by(m.XClass.server_id, m.XClass.class_id)).all())
     ids = accounts.teacher_source_ids(s, user)
     if not ids:
@@ -170,7 +172,9 @@ def my_classes(s: Session, user: m.User) -> list[m.XClass]:
     rows = s.scalars(
         select(m.XClass).join(m.ClassSource, (m.ClassSource.server_id == m.XClass.server_id)
                               & (m.ClassSource.class_id == m.XClass.class_id))
-        .where(m.ClassSource.data_source_id.in_(ids), m.XClass.server_id.in_(servers or [-1]))
+        .join(m.DataSource, m.DataSource.id == m.ClassSource.data_source_id)
+        .where(m.ClassSource.data_source_id.in_(ids), m.XClass.server_id.in_(servers or [-1]),
+               m.DataSource.removed_at.is_(None), m.XClass.removed_at.is_(None))
         .order_by(m.XClass.server_id, m.XClass.class_id)).all()
     return list(dict.fromkeys(rows))
 
@@ -1164,13 +1168,18 @@ def _source_view(s: Session, source: m.DataSource) -> dict:
     server = s.get(m.Server, source.server_id)
     last_ok = store.get_time(s, source.server_id, "last_ok_poll_at")
     last_meta = store.get_time(s, source.server_id, "last_meta_at")
-    n_classes = s.scalar(select(func.count()).select_from(m.ClassSource).where(m.ClassSource.data_source_id == source.id))
+    classes = accounts.source_classes(s, source)
+    teacher_user = accounts.owner_of_source(s, source.id)
     requests = s.scalars(select(m.RequestLog.ok).where(m.RequestLog.server_id == source.server_id)
                          .order_by(m.RequestLog.id.desc()).limit(200)).all()
     return {
         "id": source.id, "server": server.name if server else "", "serverCode": server.code if server else "",
         "account": source.teacher_user_id, "enabled": source.enabled, "fromEnv": source.from_env,
-        "demo": bool(server and server.code == "demo"), "classes": n_classes,
+        "teacherName": teacher_user.display_name if teacher_user else "",
+        "removed": source.removed_at is not None,
+        "demo": bool(server and server.code == "demo"), "classes": sum(cls.removed_at is None for cls in classes),
+        "rosters": [{"key": class_key(cls.server_id, cls.class_id), "name": cls.class_name,
+                     "removed": cls.removed_at is not None} for cls in classes],
         "lastLogin": source.last_login_at.isoformat() if source.last_login_at else None,
         "lastPoll": last_ok.isoformat() if last_ok else None, "lastMeta": last_meta.isoformat() if last_meta else None,
         "pollFailures": int(store.get_state(s, source.server_id, "poll_failures", "0") or 0),
@@ -1198,6 +1207,25 @@ def sources_list(user: m.User = Depends(admin), s: Session = Depends(get_session
             "candidates": candidates,
             "libraries": {"errors": len(ERRORS), "skills": len(SKILLS), "knowledge": len(KNOWLEDGE_POINTS),
                           "errorVersion": config.ERROR_LIBRARY_VERSION, "taxonomyVersion": config.TAXONOMY_VERSION}}
+
+
+@router.post("/sources/{source_id}/remove")
+def remove_teacher(source_id: int, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
+    source = s.get(m.DataSource, source_id, with_for_update=True)
+    if source is None or source.server_id not in course_server_ids(s, user.course):
+        raise HTTPException(status_code=404, detail="没有找到这门课的教师。")
+    accounts.remove_teacher_source(s, source, db.now())
+    return {"ok": True}
+
+
+@router.post("/sources/classes/{key}/remove")
+def remove_roster(key: str, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
+    parsed = catalog.parse_key(key, "c")
+    cls = s.get(m.XClass, parsed, with_for_update=True) if parsed else None
+    if cls is None or cls.server_id not in course_server_ids(s, user.course):
+        raise HTTPException(status_code=404, detail="没有找到这门课的班级。")
+    accounts.remove_class(s, cls, db.now())
+    return {"ok": True}
 
 
 def _candidate_groups(s: Session, servers: list[int], limit: int = 30) -> list[dict]:

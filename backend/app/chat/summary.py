@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import catalog, changes, db, llm, pdftext
+from .. import accounts, catalog, changes, db, llm, pdftext
 from .. import models as m
 from ..taxonomy import course_prompt, error_name
 from .proactive import _course, fix_excerpt
@@ -75,6 +75,8 @@ def on_pass(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> m.
     if sub.judgement != "AC" or (sub.submit_time and now - sub.submit_time > RECENT):
         return None
     if not catalog.is_visible(s, sub.user_id, sub.server_id, sub.problem_id) or _sent(s, sub):
+        return None
+    if accounts.submission_removed(s, sub.server_id, sub.user_id, sub.class_id, sub.contest_id):
         return None
     subs = [x for x in catalog.user_submissions(s, sub.user_id, sub.server_id, sub.problem_id)
             if x.submission_id <= sub.submission_id]

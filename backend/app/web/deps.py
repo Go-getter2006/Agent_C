@@ -6,7 +6,7 @@ from typing import Iterator
 from fastapi import Cookie, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import crypto, db
+from .. import accounts, crypto, db
 from .. import models as m
 
 COOKIE = "pda_session"
@@ -31,6 +31,10 @@ def current_user(s: Session = Depends(get_session), token: str | None = Cookie(d
     if user is None or user.status != "active":
         raise HTTPException(status_code=401, detail="请先登录。")
     user.course = found[1]
+    if user.role == "student" and accounts.student_course_removed(s, user.student_id or user.login_name, user.course):
+        raise HTTPException(status_code=401, detail="你已不在这门课的班级名单里。")
+    if user.role == "teacher" and accounts.teacher_course_removed(s, user, user.course):
+        raise HTTPException(status_code=401, detail="这个教师账号在本课程中已被移除。")
     return user
 
 

@@ -34,11 +34,18 @@ def _activity(text: str) -> None:
 
 
 def sync_classes_and_roster(ctx: SyncContext) -> None:
+    with db.session_scope() as s:
+        if accounts.source_removed(s, ctx.source_id):
+            return
     _activity("同步班级和学生名单")
     classes = ep.list_classes(ctx.client)
     with db.session_scope() as s:
+        if accounts.source_removed(s, ctx.source_id, lock=True):
+            return
         for c in classes:
-            row = s.get(m.XClass, (ctx.server_id, c.class_id))
+            row = s.get(m.XClass, (ctx.server_id, c.class_id), with_for_update=True)
+            if row is not None and row.removed_at is not None:
+                continue
             if row is None:
                 s.add(m.XClass(server_id=ctx.server_id, class_id=c.class_id, class_name=c.class_name,
                                owner_id=c.owner_id, data_source_id=ctx.source_id, fetched_at=ctx.now()))
@@ -56,16 +63,25 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
         codes = {c.roster_filter_id: c.class_id for c in classes if c.roster_filter_id}
         set_state(s, ctx.server_id, "class_codes", json.dumps(codes, ensure_ascii=False))
 
-    seen: dict[str, int] = {}
+    seen: dict[str, set[int]] = {}
     for c in classes:
+        with db.session_scope() as s:
+            if accounts.source_removed(s, ctx.source_id):
+                return
+            if accounts.class_removed(s, ctx.server_id, c.class_id):
+                continue
         _activity(f"同步学生名单（{c.class_name or c.class_id}）")
         students = ep.list_students(ctx.client, c.class_id, c.alt_id, roster_filter_id=c.roster_filter_id)
         if not students:
             log.warning("班级 %s（%s）的名单是空的：按 class_id=%s%s 都没取到学生。请运行 python -m app.cli doctor 看一下",
                         c.class_id, c.class_name, c.roster_filter_id or c.class_id, f" 和 {c.alt_id}" if c.alt_id else "")
         with db.session_scope() as s:
+            if accounts.source_removed(s, ctx.source_id, lock=True):
+                return
+            if accounts.class_removed(s, ctx.server_id, c.class_id, lock=True):
+                continue
             for st in students:
-                seen[st.user_id] = c.class_id
+                seen.setdefault(st.user_id, set()).add(c.class_id)
                 row = s.get(m.Student, st.user_id)
                 if row is None:
                     s.add(m.Student(user_id=st.user_id, name=st.name, first_seen_at=ctx.now(), fetched_at=ctx.now()))
@@ -84,11 +100,13 @@ def sync_classes_and_roster(ctx: SyncContext) -> None:
     if not class_ids:
         return
     with db.session_scope() as s:
+        if accounts.source_removed(s, ctx.source_id, lock=True):
+            return
         actives = s.scalars(select(m.Enrollment).where(
             m.Enrollment.server_id == ctx.server_id, m.Enrollment.status == "active",
             m.Enrollment.class_id.in_(class_ids))).all()
         for e in actives:
-            if seen.get(e.user_id) != e.class_id:
+            if e.class_id not in seen.get(e.user_id, ()):
                 e.status = "moved" if e.user_id in seen else "removed"
                 e.until = ctx.now()
                 if e.user_id not in seen:
@@ -113,12 +131,17 @@ def _enroll(s, ctx: SyncContext, user_id: str, class_id: int) -> None:
 
 
 def sync_contests(ctx: SyncContext) -> None:
+    with db.session_scope() as s:
+        if accounts.source_removed(s, ctx.source_id):
+            return
     _activity("同步作业")
     contests = ep.list_contests(ctx.client)
     with db.session_scope() as s:
         alt = {int(k): v for k, v in json.loads(get_state(s, ctx.server_id, "class_alt_ids") or "{}").items()}
         codes = json.loads(get_state(s, ctx.server_id, "class_codes") or "{}")
-        known = set(s.scalars(select(m.XClass.class_id).where(m.XClass.server_id == ctx.server_id)).all())
+        class_rows = s.execute(select(m.XClass.class_id, m.XClass.removed_at).where(m.XClass.server_id == ctx.server_id)).all()
+        known = {cid for cid, _removed in class_rows}
+        removed = {cid for cid, stamp in class_rows if stamp is not None}
 
     def local_class(cands: list[str]) -> int | None:
         """作业里写的班级 → 本地班级号：先认原始 classId，再认另一种数字编号，最后认本地班级号本身。"""
@@ -135,8 +158,14 @@ def sync_contests(ctx: SyncContext) -> None:
                 return n
         return to_int(cands[0]) if cands else None
     for c in contests:
+        refs = c.class_refs or [[str(x)] for x in c.class_ids]
+        assigned = {cid for r in refs if (cid := local_class(r)) is not None}
+        if assigned and assigned <= removed:
+            continue
         problem_ids = c.problem_ids if c.problem_ids is not None else ep.contest_problem_ids(ctx.client, c.contest_id)
         with db.session_scope() as s:
+            if accounts.source_removed(s, ctx.source_id, lock=True):
+                return
             row = s.get(m.Contest, (ctx.server_id, c.contest_id))
             if row is None:
                 row = m.Contest(server_id=ctx.server_id, contest_id=c.contest_id)
@@ -145,8 +174,7 @@ def sync_contests(ctx: SyncContext) -> None:
             row.raw_json, row.fetched_at = c.raw, ctx.now()
             s.execute(delete(m.ContestClass).where(
                 m.ContestClass.server_id == ctx.server_id, m.ContestClass.contest_id == c.contest_id))
-            refs = c.class_refs or [[str(x)] for x in c.class_ids]
-            for cid in dict.fromkeys(x for x in (local_class(r) for r in refs) if x is not None):
+            for cid in sorted(assigned):
                 s.add(m.ContestClass(server_id=ctx.server_id, contest_id=c.contest_id, class_id=cid))
             s.execute(delete(m.ContestProblem).where(
                 m.ContestProblem.server_id == ctx.server_id, m.ContestProblem.contest_id == c.contest_id))

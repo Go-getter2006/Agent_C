@@ -47,7 +47,8 @@ def data_version(s: Session) -> tuple:
     return (id(s.get_bind()), *row)
 
 
-_CLASS_COLUMNS = (m.XClass.class_id, m.XClass.fetched_at, m.Enrollment.id, m.ClassSource.class_id, m.TeacherSource.created_at)
+_CLASS_COLUMNS = (m.XClass.class_id, m.XClass.fetched_at, m.XClass.removed_at, m.Enrollment.id, m.ClassSource.class_id,
+                  m.TeacherSource.created_at, m.DataSource.removed_at)
 REFRESH = 600   # 秒：数据没变也最多隔这么久让页面重取一次（“本周”、随遗忘变化的掌握程度这类按时间算的数）
 
 

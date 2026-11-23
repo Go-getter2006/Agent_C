@@ -90,8 +90,9 @@ def problem_contest(s: Session, user_id: str, server_id: int, problem_id: int, c
                     .join(c, (c.server_id == cp.server_id) & (c.contest_id == cp.contest_id))
                     .join(cc, (cc.server_id == c.server_id) & (cc.contest_id == c.contest_id))
                     .join(en, (en.server_id == cc.server_id) & (en.class_id == cc.class_id))
+                    .outerjoin(m.XClass, (m.XClass.server_id == en.server_id) & (m.XClass.class_id == en.class_id))
                     .where(cp.server_id == server_id, cp.problem_id == problem_id,
-                           en.user_id == user_id, en.status == "active")
+                           en.user_id == user_id, en.status == "active", m.XClass.removed_at.is_(None))
                     .order_by(c.end_time.is_(None).desc(), c.end_time.desc(), c.contest_id.desc()).limit(1))
 
 

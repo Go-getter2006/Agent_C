@@ -9,7 +9,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import config, db, mastery, review, similarity
+from . import accounts, config, db, mastery, review, similarity
 from . import models as m
 from .labeling import labeler, problems
 from .taxonomy import HELP_ORDER
@@ -33,7 +33,8 @@ def help_before(s: Session, sub: m.Submission) -> str:
 
 def process_submission(s: Session, server_id: int, submission_id: int, now=None) -> None:
     sub = s.get(m.Submission, (server_id, submission_id))
-    if sub is None or sub.detail_status != "done" or sub.judgement == "PENDING":
+    if sub is None or sub.detail_status != "done" or sub.judgement == "PENDING" \
+            or accounts.submission_removed(s, sub.server_id, sub.user_id, sub.class_id, sub.contest_id):
         return
     if sub.judgement != "AC":
         labels = labeler.label_submission(s, server_id, submission_id)

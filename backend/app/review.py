@@ -40,7 +40,7 @@ import random
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from . import catalog, config, db, mastery
+from . import accounts, catalog, config, db, mastery
 from . import models as m
 from .taxonomy import LEVEL_WEAK, KNOWLEDGE_POINTS, course_of, kp_of_skill, skill_name
 
@@ -736,6 +736,9 @@ def prepare_active(limit: int = 3, at: dt.datetime | None = None) -> int:
         key = (user_id, course)
         if key in ready or key in waiting:
             continue
+        with db.session_scope() as s:
+            if accounts.student_course_removed(s, user_id, course):
+                continue
         if key not in seeded:
             with db.session_scope() as s:
                 seed_missing(s, user_id, course, at)

@@ -67,6 +67,94 @@ def test_research_and_data_only_for_developer(client, demo):
     assert dev(client, "D").status_code in (200, 400)   # 数据结构没接入时 400；接入了照样能登录
 
 
+@pytest.mark.parametrize("remove_teacher", [False, True])
+def test_developer_removal_revokes_access_and_stops_sync(ctx, fake, monkeypatch, remove_teacher):
+    from dataclasses import replace
+
+    from app.web import auth
+    from app.xdoj import sync_meta, sync_submissions
+    from app.xdoj.daemon import Daemon
+
+    monkeypatch.setattr(teacher_api, "_test_transport", fake.transport())
+    monkeypatch.setattr(auth, "_failures", {})
+    monkeypatch.setattr(config, "AUTH_MODE", "dev")
+    fake.classes.append({"id": 32, "classId": 32, "className": "测试二班", "ownerId": fake.teacher_id})
+    fake.contests.append({**fake.contests[0], "id": 502, "classes": [{"id": 32}]})
+    other_uid = "2902100009"
+    fake.add_student(other_uid, "学生丁", 32)
+    sid = ctx.server_id
+    with TestClient(create_app()) as teacher_client, TestClient(create_app()) as admin_client, \
+            TestClient(create_app()) as student_client, TestClient(create_app()) as other_client:
+        assert login(teacher_client, fake.teacher_id, fake.password).status_code == 200
+        with db.session_scope() as s:
+            ctx.source_id = s.scalar(select(m.DataSource.id).where(m.DataSource.server_id == sid))
+        sync_meta.sync_metadata(ctx)
+        sync_submissions.poll_new_submissions(ctx)
+        assert login(student_client, UID).status_code == 200
+        assert login(other_client, other_uid).status_code == 200
+        key = f"c{sid}-31"
+        route = (f"/api/teacher/sources/{ctx.source_id}/remove" if remove_teacher
+                 else f"/api/teacher/sources/classes/{key}/remove")
+        assert student_client.post(route).status_code == 403
+        assert teacher_client.post(route).status_code == 403
+        assert dev(admin_client).status_code == 200
+        source = admin_client.get("/api/teacher/sources").json()["sources"][0]
+        assert source["teacherName"] == fake.teacher_name and len(source["rosters"]) == 2
+        assert admin_client.post(route).status_code == 200
+        assert admin_client.post(route).status_code == 200
+        assert student_client.get("/api/homeworks").status_code == 401
+        assert login(student_client, UID).status_code in (401, 403)
+        assert other_client.get("/api/homeworks").status_code == (401 if remove_teacher else 200)
+        if remove_teacher:
+            assert teacher_client.get("/api/teacher/classes").status_code == 401
+            assert login(teacher_client, fake.teacher_id, fake.password).status_code == 403
+        else:
+            keys = [row["key"] for row in teacher_client.get("/api/teacher/classes").json()["classes"]]
+            assert keys == [f"c{sid}-32"]
+        fake.add_student("2500000010", "新学生", 31)
+        start_requests = len(fake.requests)
+        sync_meta.sync_classes_and_roster(ctx)
+        assert sum(path == "/user/listStudents.do" for _, path in fake.requests[start_requests:]) == (
+            0 if remove_teacher else 1)
+        original = fake.submissions[537101]
+        fake.submissions[537105] = replace(original, id=537105)
+        fake.submissions[537106] = replace(original, id=537106, user_id=other_uid, class_id=32, contest_id=502)
+        assert sync_submissions.poll_new_submissions(ctx) == (0 if remove_teacher else 1)
+        before_detail = len(fake.requests)
+        assert sync_submissions.fetch_detail(ctx, 537101) == "skipped"
+        assert not sync_submissions.recheck_submission(ctx, 537101)
+        assert len(fake.requests) == before_detail
+        if remove_teacher:
+            daemon = Daemon([ctx])
+            daemon.step()
+            assert daemon.contexts == []
+    with db.session_scope() as s:
+        assert s.get(m.Student, "2500000010") is None
+        assert s.get(m.Submission, (sid, 537101)) is not None
+        assert s.get(m.Submission, (sid, 537105)) is None
+        assert s.get(m.XClass, (sid, 31)).removed_at is not None
+        assert (s.get(m.XClass, (sid, 32)).removed_at is not None) == remove_teacher
+
+
+def test_shared_roster_stays_active_until_its_last_teacher_is_removed(ctx):
+    from app import accounts
+
+    sid, cid = ctx.server_id, 31
+    with db.session_scope() as s:
+        first = m.DataSource(server_id=sid, teacher_user_id="first")
+        second = m.DataSource(server_id=sid, teacher_user_id="second")
+        s.add_all([first, second, m.Student(user_id=UID)])
+        s.flush()
+        cls = m.XClass(server_id=sid, class_id=cid, data_source_id=first.id)
+        s.add_all([cls, m.Enrollment(server_id=sid, class_id=cid, user_id=UID),
+                   m.ClassSource(server_id=sid, class_id=cid, data_source_id=first.id),
+                   m.ClassSource(server_id=sid, class_id=cid, data_source_id=second.id)])
+        accounts.remove_teacher_source(s, first, db.now())
+        assert accounts.active_class_keys(s, UID, "C") == {(sid, cid)}
+        accounts.remove_teacher_source(s, second, db.now())
+        assert accounts.active_class_keys(s, UID, "C") == set()
+
+
 def _avg_to_pass(server_id: int, uid: str) -> float:
     """独立算一遍：每道通过的题交到第几次第一次通过，取平均。"""
     with db.session_scope() as s:

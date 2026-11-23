@@ -6,7 +6,7 @@ import logging
 
 from sqlalchemy import select, update
 
-from .. import config, db, pdftext
+from .. import accounts, config, db, pdftext
 from .. import models as m
 from ..chat import proactive
 from ..taxonomy import normalize_judgement
@@ -29,14 +29,20 @@ def poll_new_submissions(ctx: SyncContext, backfill: bool = False, max_requests:
     key = f"max_submission_id:{ctx.source_id or 0}"
     while True:
         with db.session_scope() as s:
+            if accounts.source_removed(s, ctx.source_id):
+                break
             cursor = int(get_state(s, ctx.server_id, key, "0") or 0)
         batch, _total = ep.list_submissions_after(ctx.client, cursor, rows_per_page)
         with db.session_scope() as s:
+            if accounts.source_removed(s, ctx.source_id, lock=True):
+                break
             live = not backfill and get_state(s, ctx.server_id, key + ":caught_up") == "1"
+            before = total_new
             for row in batch:
                 total_new += _store_submission(s, ctx, row, backfill, live)
             if batch:
                 set_state(s, ctx.server_id, key, batch[-1].submission_id)
+            if total_new > before:
                 set_time(s, ctx.server_id, "last_new_submission_at", ctx.now())
             if len(batch) < rows_per_page:
                 set_state(s, ctx.server_id, key + ":caught_up", "1")
@@ -53,6 +59,8 @@ def poll_new_submissions(ctx: SyncContext, backfill: bool = False, max_requests:
 
 def _store_submission(s, ctx: SyncContext, row: ep.SubmissionRow, backfill: bool, live: bool = False) -> int:
     if s.get(m.Submission, (ctx.server_id, row.submission_id)) is not None:
+        return 0
+    if accounts.submission_removed(s, ctx.server_id, row.user_id, row.class_id, row.contest_id):
         return 0
     if row.user_id and s.get(m.Student, row.user_id) is None:
         # 名单里还没有这个学号：先建一行，并且马上自动同步一次名单（他多半是刚加进班的，要能登录）
@@ -103,6 +111,13 @@ class NotJudgedYet(Exception):
     pass
 
 
+def _sync_stopped(s, ctx: SyncContext, submission_id: int) -> bool:
+    if accounts.source_removed(s, ctx.source_id):
+        return True
+    sub = s.get(m.Submission, (ctx.server_id, submission_id))
+    return bool(sub and accounts.submission_removed(s, sub.server_id, sub.user_id, sub.class_id, sub.contest_id))
+
+
 def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = False) -> str:
     """取齐一条提交的详情。返回 done；还没评测完时抛 NotJudgedYet。每一步都按 XDOJ 的编号写入，可重复执行。
 
@@ -110,6 +125,8 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
     每组测试点的输出单独取，一组出错不耽误别的组。有一步出错，拿到的先存下，最后把错误抛出去，任务过一会儿重试。
     """
     with db.session_scope() as s:
+        if _sync_stopped(s, ctx, submission_id):
+            return "skipped"
         sub = s.get(m.Submission, (ctx.server_id, submission_id))
         if sub is None:
             raise LookupError(f"库里没有提交 {submission_id}")
@@ -151,6 +168,8 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
     if not judge_text_ok and list_code not in ("UNKNOWN", ""):
         code = list_code  # 评测记录里的结果认不出（比如只有数字），用提交列表里的文字结果
     with db.session_scope() as s:
+        if _sync_stopped(s, ctx, submission_id):
+            return "skipped"
         if code not in ("UNKNOWN", "PENDING"):
             sub = s.get(m.Submission, (ctx.server_id, submission_id))
             sub.judgement = code
@@ -175,6 +194,8 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
         if not runs:
             raise NotJudgedYet()
     with db.session_scope() as s:
+        if _sync_stopped(s, ctx, submission_id):
+            return "skipped"
         for r in runs:
             row = s.get(m.JudgeRun, (ctx.server_id, r.run_id))
             if row is None:
@@ -203,6 +224,8 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
             errors.append(exc)
             continue
         with db.session_scope() as s:
+            if _sync_stopped(s, ctx, submission_id):
+                return "skipped"
             if out.program_output is not None:
                 s.add(m.RunOutput(server_id=ctx.server_id, run_id=r.run_id,
                                   program_output_bytes=out.program_output.encode("utf-8"),
@@ -212,6 +235,8 @@ def fetch_detail(ctx: SyncContext, submission_id: int, source_first: bool = Fals
     if errors:
         raise errors[0]
     with db.session_scope() as s:
+        if _sync_stopped(s, ctx, submission_id):
+            return "skipped"
         sub = s.get(m.Submission, (ctx.server_id, submission_id))
         sub.detail_status = "done"
         sub.judgement = code
@@ -232,6 +257,8 @@ def _fetch_source(ctx: SyncContext, submission_id: int) -> None:
             return
     data = ep.download_source(ctx.client, submission_id)
     with db.session_scope() as s:
+        if _sync_stopped(s, ctx, submission_id):
+            return
         if s.get(m.SourceSnapshot, (ctx.server_id, submission_id)) is None:
             s.add(m.SourceSnapshot(server_id=ctx.server_id, submission_id=submission_id, source_bytes=data,
                                    encoding=detect_encoding(data), fetched_at=ctx.now()))
@@ -274,8 +301,10 @@ def enqueue_recheck(ctx: SyncContext) -> int:
     """最近 24 小时内的提交，重新看一遍评测记录（发现重判）。"""
     since = ctx.now() - dt.timedelta(hours=config.SYNC["recheck_window_hours"])
     with db.session_scope() as s:
-        ids = s.scalars(select(m.Submission.submission_id).where(
+        rows = s.scalars(select(m.Submission).where(
             m.Submission.server_id == ctx.server_id, m.Submission.submit_time >= since)).all()
+        ids = [sub.submission_id for sub in rows if not accounts.submission_removed(
+            s, sub.server_id, sub.user_id, sub.class_id, sub.contest_id)]
         for sid in ids:
             enqueue(s, ctx.server_id, "recheck", sid, 3, when=ctx.now())
         set_time(s, ctx.server_id, "last_recheck_at", ctx.now())
@@ -284,6 +313,9 @@ def enqueue_recheck(ctx: SyncContext) -> int:
 
 def recheck_submission(ctx: SyncContext, submission_id: int) -> bool:
     """出现新的评测记录（重判），或上次还没评测完：按详情流程再取一遍。返回是否有变化。"""
+    with db.session_scope() as s:
+        if _sync_stopped(s, ctx, submission_id):
+            return False
     judges = ep.list_judges(ctx.client, submission_id)
     with db.session_scope() as s:
         known = set(s.scalars(select(m.Judge.judge_id).where(
@@ -294,5 +326,7 @@ def recheck_submission(ctx: SyncContext, submission_id: int) -> bool:
     if not fresh and not pending:
         return False
     with db.session_scope() as s:
+        if _sync_stopped(s, ctx, submission_id):
+            return False
         enqueue(s, ctx.server_id, "detail", submission_id, 1, when=ctx.now())
     return True

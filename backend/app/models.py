@@ -55,6 +55,7 @@ class DataSource(Base):
     password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     from_env: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    removed_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     last_login_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[Dt] = _ts()
     __table_args__ = (UniqueConstraint("server_id", "teacher_user_id"),)
@@ -67,6 +68,7 @@ class XClass(Base):
     class_name: Mapped[str] = mapped_column(String(128), default="")
     owner_id: Mapped[str] = mapped_column(String(64), default="")
     data_source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    removed_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     fetched_at: Mapped[Dt] = _ts()
 
 
