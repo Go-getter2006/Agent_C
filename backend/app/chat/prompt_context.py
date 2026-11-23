@@ -28,10 +28,11 @@ def student_notes(ctx: Ctx) -> str:
     if ctx.profile_note:
         lines.append(f"他在这个知识点上的情况：{ctx.profile_note}")
     if ctx.learning:
-        lines.append("他的学情（薄弱的地方）：" + "；".join(ctx.learning))
+        label = "他的学情（优先参考相关知识点）：" if ctx.knowledge else "他的学情（薄弱的地方）："
+        lines.append(label + "；".join(ctx.learning))
     if ctx.struggles:
         lines.append("他在别的题上纠结过的地方：" + "；".join(ctx.struggles))
-    return "\n".join(lines)
+    return llm.strip_identity("\n".join(lines), ctx.user_id, ctx.user_name)
 
 
 def build(s: Session | None, ctx: Ctx, compared: tuple[dict, ...] = ()) -> PromptContext:

@@ -83,8 +83,13 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
     def answer(messages, *_):
         sys, user = (item["content"] for item in messages[:2])
         if "intent 只能取" in sys:
-            return '{"intent":"CONCEPT","icap":"active"}', 10, 10
-        calls.append(user)
+            return '{"intent":"OTHER","icap":"passive"}', 10, 10
+        calls.append((sys, user))
+        if "【当前版教材目录】" in sys:
+            assert all(title in sys for title in HEADINGS)
+            if user.endswith("简单说说数组"):
+                return '{"before":"数组用同一个名字存放多个同类型的值。"}', 10, 10
+            return '{"textbookSearch":{"sections":[2,999,3,2],"keywords":"array index length"}}', 10, 10
         return json.dumps({"before": "数组首元素的下标为 0。", "textbook": ["T1", "T999", "T1"]},
                           ensure_ascii=False), 10, 10
 
@@ -109,14 +114,21 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
 
         llm.set_backend(answer)
         try:
-            turn = client.post("/api/threads/new/messages", json={"text": "什么是 array index？"}).json()
-            assert len(calls) == 1 and SENTENCE in calls[0]
-            msg = turn["messages"][-1]
-            assert msg["textbook"] == [{"edition": edition, "section": 2, "anchor": target["id"],
-                                       "path": list(HEADINGS[:2])}]
-            assert SENTENCE not in json.dumps(msg)
+            for question in ("什么是 array index？", "array index 是啥", "啥叫 array index 呀？"):
+                calls.clear()
+                turn = client.post("/api/threads/new/messages", json={"text": question}).json()
+                assert len(calls) == 2 and "【当前版教材目录】" not in calls[1][0]
+                assert SENTENCE not in calls[0][1] and SENTENCE in calls[1][1]
+                assert "The array length counts its elements." in calls[1][1]
+                msg = turn["messages"][-1]
+                assert msg["textbook"] == [{"edition": edition, "section": 2, "anchor": target["id"],
+                                           "path": list(HEADINGS[:2])}]
+                assert SENTENCE not in json.dumps(msg)
             history = client.get(f"/api/threads/{turn['thread']}").json()["messages"]
             assert history[-1]["textbook"] == msg["textbook"] and history[-1]["time"] == msg["time"]
+            calls.clear()
+            direct = client.post("/api/threads/new/messages", json={"text": "简单说说数组"}).json()
+            assert len(calls) == 1 and not direct["messages"][-1].get("textbook")
         finally:
             llm.set_backend(None)
 

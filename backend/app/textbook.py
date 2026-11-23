@@ -16,15 +16,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models as m
+from .chat.text import definition_subject, previous_question_for_followup
 
 BUNDLE_VERSION = 2
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _WORDS = re.compile(r"[\u3400-\u9fff]+|%[a-z]+|[a-z_]\w*|[0-9]+(?:[.][0-9]+)+|&&|\|\||[&*]", re.ASCII)
 _STOP = set("什么 怎么 如何 一下 是不是 为什么 这个 那个 有什么 给我 帮我 有哪些 是什么 和例 解释 区别 想问 能否 能不".split())
 _QUESTION_WORDS = re.compile(r"为什么|是什么|这是什么|怎么|如何|帮我|解释一下|请问")
-_DEFINITION = re.compile(r"^\s*(?:请问\s*)?(?:什么是\s*(.+?)|(.+?)\s*(?:是什么|是什么意思))\s*[？?。]*$")
 _FIGURE_QUESTION = re.compile(r"图\s*\d|流程图|示意图|图解|这张图|上面的图|插图")
-_FOLLOWUP = re.compile(r"^(?:那|那么|那要是|这时|还是|也要|可以不|还有呢|再解释)")
 
 
 def publish(s: Session, path: Path) -> tuple[m.TextbookEdition, bool]:
@@ -67,6 +66,36 @@ def publish(s: Session, path: Path) -> tuple[m.TextbookEdition, bool]:
 
 def active(s: Session) -> m.TextbookEdition | None:
     return s.scalar(select(m.TextbookEdition).order_by(m.TextbookEdition.id.desc()).limit(1))
+
+
+@dataclass(frozen=True)
+class Directory:
+    edition: m.TextbookEdition
+    entries: dict[int, tuple[int | None, str]]
+
+    def prompt(self) -> str:
+        depths = {}
+        lines = []
+        for number, (parent, title) in self.entries.items():
+            depth = depths[number] = depths.get(parent, -1) + 1
+            lines.append(f"{'  ' * depth}[{number}] {title}")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class Lookup:
+    sections: tuple[int, ...]
+    keywords: str = ""
+
+
+def directory(s: Session, course: str) -> Directory | None:
+    if course != "C" or (edition := active(s)) is None:
+        return None
+    sections = m.TextbookSection
+    entries = {number: (parent, title) for number, parent, title in s.execute(
+        select(sections.number, sections.parent, sections.title).where(sections.edition_id == edition.id)
+        .order_by(sections.number))}
+    return Directory(edition, entries) if entries else None
 
 
 def _terms(text: str) -> frozenset[str]:
@@ -116,27 +145,39 @@ def _passages(s: Session, edition: m.TextbookEdition) -> tuple[list[Passage], Co
         return passages, frequency
 
 
-def retrieve(s: Session, course: str, question: str, history: list[tuple[str, str]]) -> dict:
+def retrieve(s: Session, course: str, question: str, history: list[tuple[str, str]],
+             book: Directory | None = None, lookup: Lookup | None = None) -> dict:
     """只检索本轮问到的教材片段。沿用本轮答复调用，无需单独请求模型。"""
-    if course != "C" or not (query := _terms(_QUESTION_WORDS.sub(" ", question))) or (edition := active(s)) is None:
+    term = definition_subject(question)
+    query = _terms(term or _QUESTION_WORDS.sub(" ", question))
+    if lookup:
+        query |= _terms(lookup.keywords)
+    if course != "C" or not query or (edition := book.edition if book else active(s)) is None:
         return {}
-    followup = _FOLLOWUP.search(question.strip())
-    previous = next((text for role, text in reversed(history) if role == "student"), "") if followup else ""
-    remembered = _terms(previous) - query
+    groups = {}
+    if lookup and book:
+        selected = set(lookup.sections)
+        for number, (parent, _) in book.entries.items():
+            if number in selected:
+                groups[number] = number
+            elif parent in groups:
+                groups[number] = groups[parent]
+    previous = previous_question_for_followup(question, history)
+    remembered = _terms(definition_subject(previous) or previous) - query
     passages, frequency = _passages(s, edition)
     weights = {term: math.log(1 + len(passages) / (1 + frequency[term])) for term in query | remembered}
-    wants_figure = bool(_FIGURE_QUESTION.search(question))
-    definition = _DEFINITION.fullmatch(question)
-    term = (definition[1] or definition[2]).strip() if definition else ""
+    wants_figure = bool(_FIGURE_QUESTION.search(question) or (lookup and _FIGURE_QUESTION.search(lookup.keywords)))
     ranked = []
     for passage in passages:
+        if lookup and passage.reference["section"] not in groups:
+            continue
         if passage.figure and not wants_figure:
             continue
         in_text = query & passage.words
         carried = remembered & passage.words
         if not in_text and len(carried) < 2:
             continue
-        if len(query) >= 3 and len((passage.words | passage.title_words) & query) < 2 and len(carried) < 2:
+        if not lookup and len(query) >= 3 and len((passage.words | passage.title_words) & query) < 2 and len(carried) < 2:
             continue
         score = sum(weights[t] for t in in_text)
         score += sum(weights[t] * (1.6 if t.isascii() and t[0].isalpha() else 0.65)
@@ -148,6 +189,15 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
             score *= 2
         ranked.append((score, passage))
     ranked.sort(key=lambda item: item[0], reverse=True)
+    if groups:
+        # 每处先取最相关的一段，再补其余候选，避免较长的章节吃掉所有位置。
+        seen = set()
+        first, rest = [], []
+        for entry in ranked:
+            group = groups[entry[1].reference["section"]]
+            (rest if group in seen else first).append(entry)
+            seen.add(group)
+        ranked = first + rest
     return {f"T{i}": (item.text, dict(item.reference, edition=edition.id), item.figure)
             for i, (_, item) in enumerate(ranked[:5], 1)}
 

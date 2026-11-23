@@ -22,6 +22,27 @@ EMOJI = re.compile(
     "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\U00002B00-\U00002BFF\U0000FE0F\U0000200D]")
 
 
+_DEFINITION_QUESTION = re.compile(
+    r"(?:请问[，,\s]*)?(?:(?:什么[是叫]|啥[是叫])\s*(?P<after>.+?)|"
+    r"(?P<before>.+?)\s*是(?:什么|啥)(?:意思)?)[呢呀啊吗嘛\s]*[？?。！!]*"
+)
+_FOLLOWUP = re.compile(r"^(?:那|那么|那要是|这时|还是|也要|可以不|还有呢|再解释)")
+
+
+def definition_subject(text: str) -> str:
+    """提取定义问句的主题，例如「函数是啥」的「函数」。"""
+    match = _DEFINITION_QUESTION.fullmatch(text.strip())
+    if not match:
+        return ""
+    return (match["after"] or match["before"]).strip(" `「」‘’“”")
+
+
+def previous_question_for_followup(text: str, history: list[tuple[str, str]]) -> str:
+    if not _FOLLOWUP.search(text.strip()):
+        return ""
+    return next((question for role, question in reversed(history) if role == "student"), "")
+
+
 def split_message(text: str) -> tuple[str, str]:
     """把消息分成“说的话”和“贴的代码”。三个反引号围起来的、或连续几行像 C 代码的，算代码。"""
     text = (text or "").replace("\r\n", "\n").strip()

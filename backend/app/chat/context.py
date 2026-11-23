@@ -19,6 +19,7 @@ from ..taxonomy import LEVEL_NONE, error_name, skill_name
 from ..xdoj.assemble import assemble_submission, source_text
 from . import hints
 from .text import declared_vars, line_assignment
+from .text import definition_subject
 
 
 @dataclass
@@ -192,7 +193,7 @@ def bind(s: Session, user_id: str, thread: tuple[int, int] | None, submission_ke
 
 def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_key: str | None,
           text: str, pasted: str, rnd: m.ChatRound | None, now: dt.datetime | None = None, course: str = "C",
-          knowledge: bool = False, pin: tuple[int, int] | None = None) -> Ctx:
+          knowledge: bool = False, pin: tuple[int, int] | None = None, previous_question: str = "") -> Ctx:
     now = now or db.now()
     student = s.get(m.Student, user_id)
     ctx = Ctx(user_id=user_id, user_name=student.name if student else "", thread=thread, course=course,
@@ -215,7 +216,9 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
         ctx.evidence = assemble_submission(s, sub.server_id, sub.submission_id)
         ctx.source = ctx.evidence.get("sourceCode")
         ctx.source_kind = "submission"
-        if sub.detail_status == "done":
+        if knowledge:
+            ctx.labels = labeler.current_labels(s, sub.server_id, sub.submission_id)
+        elif sub.detail_status == "done":
             ctx.labels = labeler.label_submission(s, sub.server_id, sub.submission_id)  # 还没标的，立即标
         fails = [x for x in subs if x.judgement not in ("AC", "PENDING")]
         last5 = subs[-config.CHAT["no_progress_submissions"]:]
@@ -245,7 +248,7 @@ def build(s: Session, user_id: str, thread: tuple[int, int] | None, submission_k
 
         ctx.profile_note = profile.tutor_note(s, user_id, ctx.root_skill)
     if llm.available():
-        tutor_context(s, ctx, now)
+        tutor_context(s, ctx, now, question=text if knowledge else "", previous_question=previous_question)
     if rnd is not None and sub is not None and rnd.submission_id and rnd.submission_id != sub.submission_id \
             and rnd.error_code and rnd.error_code == ctx.root_error and sub.submission_id > rnd.submission_id:
         ctx.same_error_resubmit = True  # 带着同一个错误又交了一次
@@ -313,10 +316,10 @@ def evidence_card(ctx: Ctx) -> dict:
 
 
 # ------------------------------------------------------------ 给大模型的完整情况（学生看不到）
-def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
+def tutor_context(s: Session, ctx: Ctx, now: dt.datetime, question: str = "", previous_question: str = "") -> None:
     """题目、全部测试点、这道题以前的提交、学情、在别的题上纠结过什么。只放进给大模型的提示里。"""
     from .. import changes, profile
-    from ..taxonomy import KNOWLEDGE_POINTS, kp_of_skill
+    from ..taxonomy import KNOWLEDGE_POINTS, TOPICS, kp_of_skill
     from ..xdoj.util import decode_bytes
 
     if ctx.problem is not None:
@@ -345,6 +348,24 @@ def tutor_context(s: Session, ctx: Ctx, now: dt.datetime) -> None:
     prof = profile.kp_profile(s, ctx.user_id, course)
     weak = sorted(((kp, d) for kp, d in prof.items() if d.level == "待加强" or any(f != "fading" for f in d.flags)),
                   key=lambda kv: (kv[1].perf or 0.5))
+    if ctx.knowledge and question:
+        subject = definition_subject(question).casefold()
+        query = question.casefold()
+        previous = previous_question.casefold()
+        priority = {}
+        for kp in prof:
+            name = KNOWLEDGE_POINTS.get(kp, "").casefold()
+            topic = TOPICS.get(kp.split(".", 1)[0], "").casefold()
+            if name and name in query:
+                priority[kp] = 0
+            elif topic and topic in query:
+                priority[kp] = 1
+            elif len(subject) >= 2 and subject in name:
+                priority[kp] = 2
+            elif (name and name in previous) or (topic and topic in previous):
+                priority[kp] = 3
+        relevant = [(kp, prof[kp]) for kp in sorted(priority, key=lambda kp: (priority[kp], kp))]
+        weak = relevant + [(kp, dims) for kp, dims in weak if kp not in priority]
     for kp, d in weak[:4]:
         tips = "；".join([profile.FLAG_TEXT[f] for f in d.flags if f != "fading"][:2])
         ctx.learning.append(f"{KNOWLEDGE_POINTS.get(kp, kp)}：{d.level}" + (f"（{tips}）" if tips else ""))

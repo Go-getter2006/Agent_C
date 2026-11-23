@@ -18,6 +18,7 @@ from . import prompt_context, retro, talk
 from .analyze import Analysis, analyze, dialogue_act
 from .policy import Decision, PolicyInput, decide, willingness_of
 from .text import split_message
+from .text import previous_question_for_followup
 
 log = logging.getLogger("chat")
 
@@ -308,11 +309,18 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
     if llm.available() and flow not in TEMPLATE_ONLY:
         materials = prompt_context.build(s, ctx)
         testcases.extend(materials.tests)
-        book_evidence = textbook.retrieve(s, ctx.course, text, history) if ctx.knowledge and flow == "concept" else {}
+        book_directory = textbook.directory(s, ctx.course) if ctx.knowledge and flow == "concept" else None
+        book_evidence = {}
         feedback = ""
         for attempt in range(2):
             try:
-                draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials, book_evidence)
+                draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials,
+                                           book_evidence, book_directory)
+                if isinstance(draft, textbook.Lookup):
+                    book_evidence = textbook.retrieve(s, ctx.course, text, history, book_directory, draft)
+                    book_directory = None
+                    draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials,
+                                               book_evidence)
             except llm.LLMUnavailable:
                 break
             if draft.quote is None and flow == "help" and decision.help_level in ("H0", "H1") \
@@ -423,7 +431,9 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     history = talk.history(earlier_messages[-talk.TURNS:])
 
     # 第 3~5 步 取证、诊断、状态
-    ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course, knowledge=knowledge, pin=pin)
+    previous_question = previous_question_for_followup(text, history) if knowledge else ""
+    ctx = context.build(s, user_id, thread, submission_key, text, pasted, rnd, now, course, knowledge=knowledge, pin=pin,
+                        previous_question=previous_question)
     if ctx.submission is not None and ctx.submission.detail_status != "done" and picked is None:
         sync_api.request_priority(s, ctx.submission.server_id, ctx.submission.submission_id)
     ctx._located = bool(rnd.located)
@@ -443,6 +453,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     if action:
         analysis = Analysis(intent="ANSWER" if action == "tell" else "REPLY", has_attempt=False,
                             icap="passive" if action != "think" else "active", source="button")
+    elif knowledge:
+        analysis = Analysis(intent="", has_code=bool(pasted), icap="", source="direct")
     else:
         options = []
         if ctx.plabel is not None:
@@ -469,9 +481,6 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             analysis.answer_correct = None
             if analysis.intent not in ("STUCK", "ANSWER") and len(re.sub(r"\s", "", prose)) >= 4:
                 analysis.intent, analysis.has_attempt = "REPLY", True
-    # 知识问答里没带上作业题、也没贴代码：“为什么……”“怎么……”按概念问题直接答，不反问是哪道题
-    if knowledge and ctx.problem is None and not pasted and analysis.intent in ("DEBUG", "STUCK", "TASK"):
-        analysis.intent = "CONCEPT"
     in_recall = rnd.recall_stage in ("asked", "blanked") and action is None \
         and analysis.intent in ("REPLY", "STUCK", "ANSWER", "DEBUG")
     willingness = willingness_of(analysis.intent, analysis.has_attempt, action, since_reply,
@@ -479,7 +488,8 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
 
     # 第 6 步 策略
     llm.last_model.set("")  # 这条回复单独记，不能把消息分析用的模型当成读题模型
-    decision = decide(PolicyInput(
+    direct = analysis.source == "direct"
+    decision = Decision("R02", "NA", "乙", "concept") if direct else decide(PolicyInput(
         intent=analysis.intent, action=action, bound=ctx.problem is not None,
         has_code=bool(ctx.source), has_failure=ctx.has_failure, diag_confidence=ctx.diag_confidence,
         answer_correct=analysis.answer_correct, understood=analysis.understood, willingness=willingness,
@@ -623,7 +633,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     s.add(m.ChatStep(
         message_id=student_msg.id, round_id=rnd.id, user_id=user_id,
         intent=analysis.intent, skill_code=analysis.skill_code or ctx.root_skill, has_attempt=analysis.has_attempt,
-        act=("self_explain" if reflect_on is not None and analysis.has_attempt
+        act=("" if direct else "self_explain" if reflect_on is not None and analysis.has_attempt
              else dialogue_act(analysis.intent, analysis.has_attempt, action)), answer_correct=analysis.answer_correct,
         has_code=bool(pasted), icap=analysis.icap, analysis_source=analysis.source,
         course_id=course, server_id=ctx.problem.server_id if ctx.problem else None,

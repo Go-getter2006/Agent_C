@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app import config, db, llm, mastery, pipeline, review
 from app import models as m
+from app import profile
 from app.chat import context, validate, workflow
 from app.chat.policy import PolicyInput, decide
 from app.chat.validate import Draft
@@ -218,6 +219,40 @@ def test_general_thread_binding_and_other_intents(demo):
         assert context.bind(s, UID, (sid, 601), None, "x", "", db.now())[0] is None
         assert context.bind(s, UID, (sid, 999), None, "x", "", db.now())[0] is None
         assert context.bind(s, UID, None, None, "交换两个数那题怎么做", "", later)[0] is None
+
+
+def test_knowledge_answers_directly_with_student_profile(demo, monkeypatch):
+    notes = {"C06.02": profile.Dims(level="待加强"), "C09.01": profile.Dims(level="基本掌握")}
+    monkeypatch.setattr(profile, "kp_profile", lambda s, uid, course: notes)
+    with db.session_scope() as s:
+        out = workflow.handle(s, UID, None, "函数是啥", knowledge=True)
+        assert "函数是一段" in texts(out[1])
+
+    calls = []
+
+    def answer(messages, *_):
+        system, user = (item["content"] for item in messages[:2])
+        assert "intent 只能取" not in system
+        assert "根据与当前问题相关的个人学情" in user
+        assert user.index(f"函数定义：{notes['C09.01'].level}") < user.index("数组遍历：待加强")
+        assert UID not in user
+        calls.append(user)
+        return '{"before":"函数可以把一段经常用到的操作写成可重复调用的代码。"}', 10, 10
+
+    llm.set_backend(answer)
+    try:
+        with db.session_scope() as s:
+            out = workflow.handle(s, UID, None, "函数是啥", knowledge=True)
+            step = last_step(s)
+            assert (step.intent, step.analysis_source, step.rule_id, step.act) == ("", "direct", "R02", "")
+            assert len(calls) == 1 and "可重复调用" in texts(out[1])
+        notes["C09.01"] = profile.Dims(level="已掌握")
+        with db.session_scope() as s:
+            workflow.handle(s, UID, None, "那参数呢？", knowledge=True)
+        assert len(calls) == 2
+        assert "学生：函数是啥" in calls[-1] and "函数定义：基本掌握" not in calls[-1]
+    finally:
+        llm.set_backend(None)
 
 
 def test_pass_closes_round_and_queues_review(demo):
