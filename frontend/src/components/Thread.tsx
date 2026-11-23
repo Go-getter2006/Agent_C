@@ -46,7 +46,7 @@ export interface ThreadContext {
 interface Props {
   threadKey: string;
   layout: Layout;
-  emptyTitle: string;
+  emptyTitle: string | null;
   emptyText: string;
   placeholder?: string;
   waitingContext?: boolean;
@@ -73,14 +73,16 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   waitingContext = false, pollHistory = true, onThread, onActivity, onTextbook }: Props) {
   const cache = useStudentCache().threads;
   const request = useRef<AbortController | null>(null);
-  const [messages, setMessages] = useState<Message[] | null>(() => cache.get(threadKey) ?? null);
+  const [loadedMessages, setMessages] = useState<Message[] | null>(() => cache.get(threadKey) ?? null);
   const [owner, setOwner] = useState(threadKey);
   const stale = owner !== threadKey;
+  // 已经读过的新会话可以在切换的这一帧使用，避免卸载同样的空态场景。
+  const messages = stale ? cache.get(threadKey) ?? null : loadedMessages;
   const waitingMessages = messages === null;
   const hasNewNotice = !stale && (latestNotice ?? 0) > (messages?.[messages.length - 1]?.id ?? 0);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [pending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
-  const [failed, setFailed] = useState<{ payload: Payload; message: string } | null>(null);
+  const [loadedError, setLoadError] = useState<string | null>(null);
+  const [ownerPending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
+  const [ownerFailed, setFailed] = useState<{ payload: Payload; message: string } | null>(null);
   const [text, setTextRaw] = useState(() => readDraft(threadKey));
   const setText = useCallback((value: string) => {
     setTextRaw(value);
@@ -92,6 +94,9 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   const input = useRef<HTMLTextAreaElement>(null);
   const sending = useRef(new Map<string, Payload>());
   const failures = useRef(new Map<string, { payload: Payload; message: string }>());
+  const loadError = stale ? null : loadedError;
+  const pending = stale ? sending.current.get(threadKey) ?? null : ownerPending;
+  const failed = stale ? failures.current.get(threadKey) ?? null : ownerFailed;
   const keyRef = useRef(threadKey);
   keyRef.current = threadKey;
   const busy = pending !== null;
@@ -263,6 +268,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   const shown: Payload | null = pending ?? failed?.payload ?? null;
   const pendingText = shown ? (shown.action ? ACTION_LABELS[shown.action] : shown.text ?? "") : "";
   const list = messages ?? [];
+  const waitingView = messages === null || (list.length === 0 && !shown && emptyTitle === null);
 
   return (
     <>
@@ -271,9 +277,9 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
         if (followBottom.current) setNewBelow(false);
         saveScroll(threadKey, el.scrollTop);
       }}>
-        {(stale || messages === null) && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
+        {waitingView && !loadError && <div className="chat-list"><Loading what="正在取对话" /></div>}
         {loadError && <div className="chat-list"><Problem message={loadError} onRetry={() => load(false)} /></div>}
-        {!stale && messages !== null && (
+        {!waitingView && (
           <div className="chat-list" aria-live="polite">
             {list.length === 0 && !shown && !loadError && (
               <div className="chat-empty">

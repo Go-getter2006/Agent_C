@@ -71,7 +71,7 @@ export default function Workbench() {
   const [selectFirstFor, setSelectFirstFor] = useState<string | null>(null);
   const needsList = entered || isProblem;
 
-  // keep：切换作业、题目时先留着上一份，新的到了再换，页面不闪
+  // 已有的作业列表也能确定题目的提交状态，题面与详细记录可以稍后到。
   const list = useLoad(async () => {
     if (!current || !needsList) return null;
     return api.homework(current.key);
@@ -210,12 +210,13 @@ export default function Workbench() {
     </div>
   ) : null;
 
-  let emptyTitle = "这道题哪里卡住了？";
+  const statusKnown = !!(d || row);
+  let emptyTitle = statusKnown ? "这道题哪里卡住了？" : null;
   let emptyText = "说说你的想法，或把代码贴过来。";
   if (passed) {
     emptyTitle = "这道题已经通过了";
     emptyText = "可以回顾怎么改对的，也可以接着问。";
-  } else if (d && !latest) {
+  } else if (statusKnown && !latest) {
     emptyTitle = "这道题还没提交";
     emptyText = "可以先问题意。交过一次后，能看到你的代码和没过的测试点。";
   }
@@ -226,7 +227,7 @@ export default function Workbench() {
       <span className="num">第 {latest.attemptNo} 次{latest.grid && latest.result !== "AC" ? `，${gridLabel(latest.grid)}` : ""}</span>
       {latest.grid && <Cells grid={latest.grid} />}
     </>
-  ) : isProblem && d ? <span className="pill">还没提交</span> : null;
+  ) : isProblem && statusKnown ? <span className="pill">还没提交</span> : null;
 
   if (detailFailure && isProblem && !d) {
     return (
