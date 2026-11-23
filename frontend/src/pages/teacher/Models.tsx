@@ -3,14 +3,13 @@
 // 智能体评估的一致率在“理解评估”，对话行为和表现在“求助效果”。
 import ExamReplay from "./ExamReplay";
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import { FlaskConical } from "lucide-react";
 import { get } from "../../api";
 import { LineChart } from "../../components/charts";
 import { Card, Empty, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime } from "../../lib/time";
-import { Code, pct, useClasses, type ClassInfo, type SkillRef } from "./common";
+import { StaffLink, Code, pct, useClasses, type ClassInfo, type SkillRef } from "./common";
 
 interface GraphData {
   version: string; prereqStatus: string;
@@ -289,7 +288,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
               <tbody>
                 {d.failureRows.map((r) => (
                   <tr key={`${r.userId}:${r.skill.code}`}>
-                    <td><Link className="link" to={`/teacher/students/${r.userId}`}>{r.name}</Link></td>
+                    <td><StaffLink className="link" to={`/students/${r.userId}`}>{r.name}</StaffLink></td>
                     <td>{r.skill.name}</td><td className="num">{r.failures}</td>
                     <td>{r.root && r.p !== null
                       ? <>{r.root.name} <Code>{r.p.toFixed(2)}</Code></>
@@ -310,7 +309,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
               <thead><tr><th scope="col">学生</th><th scope="col">技能</th><th scope="col">技能档位（v2）</th><th scope="col" className="num">v2</th><th scope="col" className="num">图模型</th><th scope="col" className="num">v2 证据（会 / 不会）</th></tr></thead>
               <tbody>
                 {d.gaps.map((gap, i) => (
-                  <tr key={i}><td><Link className="link" to={`/teacher/students/${gap.userId}`}>{gap.name}</Link></td><td>{gap.skill.name} <Code>{gap.skill.code}</Code></td><td>{gap.level}</td><td className="num">{gap.v2.toFixed(2)}</td><td className="num">{gap.graph.toFixed(2)}</td><td className="num">{gap.yes.toFixed(2)} / {gap.no.toFixed(2)}</td></tr>
+                  <tr key={i}><td><StaffLink className="link" to={`/students/${gap.userId}`}>{gap.name}</StaffLink></td><td>{gap.skill.name} <Code>{gap.skill.code}</Code></td><td>{gap.level}</td><td className="num">{gap.v2.toFixed(2)}</td><td className="num">{gap.graph.toFixed(2)}</td><td className="num">{gap.yes.toFixed(2)} / {gap.no.toFixed(2)}</td></tr>
                 ))}
               </tbody>
             </table>

@@ -1559,26 +1559,49 @@
   border-radius: 0 3px 3px 0;
 }
 
-.source-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--sp-12);
-  margin-bottom: var(--sp-16);
+.teacher-roster :is(th, td) {
+  padding-inline: var(--sp-12);
 }
 
-.source-grid > div {
+.teacher-roster :is(th, td):first-child { padding-left: var(--sp-20); }
+.teacher-roster :is(th, td):last-child { padding-right: var(--sp-20); }
+.teacher-roster .cell-sub { margin-top: 2px; }
+.teacher-roster .pill, .teacher-roster .btn { white-space: nowrap; }
+.teacher-roster .teacher-roster-remove { color: var(--fail); }
+.teacher-roster .teacher-roster-remove:hover:not(:disabled) { background: var(--fail-bg); }
+.teacher-roster-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.teacher-roster .teacher-roster-open td,
+.teacher-roster .teacher-roster-detail td { background: var(--surface-2); }
+
+.teacher-roster-source {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--sp-12) var(--sp-16);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
+  flex-wrap: wrap;
+  gap: var(--sp-4) var(--sp-16);
+  margin-bottom: var(--sp-10);
+  color: var(--ink-3);
+  font-size: var(--fs-12);
 }
 
-.source-grid b {
-  font-size: var(--fs-20);
-  font-weight: 600;
+.teacher-roster-classes {
+  margin: 0;
+  padding: 0 0 0 var(--sp-12);
+  border-left: 2px solid var(--line-strong);
+  list-style: none;
+}
+
+.teacher-roster-classes li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-12);
+  min-height: 36px;
+}
+
+.teacher-roster-classes li + li { border-top: 1px solid var(--line); }
+
+@media (max-width: 600px) {
+  .teacher-roster :is(th, td):is(:first-child, :last-child) { padding-inline: var(--sp-8); }
+  .teacher-roster :is(th, td) { padding-inline: var(--sp-8); }
 }
 
 .card-head h2 svg {

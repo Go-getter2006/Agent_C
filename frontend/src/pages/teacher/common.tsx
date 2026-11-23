@@ -1,37 +1,45 @@
 // 教师端共用：导航、班级选择、页面骨架、几个对照表。
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, type LinkProps } from "react-router-dom";
 import { ChevronDown, ClipboardCheck, Database, Download, FileDown, GitCompare, History, LayoutDashboard, LifeBuoy, Link2, TriangleAlert, Users, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Shell, type NavItem } from "../../components/Shell";
 import { Empty, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
+import { staffRoot } from "../../lib/staff";
+import { useSession } from "../../session";
 
 // 三块（docs/教师端结构.md）：班级（上课用）、研究（论文用）、数据。每一页回答一个问题。
 // 老师只有“班级”；研究和数据两块只给开发者账号（角色 admin，.env 的 DEV_ACCOUNT），后端也只让它取。
-export const NAV: NavItem[] = [
-  { to: "/teacher/class", label: "总览", icon: LayoutDashboard, section: "班级" },
-  { to: "/teacher/students", label: "学生", icon: Users, section: "班级" },
-  { to: "/teacher/submissions", label: "提交记录", icon: History, section: "班级" },
-  { to: "/teacher/misconceptions", label: "误区", icon: TriangleAlert, section: "班级" },
-  { to: "/teacher/map", label: "知识图谱", icon: Waypoints, section: "班级" },
-  { to: "/teacher/models", label: "模型检验", icon: GitCompare, section: "研究" },
-  { to: "/teacher/rating", label: "理解评估", icon: ClipboardCheck, section: "研究" },
-  { to: "/teacher/help", label: "求助效果", icon: LifeBuoy, section: "研究" },
-  { to: "/teacher/logs", label: "日志导出", icon: FileDown, section: "数据" },
-  { to: "/teacher/sources", label: "数据源", icon: Database, section: "数据" },
+const NAV: NavItem[] = [
+  { to: "/class", label: "总览", icon: LayoutDashboard, section: "班级" },
+  { to: "/students", label: "学生", icon: Users, section: "班级" },
+  { to: "/submissions", label: "提交记录", icon: History, section: "班级" },
+  { to: "/misconceptions", label: "误区", icon: TriangleAlert, section: "班级" },
+  { to: "/map", label: "知识图谱", icon: Waypoints, section: "班级" },
+  { to: "/models", label: "模型检验", icon: GitCompare, section: "研究" },
+  { to: "/rating", label: "理解评估", icon: ClipboardCheck, section: "研究" },
+  { to: "/help", label: "求助效果", icon: LifeBuoy, section: "研究" },
+  { to: "/logs", label: "日志导出", icon: FileDown, section: "数据" },
+  { to: "/sources", label: "教师与班级", icon: Database, section: "数据" },
 ];
 
 /** 只给开发者账号的几页（研究、数据）。 */
-export const DEV_ONLY = new Set(NAV.filter((n) => n.section !== "班级").map((n) => n.to));
 export const isDeveloper = (role: string) => role === "admin";
 
 /** 数据结构这边多一页“跨课程”（C 语言这边不出现）；老师看不到研究和数据两块。 */
 export const navFor = (course: "C" | "D", role = "teacher"): NavItem[] => {
-  const nav = isDeveloper(role) ? NAV : NAV.filter((n) => !DEV_ONLY.has(n.to));
-  return course === "D"
-    ? nav.flatMap((n) => (n.to === "/teacher/map" ? [n, { to: "/teacher/cross", label: "跨课程", icon: Link2, section: "班级" }] : [n]))
+  const nav = isDeveloper(role) ? NAV : NAV.filter((n) => n.section === "班级");
+  const items = course === "D"
+    ? nav.flatMap((n) => (n.to === "/map" ? [n, { to: "/cross", label: "跨课程", icon: Link2, section: "班级" }] : [n]))
     : nav;
+  return items.map((n) => ({ ...n, to: staffRoot(role) + n.to }));
 };
+
+export function StaffLink({ to, ...props }: Omit<LinkProps, "to"> & { to: string }) {
+  const { role } = useClasses();
+  return <Link {...props} to={staffRoot(role) + to} />;
+}
 
 export interface ClassInfo {
   key: string;
@@ -132,6 +140,7 @@ function useVersionTicks(fast: boolean): { data: number; classes: number } {
 }
 
 export function ClassesProvider({ children }: { children: ReactNode }) {
+  const { me } = useSession();
   // 第一次登录后班级和名单是后台陆续同步进来的：还没有班级时问得勤一点，班级、名单变了才重取
   const [fast, setFast] = useState(true);
   const ticks = useVersionTicks(fast);
@@ -154,7 +163,8 @@ export function ClassesProvider({ children }: { children: ReactNode }) {
     }
   });
   const classes = list.data?.classes ?? [];
-  const role = list.data?.role ?? "teacher";
+  const role = list.data?.role ?? me?.role ?? "teacher";
+  const course = list.data?.course ?? me?.course ?? "C";
   const chosen = isDeveloper(role) ? classes.filter((c) => many.includes(c.key)) : [];
   const current = (chosen.length > 1 ? groupClasses(chosen) : null)
     ?? classes.find((c) => c.key === (chosen.length === 1 ? chosen[0].key : picked)) ?? classes[0] ?? null;
@@ -179,8 +189,8 @@ export function ClassesProvider({ children }: { children: ReactNode }) {
     }
   }, []);
   const value = useMemo(() => ({ classes, current, pick, pickMany, loading: list.loading && !list.data, error: list.error,
-    role, course: list.data?.course ?? "C", reload: list.reload, tick: ticks.data }),
-  [classes, current, pick, pickMany, list.loading, list.data, list.error, list.reload, ticks.data, role]);
+    role, course, reload: list.reload, tick: ticks.data }),
+  [classes, current, pick, pickMany, list.loading, list.data, list.error, list.reload, ticks.data, role, course]);
   return <ClassesContext.Provider value={value}>{children}</ClassesContext.Provider>;
 }
 

@@ -1,12 +1,11 @@
 // 研究 · 求助效果（app/stuckstats.py、app/helpeffect.py，定义见 docs/研究数据与指标.md）：分级帮助有没有用。
 // 先看用了多少，再比反复没过时来问的和没来问的，然后是每次帮助之后、按知识点。只给比例（几比几）；
 // 谁卡在哪个知识点（上课用）在知识图谱的知识点详情里。
-import { Link } from "react-router-dom";
 import { CircleCheck } from "lucide-react";
 import { get } from "../../api";
 import { Card, Empty, Facts, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
-import { useClasses, type ClassInfo } from "./common";
+import { StaffLink, useClasses, type ClassInfo } from "./common";
 
 type R = { n: number; d: number } | null;
 
@@ -162,7 +161,7 @@ export default function Help({ cls }: { cls: ClassInfo }) {
                   </tr>
                   {stuckRows.map((r) => (
                     <tr key={r.code}>
-                      <td><Link className="link" to={`/teacher/map?kp=${r.code}`}>{r.name}</Link></td>
+                      <td><StaffLink className="link" to={`/map?kp=${r.code}`}>{r.name}</StaffLink></td>
                       <td className="num">{r.students} 人 · {r.episodes} 次</td>
                       <td className="num">{r.repeat || "—"}{r.stubborn ? <span className="note"> 顽固 {r.stubborn}</span> : null}</td>
                       <td className="num"><Ratio r={r.recall} /></td>
@@ -188,7 +187,7 @@ export default function Help({ cls }: { cls: ClassInfo }) {
                 <tbody>
                   {silentRows.map((r) => (
                     <tr key={r.code}>
-                      <td><Link className="link" to={`/teacher/map?kp=${r.code}`}>{r.name}</Link></td>
+                      <td><StaffLink className="link" to={`/map?kp=${r.code}`}>{r.name}</StaffLink></td>
                       <td className="num">{r.silent} 人</td>
                       <td className="num"><Ratio r={r.silentPassed} /></td>
                     </tr>

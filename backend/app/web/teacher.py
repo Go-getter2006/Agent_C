@@ -1167,7 +1167,7 @@ def _fusion_view(s: Session, course: str) -> dict:
 def _source_view(s: Session, source: m.DataSource) -> dict:
     server = s.get(m.Server, source.server_id)
     last_ok = store.get_time(s, source.server_id, "last_ok_poll_at")
-    last_meta = store.get_time(s, source.server_id, "last_meta_at")
+    last_meta = store.get_time(s, source.server_id, f"last_meta_at:{source.id}")
     classes = accounts.source_classes(s, source)
     teacher_user = accounts.owner_of_source(s, source.id)
     requests = s.scalars(select(m.RequestLog.ok).where(m.RequestLog.server_id == source.server_id)

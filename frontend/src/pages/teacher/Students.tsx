@@ -1,12 +1,11 @@
 // 学生列表：可以搜、可以按任何一列排序，点名字看明细。
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { ArrowDown, ArrowUp, ArrowUpDown, Copy, Search } from "lucide-react";
 import { get } from "../../api";
 import { Avatar, Card, Loading, Problem } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { shortTime } from "../../lib/time";
-import { ScoreBadge, useClasses, type ClassInfo } from "./common";
+import { StaffLink, ScoreBadge, useClasses, type ClassInfo } from "./common";
 
 interface StudentRow {
   userId: string; name: string; className?: string | null; tried: number; passed: number; submissions: number; avgToPass: number | null;
@@ -86,13 +85,13 @@ export default function Students({ cls }: { cls: ClassInfo }) {
             {rows.map((r) => (
               <tr key={r.userId}>
                 <td>
-                  <Link to={`/teacher/students/${r.userId}?classKey=${encodeURIComponent(cls.key)}`} className="who">
+                  <StaffLink to={`/students/${r.userId}?classKey=${encodeURIComponent(cls.key)}`} className="who">
                     <Avatar name={r.name || "?"} />
                     <span>
                       <span className="cell-title">{r.name || "（没有姓名）"}</span>
                       <span className="cell-sub">{r.userId}{r.className ? ` · ${r.className}` : ""}</span>
                     </span>
-                  </Link>
+                  </StaffLink>
                 </td>
                 <td className="num">{r.score === null ? <span className="muted">—</span> : <ScoreBadge score={r.score} />}</td>
                 <td className="num">{r.coveredProblems}/{total}</td>

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { landing, rememberLocation } from "./lib/memory";
+import { staffRoot } from "./lib/staff";
 import Knowledge from "./pages/Knowledge";
 import Login from "./pages/Login";
 import Progress from "./pages/Progress";
@@ -38,11 +39,19 @@ function Routed() {
   if (!checked) return null;
   if (!me) return <Login />;
   if (me.role !== "student") {
+    const root = staffRoot(me.role);
     return (
       <Suspense fallback={null}>
         <Routes>
-          <Route path="/teacher/*" element={<Teacher />} />
-          <Route path="*" element={<Navigate to="/teacher" replace />} />
+          <Route path={`${root}/*`} element={<Teacher />} />
+          {me.role === "admin" && (
+            <Route path="/teacher/*" element={<Navigate to={{
+              pathname: root + location.pathname.slice("/teacher".length),
+              search: location.search,
+              hash: location.hash,
+            }} replace />} />
+          )}
+          <Route path="*" element={<Navigate to={`${root}/class`} replace />} />
         </Routes>
       </Suspense>
     );

@@ -2,13 +2,12 @@
 // 左边他的代码（标出程序标的出错行）、标的错误；右边每组测试点的输入、标准输出、他的输出
 // （没过的展开、高亮第一处不一样的行；通过的收起）。只给老师看，学生端看不到测试点。
 import { Fragment, useState } from "react";
-import { Link } from "react-router-dom";
 import { ChevronDown, ChevronRight, CircleCheck, CircleX, FileInput, FileOutput } from "lucide-react";
 import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, Loading, Problem, ResultPill } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime } from "../../lib/time";
-import { useClasses, type ClassInfo } from "./common";
+import { StaffLink, useClasses, type ClassInfo } from "./common";
 
 interface Row {
   key: string; userId: string; name: string; problemId: number; title: string; attemptNo: number;
@@ -164,7 +163,7 @@ export default function Submissions({ cls }: { cls: ClassInfo }) {
                         </button>
                       </td>
                       <td className="note">{x.time ? fullTime(x.time) : ""}</td>
-                      <td><Link className="link" to={`/teacher/students/${x.userId}`}>{x.name || x.userId}</Link></td>
+                      <td><StaffLink className="link" to={`/students/${x.userId}`}>{x.name || x.userId}</StaffLink></td>
                       <td>{x.title || x.problemId}<span className="note"> · 第 {x.attemptNo} 次</span></td>
                       <td><ResultPill sub={{ key: x.key, attemptNo: x.attemptNo, result: x.result, resultText: x.resultText, passed: null, total: null, grid: x.grid, time: x.time }} short /></td>
                       <td>{x.grid ? <Cells grid={x.grid} /> : null}</td>

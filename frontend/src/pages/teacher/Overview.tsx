@@ -2,14 +2,13 @@
 // 三个数；误区（本周 / 全部，课上要强调的错误点）；要讲的知识点（和误区对齐）；需要留意的学生（一直不做题、
 // 一直卡在某处、其他）、作业完成情况；两张趋势图。全部误区在“误区”页，全部知识点在知识图谱，每个学生在学生明细。
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import { Activity, ArrowRight, CircleAlert, CircleCheck, Copy, Hourglass, Send, Target, Users } from "lucide-react";
 import { get } from "../../api";
 import { ColumnChart, LineChart } from "../../components/charts";
 import { Avatar, Card, Empty, Loading, Problem, Stat, Tabs } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { deadline } from "../../lib/time";
-import { useClasses, type ClassInfo } from "./common";
+import { StaffLink, useClasses, type ClassInfo } from "./common";
 import { MisconceptionGrid, PERIOD_TEXT, type Misconception, type Period } from "./Misconceptions";
 
 interface AttentionGroup {
@@ -39,8 +38,8 @@ function MisconceptionCard({ d }: { d: Overview }) {
   const block = d.misconceptions[period];
   return (
     <Card title="误区" sub="课上要强调的错误点：一种错误 × 一个技能，人数多的在前"
-      action={<Link to={`/teacher/misconceptions${period === "all" ? "?period=all" : ""}`} className="btn btn-sm">
-        全部 {block.total} 条<ArrowRight size={14} aria-hidden="true" /></Link>}>
+      action={<StaffLink to={`/misconceptions${period === "all" ? "?period=all" : ""}`} className="btn btn-sm">
+        全部 {block.total} 条<ArrowRight size={14} aria-hidden="true" /></StaffLink>}>
       <Tabs label="误区的范围" value={period} onChange={setPeriod}
         options={(["week", "all"] as Period[]).map((p) => ({ value: p, label: `${PERIOD_TEXT[p]}误区`, count: d.misconceptions[p].total }))} />
       <div role="tabpanel" id={`panel-${period}`} aria-labelledby={`tab-${period}`} className="misc-panel">
@@ -58,7 +57,7 @@ function AttentionCard({ groups }: { groups: AttentionGroup[] }) {
   const g = groups.find((x) => x.key === tab) ?? groups[0];
   return (
     <Card title="需要留意的学生" sub="按写明的规则分三类，每人附理由"
-      action={<Link to="/teacher/students" className="btn btn-sm">全部学生<ArrowRight size={14} aria-hidden="true" /></Link>}>
+      action={<StaffLink to="/students" className="btn btn-sm">全部学生<ArrowRight size={14} aria-hidden="true" /></StaffLink>}>
       <Tabs label="需要留意的学生分类" value={tab} onChange={setTab}
         options={groups.map((x) => ({ value: x.key, label: x.title, count: x.students.length }))} />
       <div role="tabpanel" id={`panel-${g.key}`} aria-labelledby={`tab-${g.key}`}>
@@ -69,12 +68,12 @@ function AttentionCard({ groups }: { groups: AttentionGroup[] }) {
               <li key={a.userId}>
                 <Avatar name={a.name} />
                 <div className="attn-main">
-                  <Link to={`/teacher/students/${a.userId}`} className="attn-name">{a.name}<span className="code-tag">{a.userId}</span></Link>
+                  <StaffLink to={`/students/${a.userId}`} className="attn-name">{a.name}<span className="code-tag">{a.userId}</span></StaffLink>
                   <span className="attn-reasons">
                     {a.reasons.map((r) => <span key={r} className="pill pill-warn"><CircleAlert aria-hidden="true" />{r}</span>)}
                   </span>
                 </div>
-                <Link to={`/teacher/students/${a.userId}`} className="btn btn-sm btn-ghost" aria-label={`看${a.name}的明细`}><ArrowRight size={15} /></Link>
+                <StaffLink to={`/students/${a.userId}`} className="btn btn-sm btn-ghost" aria-label={`看${a.name}的明细`}><ArrowRight size={15} /></StaffLink>
               </li>
             ))}
           </ul>
@@ -106,13 +105,13 @@ export default function ClassOverview({ cls }: { cls: ClassInfo }) {
       <MisconceptionCard d={d} />
 
       <Card title="要讲的知识点" sub="待加强、卡住过、没来问的人多的排前面"
-        action={<Link to="/teacher/map?view=table" className="btn btn-sm">全部知识点<ArrowRight size={14} aria-hidden="true" /></Link>}>
+        action={<StaffLink to="/map?view=table" className="btn btn-sm">全部知识点<ArrowRight size={14} aria-hidden="true" /></StaffLink>}>
         {d.focus.length === 0 ? <Empty icon={CircleCheck} title="目前没有特别要讲的知识点" /> : (
           <ul className="focus-list focus-grid">
             {d.focus.map((f) => (
               <li key={f.code}>
                 <div className="focus-top">
-                  <Link to={`/teacher/map?kp=${f.code}`} className="focus-name">{f.name}</Link>
+                  <StaffLink to={`/map?kp=${f.code}`} className="focus-name">{f.name}</StaffLink>
                   <span className="focus-counts">
                     {f.weak > 0 && <span className="pill pill-fail">待加强 {f.weak} 人</span>}
                     {f.stuck > 0 && <span className="pill pill-warn">卡住过 {f.stuck} 人</span>}

@@ -1,14 +1,14 @@
 // 知识图谱：哪些知识点没学好，谁卡在这里。上面一排筛选，中间是图（也可以切成表，表能按待加强、卡住、没来问排），
 // 点一个知识点在右边看详情：全班、卡在这里的学生、没来问的、每个学生、小题三维、技能、常见错误、练习题、前置和后续。
 import { useCallback, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { ArrowDown, ArrowRight, ArrowUpDown, BookOpen, CircleAlert, Link2, Network, Search, Table2, X } from "lucide-react";
 import { get } from "../../api";
 import { StackedBar } from "../../components/charts";
 import KnowledgeGraph, { hasData, type KMEdge, type KMNode, type KMTopic } from "../../components/KnowledgeGraph";
 import { Card, LEVELS, Loading, Problem, Segmented, levelClass } from "../../components/ui";
 import { useEscape, useLayout, useLoad } from "../../lib/hooks";
-import { Code, RESOLUTION, ScoreBadge, useClasses, type ClassInfo } from "./common";
+import { StaffLink, Code, RESOLUTION, ScoreBadge, useClasses, type ClassInfo } from "./common";
 
 interface MapData {
   class: { key: string; name: string; course: "C" | "D" };
@@ -110,7 +110,7 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                     {d.stuck.students.map((w) => (
                       <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
                         <div className="kg-people-top">
-                          <Link to={`/teacher/students/${w.userId}?tab=help`} className="link">{w.name}</Link>
+                          <StaffLink to={`/students/${w.userId}?tab=help`} className="link">{w.name}</StaffLink>
                           <span className="note num">卡住 {w.rounds} 次</span>
                           {w.stubborn && <span className="pill pill-warn">顽固</span>}
                           {w.passed === true ? <span className="pill pill-pass">后来通过</span> : w.passed === false ? <span className="pill pill-fail">还没通过</span> : null}
@@ -128,7 +128,7 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                     <ul className="kg-people">
                       {d.stuck.silent.map((w) => (
                         <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
-                          <div className="kg-people-top"><Link to={`/teacher/students/${w.userId}?tab=subs`} className="link">{w.name}</Link></div>
+                          <div className="kg-people-top"><StaffLink to={`/students/${w.userId}?tab=subs`} className="link">{w.name}</StaffLink></div>
                           <p className="kg-people-text">{w.problems.map((p) => `「${p.title || p.problemId}」没过 ${p.fails} 次`).join("、")}</p>
                         </li>
                       ))}
@@ -144,7 +144,7 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                   {d.students.map((w) => (
                     <li key={w.userId} className={w.userId === studentId ? "kg-people-me" : undefined}>
                       <div className="kg-people-top">
-                        <Link to={`/teacher/students/${w.userId}`} className="link">{w.name}</Link>
+                        <StaffLink to={`/students/${w.userId}`} className="link">{w.name}</StaffLink>
                         <span className={`lvpill ${levelClass(w.level)}`}><i />{w.predicted ? "推算" : w.level}</span>
                         {w.distinctProblems != null && <span className="note num">{w.distinctProblems} 道题</span>}
                         {w.score !== null ? <ScoreBadge score={w.score} /> : w.p !== null && <span className="note num">{w.p.toFixed(2)}</span>}
@@ -153,7 +153,7 @@ function Panel({ cls, node, home, studentId, studentName, onSelect, onClose }: {
                       {d.studentDims?.[w.userId] && (
                         <p className="kg-people-text num">
                           小题：判断 {frac(d.studentDims[w.userId].judge)} · 定位 {frac(d.studentDims[w.userId].locate, d.studentDims[w.userId].why?.locate)} · 修改 {frac(d.studentDims[w.userId].edit, d.studentDims[w.userId].why?.edit)}
-                          {" "}<Link to={`/teacher/students/${w.userId}?tab=quiz`} className="link">作答依据</Link>
+                          {" "}<StaffLink to={`/students/${w.userId}?tab=quiz`} className="link">作答依据</StaffLink>
                         </p>
                       )}
                     </li>

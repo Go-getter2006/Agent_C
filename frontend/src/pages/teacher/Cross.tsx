@@ -2,12 +2,11 @@
 // 全部自动：智能体每天夜里补充联系、用数据检验、按结果采用或不用；老师可以改，但不用去点。
 // 只有 C 语言知识点的掌握程度，没有 C 语言的答题记录。
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { Check, CircleAlert, X } from "lucide-react";
 import { get, post } from "../../api";
 import { Card, Empty, Loading, Problem, Segmented } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
-import { Code, pct, useClasses, type ClassInfo } from "./common";
+import { StaffLink, Code, pct, useClasses, type ClassInfo } from "./common";
 
 interface SkillSide { code: string; name: string; kp: string; kpCode?: string }
 interface CrossLinkRow {
@@ -65,7 +64,7 @@ function Warning({ d }: { d: CrossData }) {
             <ul className="rv-list">
               {w.students.slice(0, 10).map((st) => (
                 <li key={st.userId}>
-                  <div className="rv-top"><Link className="link" to={`/teacher/students/${st.userId}`}>{st.name}</Link><span className="note">{st.weak.length} 处</span></div>
+                  <div className="rv-top"><StaffLink className="link" to={`/students/${st.userId}`}>{st.name}</StaffLink><span className="note">{st.weak.length} 处</span></div>
                   <span className="note">{st.weak.map((x) => `${x.name}（${x.level}${x.p !== null ? ` ${x.p.toFixed(2)}` : ""}）`).join("、")}</span>
                 </li>
               ))}

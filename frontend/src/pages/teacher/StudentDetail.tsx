@@ -6,13 +6,13 @@
 //   模型细节（研究用）：多维画像的数值、技能的 v2 估计和区间、v1、图模型、根因；数据结构的联合状态
 // 只有登录的这门课；数据结构这边不出现 C 语言的答题记录。
 import { useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Copy, FileDown, FlaskConical, Quote, Waypoints } from "lucide-react";
 import { get } from "../../api";
 import { Card, Cells, CodeBlock, Empty, Facts, LevelLegend, Loading, Problem, ResultPill, Tabs, levelClass } from "../../components/ui";
 import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
-import { Code, endReason, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, isDeveloper, useClasses, type SkillRef } from "./common";
+import { StaffLink, Code, endReason, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, isDeveloper, useClasses, type SkillRef } from "./common";
 import { DiagnosisCard, type DiagnosisRow } from "./Diagnosis";
 
 interface Detail {
@@ -473,11 +473,11 @@ export default function StudentDetail() {
   return (
     <TeacherPage title={d ? d.student.name : "学生明细"} withClass={false}
       sub={d ? <>{d.student.userId} · {d.student.class.name}</> : undefined}
-      crumb={<Link to="/teacher/students" className="crumb"><ArrowLeft size={15} aria-hidden="true" />学生列表</Link>}
+      crumb={<StaffLink to="/students" className="crumb"><ArrowLeft size={15} aria-hidden="true" />学生列表</StaffLink>}
       tools={d ? (
         <>
-          <Link to={`/teacher/map?student=${d.student.userId}`} className="btn btn-sm"><Waypoints size={15} aria-hidden="true" />在知识图谱里看</Link>
-          {dev && <Link to={`/teacher/logs?ids=${d.student.userId}`} className="btn btn-sm"><FileDown size={15} aria-hidden="true" />申请日志</Link>}
+          <StaffLink to={`/map?student=${d.student.userId}`} className="btn btn-sm"><Waypoints size={15} aria-hidden="true" />在知识图谱里看</StaffLink>
+          {dev && <StaffLink to={`/logs?ids=${d.student.userId}`} className="btn btn-sm"><FileDown size={15} aria-hidden="true" />申请日志</StaffLink>}
         </>
       ) : null}>
       {() => (
