@@ -17,6 +17,8 @@ M = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
 CHAPTER = re.compile(r"^第\s*(\d+)\s*章\s*(.+)$")
 SECTION = re.compile(r"^(\d+(?:[.．]\d+)+)(?![.．\d])\s*(.+)$")
 HEADING = re.compile(r"(?:heading|标题)\s*(\d)$", re.IGNORECASE)
+EXERCISES = re.compile(r"(?:本章|章末|课后)?(?:习题|练习题?|思考题|思考与练习|复习与思考)"
+                       r"(?:[0-9]+|[一二三四五六七八九十]+)?")
 CODE = re.compile(r"^(?:#\s*(?:include|define)\b|//|/\*|\*/|[{}]|(?:int|void|char|float|double|"
                   r"long|short|unsigned|struct|return|if|else|while|for|do|switch|case)\b.*[{};:]|"
                   r"\w+\s*\(.*\)\s*;)", re.ASCII)
@@ -156,6 +158,7 @@ def prepare(output: Path, title: str, files: list[Path], pdf_directory: Path, co
         for path in files:
             archive = opened.enter_context(ZipFile(path))
             doc = _Document(archive)
+            in_exercises = False
             for element in doc.body:
                 if element.tag == W + "tbl" and stack:
                     rows = [[[part for p in cell.findall(W + "p") for part in [*doc.parts(p, True), "\n"]][:-1]
@@ -166,8 +169,15 @@ def prepare(output: Path, title: str, files: list[Path], pdf_directory: Path, co
                 if element.tag != W + "p":
                     continue
                 label = _plain(doc.parts(element)).strip()
+                if stack and not in_exercises and EXERCISES.fullmatch(_norm(label)):
+                    start(_norm(label), 2, path.stem)
+                    in_exercises = True
+                    continue
                 level = doc.level(element)
                 found = _heading(label) if len(label) < 96 else None
+                # 章末的 1.4、3.12 是题号。直到下一章，题目和选项都留在习题正文中。
+                if in_exercises and (found is None or len(found[0]) != 1):
+                    level, found = 0, None
                 if found and len(found[0]) > 1 and not level:
                     section_no, section_title = found
                     if (number and section_no[0] != number[0]) or section_no <= number \
@@ -175,11 +185,14 @@ def prepare(output: Path, title: str, files: list[Path], pdf_directory: Path, co
                             or not re.match(r"[\u3400-\u9fffA-Za-z]", section_title) \
                             or re.search(r"[。！？；]", section_title):
                         found = None
-                if found is None and label and (level or element.find(f"{W}pPr/{W}numPr") is not None):
-                    found = next(((key, name) for key, name in toc.items() if key not in seen_numbers
-                                  and key > number and _norm(label) == _norm(name)), None)
+                if not in_exercises:
+                    if found is None and label and (level or element.find(f"{W}pPr/{W}numPr") is not None):
+                        found = next(((key, name) for key, name in toc.items() if key not in seen_numbers
+                                      and key > number and _norm(label) == _norm(name)), None)
                 if found:
                     number, name = found
+                    if len(number) == 1:
+                        in_exercises = False
                     seen_numbers.add(number)
                     start(_number_title(number, name), len(number), path.stem)
                     continue

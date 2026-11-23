@@ -5,6 +5,7 @@ from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
 
+import app.textbook_word as textbook_word
 from app import db, llm, textbook
 from app import models as m
 from app.textbook_word import prepare
@@ -14,6 +15,40 @@ from tests.test_pdftext import make_pdf
 
 SENTENCE = "An array index starts at zero."
 HEADINGS = ("1.1 Arrays", "1.1.1 Array index", "1.1.2 Array length")
+
+
+def test_exercise_numbers_stay_in_the_exercise_section(monkeypatch, tmp_path):
+    paragraphs = [
+        ("第1章 基础", None), ("1.1 基础语法", None), ("习　题　1", 1),
+        ("1.4 编写程序并输出图形：", None), ("1.5 输出另一个图形", 1),
+        ("第3章 流程控制", None), ("3.1 选择结构", None), ("习题三", None),
+        ("3.12 有几种换法：", None), ("(1) 计算换法数量", None),
+        ("第4章 函数", None), ("4.1 函数定义", None),
+    ]
+    source = tmp_path / "synthetic.docx"
+    with ZipFile(source, "w") as docx:
+        blocks = []
+        for text, level in paragraphs:
+            props = f'<w:pPr><w:outlineLvl w:val="{level}"/></w:pPr>' if level is not None else ""
+            blocks.append(f"<w:p>{props}<w:r><w:t>{text}</w:t></w:r></w:p>")
+        docx.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+                      'wordprocessingml/2006/main"><w:body>' + "".join(blocks) + "</w:body></w:document>")
+
+    extracted = []
+
+    def render(_output, _title, sections, _pdf_directory):
+        extracted.extend(sections)
+        return {}
+
+    monkeypatch.setattr(textbook_word, "render", render)
+    prepare(tmp_path / "synthetic.zip", "测试教材", [source], tmp_path)
+    assert [s["title"] for s in extracted] == [
+        "第1章 基础", "1.1 基础语法", "习题1", "第3章 流程控制", "3.1 选择结构", "习题三",
+        "第4章 函数", "4.1 函数定义",
+    ]
+    assert extracted[2]["parent"] == extracted[0]["id"]
+    assert [b["parts"][0] for b in extracted[2]["blocks"]] == [paragraphs[3][0], paragraphs[4][0]]
+    assert [b["parts"][0] for b in extracted[5]["blocks"]] == [paragraphs[8][0], paragraphs[9][0]]
 
 
 def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_path):
