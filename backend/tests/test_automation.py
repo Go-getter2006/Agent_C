@@ -64,7 +64,7 @@ def test_unknown_student_login_triggers_roster_sync(database, monkeypatch):
         srv = m.Server(code="c-t", name="C 语言（测试）", course="C", base_url="http://fake.test/xdoj-ssm")
         s.add(srv)
         s.flush()
-        s.add(m.DataSource(server_id=srv.id, teacher_user_id="t", enabled=True))
+        s.add(m.DataSource(server_id=srv.id, teacher_user_id="t", enabled=True, last_login_at=db.now()))
     with TestClient(create_app()) as c:
         r = c.post("/api/auth/login", json={"loginName": "2599001234", "password": "x", "course": "C"})
         assert r.status_code == 401 and "自动重新同步名单" in r.json()["error"]

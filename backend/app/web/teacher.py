@@ -146,7 +146,7 @@ def finish_login(s: Session, server: m.Server, user_id: str, password: str, name
         user.display_name = name
     user.status, user.last_login_at = "active", db.now()
     _link(s, user, source)
-    sync_api.request_meta_sync(s, server.id)  # 让主循环马上同步他名下的班级和名单
+    sync_api.request_meta_sync(s, server.id, source_id=source.id)
     set_login_cookie(response, user, server.course)
     return {"role": user.role, "name": user.display_name, "course": server.course}
 

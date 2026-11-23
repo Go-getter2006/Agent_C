@@ -795,8 +795,7 @@ def ui_event(body: EventBody, user: m.User = Depends(student), s: Session = Depe
 @router.get("/status")
 def status(user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     """XDOJ 连得上吗、数据是什么时候的。连不上时页面顶部显示一条细横幅。"""
-    servers = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id)
-               if catalog.server_course(s, sid) == user.course}
+    servers = set(s.scalars(accounts.student_class_scope(user.student_id, user.course)))
     worst = {"ok": True, "dataTime": None, "demo": False}
     for sid in servers:
         source = s.scalar(select(m.DataSource).where(m.DataSource.server_id == sid, m.DataSource.enabled.is_(True)))

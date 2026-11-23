@@ -415,4 +415,6 @@ def sync_metadata(ctx: SyncContext, max_requests: int | None = None, inline_all:
         queue_assigned(ctx)
     with db.session_scope() as s:
         set_time(s, ctx.server_id, "last_meta_at", ctx.now())
+        if ctx.source_id is not None:
+            set_time(s, ctx.server_id, ctx.metadata_key("last_meta_at"), ctx.now())
     return dict(ctx.stats)

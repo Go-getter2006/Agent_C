@@ -223,7 +223,7 @@ class Daemon:
                     self._run_task(ctx, ("detail", "pending_judge"), 0, target_id=sid)
             elif kind == "sync_meta":
                 for ctx in self.contexts:
-                    if server_id is None or ctx.server_id == server_id:
+                    if (server_id is None or ctx.server_id == server_id) and (not target or target == str(ctx.source_id)):
                         self._run_meta(ctx)
         return True
 
@@ -300,6 +300,8 @@ class Daemon:
         _state["activity"] = "同步名单和作业"
         with db.session_scope() as s:
             store.set_time(s, ctx.server_id, "last_meta_try_at", ctx.now())
+            if ctx.source_id is not None:
+                store.set_time(s, ctx.server_id, ctx.metadata_key("last_meta_try_at"), ctx.now())
         try:
             sync_meta.sync_metadata(ctx)
         except SessionError:
@@ -316,8 +318,8 @@ class Daemon:
         """
         now = ctx.now()
         with db.session_scope() as s:
-            done = store.get_time(s, ctx.server_id, "last_meta_at")
-            tried = store.get_time(s, ctx.server_id, "last_meta_try_at")
+            done = store.get_time(s, ctx.server_id, ctx.metadata_key("last_meta_at"))
+            tried = store.get_time(s, ctx.server_id, ctx.metadata_key("last_meta_try_at"))
         if tried is not None and now - tried < dt.timedelta(minutes=config.SYNC["meta_retry_minutes"]):
             return False
         return done is None or now - done >= dt.timedelta(minutes=config.SYNC["meta_interval_minutes"])

@@ -50,18 +50,11 @@ def server_course(s: Session, server_id: int | None) -> str:
 
 def visible_contests(s: Session, user_id: str, course: str | None = None) -> list[m.Contest]:
     """这个学生所在班级被布置的作业。"""
-    classes = accounts.active_class_keys(s, user_id)
-    out: dict[tuple[int, int], m.Contest] = {}
-    for server_id, class_id in classes:
-        if course is not None and server_course(s, server_id) != course:
-            continue
-        rows = s.scalars(
-            select(m.Contest).join(m.ContestClass, (m.ContestClass.server_id == m.Contest.server_id)
-                                   & (m.ContestClass.contest_id == m.Contest.contest_id))
-            .where(m.ContestClass.server_id == server_id, m.ContestClass.class_id == class_id)).all()
-        for c in rows:
-            out[(c.server_id, c.contest_id)] = c
-    return list(out.values())
+    authorized = accounts.student_class_scope(user_id, course).subquery()
+    c, cc = m.Contest, m.ContestClass
+    return list(s.scalars(select(c).join(cc, (cc.server_id == c.server_id) & (cc.contest_id == c.contest_id))
+                          .join(authorized, (authorized.c.server_id == cc.server_id) &
+                                (authorized.c.class_id == cc.class_id))).unique())
 
 
 def contest_problem_ids(s: Session, server_id: int, contest_id: int) -> list[int]:
@@ -83,16 +76,13 @@ def visible_problems(s: Session, user_id: str, course: str | None = None) -> dic
 
 def problem_contest(s: Session, user_id: str, server_id: int, problem_id: int, course: str | None = None) -> int | None:
     """只查当前题所属的可见作业，保留有效班级、课程和截止时间顺序。"""
-    if course is not None and server_course(s, server_id) != course:
-        return None
-    cp, cc, c, en = m.ContestProblem, m.ContestClass, m.Contest, m.Enrollment
+    cp, cc, c = m.ContestProblem, m.ContestClass, m.Contest
+    authorized = accounts.student_class_scope(user_id, course).subquery()
     return s.scalar(select(cp.contest_id).select_from(cp)
                     .join(c, (c.server_id == cp.server_id) & (c.contest_id == cp.contest_id))
                     .join(cc, (cc.server_id == c.server_id) & (cc.contest_id == c.contest_id))
-                    .join(en, (en.server_id == cc.server_id) & (en.class_id == cc.class_id))
-                    .outerjoin(m.XClass, (m.XClass.server_id == en.server_id) & (m.XClass.class_id == en.class_id))
-                    .where(cp.server_id == server_id, cp.problem_id == problem_id,
-                           en.user_id == user_id, en.status == "active", m.XClass.removed_at.is_(None))
+                    .join(authorized, (authorized.c.server_id == cc.server_id) & (authorized.c.class_id == cc.class_id))
+                    .where(cp.server_id == server_id, cp.problem_id == problem_id)
                     .order_by(c.end_time.is_(None).desc(), c.end_time.desc(), c.contest_id.desc()).limit(1))
 
 

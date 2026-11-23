@@ -185,6 +185,16 @@ def ctx(database, fake, clock):
     return make_context(fake, clock)
 
 
+@pytest.fixture()
+def registered_source(ctx, fake):
+    """让使用学生端的同步测试代表教师已在系统登录。"""
+    with db.session_scope() as s:
+        source = m.DataSource(server_id=ctx.server_id, teacher_user_id=fake.teacher_id, last_login_at=db.now())
+        s.add(source)
+        s.flush()
+        ctx.source_id = source.id
+
+
 # ------------------------------------------------------------ 演示数据
 _SEEDED: dict = {}
 

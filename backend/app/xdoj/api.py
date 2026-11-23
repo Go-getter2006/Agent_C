@@ -22,9 +22,10 @@ def request_priority(s: Session, server_id: int, submission_id: int) -> None:
                     created_at=now()))
 
 
-def request_meta_sync(s: Session, server_id: int | None = None) -> None:
+def request_meta_sync(s: Session, server_id: int | None = None, *, source_id: int | None = None) -> None:
     """马上同步名单和作业（教师刚登录时）。"""
-    s.add(m.Trigger(kind="sync_meta", target_id="", server_id=server_id, created_at=now()))
+    s.add(m.Trigger(kind="sync_meta", target_id=str(source_id) if source_id is not None else "",
+                    server_id=server_id, created_at=now()))
 
 
 def request_meta_sync_if_stale(s: Session, server_id: int, minutes: int | None = None) -> bool:

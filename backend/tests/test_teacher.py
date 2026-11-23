@@ -155,6 +155,73 @@ def test_shared_roster_stays_active_until_its_last_teacher_is_removed(ctx):
         assert accounts.active_class_keys(s, UID, "C") == set()
 
 
+@pytest.mark.parametrize("roster_prefetched", [False, True])
+def test_students_need_their_teachers_first_web_login_and_roster(ctx, fake, monkeypatch, roster_prefetched):
+    from dataclasses import replace
+
+    from app.web import auth
+    from app.xdoj import store, sync_meta
+    from app.xdoj.daemon import Daemon
+
+    sid = ctx.server_id
+    second = "2767000002"
+    fake.classes.append({"id": 32, "classId": 32, "className": "测试二班", "ownerId": fake.teacher_id})
+    fake.add_student(second, "二班学生", 32)
+    fake.student_passwords.update({UID: "student-first-pass", second: "student-second-pass"})
+    monkeypatch.setattr(teacher_api, "_test_transport", fake.transport())
+    monkeypatch.setattr(auth, "_failures", {})
+    with db.session_scope() as s:
+        prepared = m.DataSource(server_id=sid, teacher_user_id=fake.teacher_id, from_env=True)
+        unrelated = m.DataSource(server_id=sid, teacher_user_id="another-teacher", last_login_at=db.now())
+        s.add_all([prepared, unrelated])
+        s.flush()
+        ctx.source_id = prepared.id
+        other = replace(ctx, source_id=unrelated.id)
+        # 别的老师已同步过这台服务器，不影响新老师首次同步的调度。
+        store.set_time(s, sid, "last_meta_at", db.now())
+        store.set_time(s, sid, other.metadata_key("last_meta_at"), ctx.now())
+    if roster_prefetched:
+        sync_meta.sync_metadata(ctx)
+    daemon = Daemon([other])
+    with TestClient(create_app()) as teacher, TestClient(create_app()) as student:
+        assert login(student, UID, "student-first-pass").status_code == 401
+        if roster_prefetched:
+            with db.session_scope() as s:
+                u = s.scalar(select(m.User).where(m.User.login_name == UID))
+                student.cookies.set("pda_session", crypto.sign_session(u.id, "C"))
+            assert student.get("/api/homeworks").status_code == 401
+            student.cookies.clear()
+        assert login(teacher, fake.teacher_id, fake.password).status_code == 200
+        if not roster_prefetched:
+            assert login(student, UID, "student-first-pass").status_code == 401
+        start = len(fake.requests)
+        assert daemon.step() == "trigger" and len(fake.requests) == start
+        if not roster_prefetched:
+            daemon.contexts.append(ctx)
+            assert not daemon._meta_due(other)
+            assert daemon.step() == "meta"
+        for uid, password in fake.student_passwords.items():
+            assert login(student, uid, password).status_code == 200
+        assert len(teacher.get("/api/teacher/classes").json()["classes"]) == 2
+        if roster_prefetched:
+            # 能登录另一个班的学生也不能打开尚未开通的班级的题。
+            with db.session_scope() as s:
+                never_signed_in = m.DataSource(server_id=sid, teacher_user_id="third-teacher", from_env=True)
+                s.add(never_signed_in)
+                s.flush()
+                s.add_all([
+                    m.XClass(server_id=sid, class_id=33, data_source_id=never_signed_in.id),
+                    m.Enrollment(server_id=sid, class_id=33, user_id=UID),
+                    m.Contest(server_id=sid, contest_id=503, title="尚未开放的作业"),
+                    m.ContestClass(server_id=sid, contest_id=503, class_id=33),
+                    m.Problem(server_id=sid, problem_id=409, title="尚未开放的题目"),
+                    m.ContestProblem(server_id=sid, contest_id=503, problem_id=409),
+                ])
+            assert login(student, UID, "student-first-pass").status_code == 200
+            assert student.get(f"/api/problems/p{sid}-406").status_code == 200
+            assert student.get(f"/api/problems/p{sid}-409").status_code == 404
+
+
 def _avg_to_pass(server_id: int, uid: str) -> float:
     """独立算一遍：每道通过的题交到第几次第一次通过，取平均。"""
     with db.session_scope() as s:
@@ -606,8 +673,11 @@ def test_student_login_through_xdoj(client, monkeypatch):
     monkeypatch.setattr(teacher_api, "_test_transport", fx.transport())
     with db.session_scope() as s:
         srv = sources.ensure_server(s, "c-test", "C 语言（测试用的假服务器）", "http://fake.test/xdoj-ssm")
+        src = m.DataSource(server_id=srv.id, teacher_user_id=fx.teacher_id, last_login_at=db.now())
+        s.add(src)
         s.add(m.Student(user_id="2599000001", name="测试生"))
         s.flush()
+        s.add(m.XClass(server_id=srv.id, class_id=77, data_source_id=src.id))
         accounts.ensure_student_user(s, "2599000001", "测试生")
         s.add(m.Enrollment(user_id="2599000001", server_id=srv.id, class_id=77))
 

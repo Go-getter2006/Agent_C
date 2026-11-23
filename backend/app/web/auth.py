@@ -1,6 +1,6 @@
 """登录。
 
-学生：账号来自老师登录后同步下来的班级名单（不能自己注册）。登录时把学号和密码转发给他所在班级的
+学生：账号来自同步下来的班级名单，所在班级要有教师在本系统成功登录过（不能自己注册）。登录时把学号和密码转发给他所在班级的
 XDOJ 试登一次，成功就放行；密码只在这一次请求里用，不保存、不写日志（《总说明》第 11 节第 1 条的做法）。
 演示数据里的学生连不了真实的 XDOJ，用服务器上配置的演示口令（DEV_LOGIN_PASSWORD）。
 AUTH_MODE=dev 时，真实名单里的学生也可以用演示口令登录，只用于开发调试，正式环境不要这样配。
@@ -129,7 +129,7 @@ def _developer_login(s: Session, password: str, course: str, key: str, response:
 
 
 def _student_servers(s: Session, user: m.User, course: str | None = None) -> list[m.Server]:
-    ids = {sid for sid, _cid in accounts.active_class_keys(s, user.student_id or user.login_name, course)}
+    ids = set(s.scalars(accounts.student_class_scope(user.student_id or user.login_name, course)))
     return [srv for srv in (s.get(m.Server, i) for i in sorted(ids)) if srv is not None]
 
 
@@ -176,7 +176,7 @@ def login(body: LoginBody, request: Request, response: Response, s: Session = De
             other = [srv for srv in _student_servers(s, user) if srv.course != course]
             raise HTTPException(status_code=401, detail=(
                 f"这个学号不在{COURSE_NAMES[course]}的班级名单里，是不是选错了课程？" if other else
-                "这个学号还不在任何班级名单里。要等任课老师登录本系统、同步完名单以后才能登录。"))
+                "这个课程的学生账号还没开通。请确认任课老师已登录本系统，且你的学号已同步到班级名单。"))
         real = [srv for srv in servers if srv.code != "demo" and srv.base_url]
         if not real or (config.AUTH_MODE == "dev" and _dev_password_ok(body.password)):
             ok = _dev_password_ok(body.password)
@@ -231,8 +231,8 @@ def _teacher_or_new_student(s: Session, servers: list[m.Server], name: str, pass
     asked = False
     with db.session_scope() as s2:   # 单独提交：下面要报错返回，这个请求自己的事务会回滚
         for srv in student_on:
-            if s2.scalar(select(m.DataSource.id).where(m.DataSource.server_id == srv.id,
-                                                       m.DataSource.enabled.is_(True))) is not None:
+            if s2.scalar(select(m.DataSource.id).where(
+                    m.DataSource.server_id == srv.id, accounts.logged_in_teacher()).limit(1)) is not None:
                 asked = request_meta_sync_if_stale(s2, srv.id) or asked
     raise HTTPException(status_code=401, detail=(
         "名单里还没有这个学号，系统正在自动重新同步名单，一两分钟后再试一次。" if asked else

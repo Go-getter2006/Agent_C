@@ -11,6 +11,7 @@ from app.web.app import create_app
 from app.xdoj import endpoints, sync_meta, sync_submissions
 
 UID = "2500000001"
+pytestmark = pytest.mark.usefixtures("registered_source")
 
 
 def test_reading_empty_homework_thread_only_reads_messages(ctx, clock, monkeypatch):

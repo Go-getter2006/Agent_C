@@ -21,16 +21,38 @@ def ensure_student_user(s: Session, user_id: str, name: str) -> m.User:
     return user
 
 
-def active_class_keys(s: Session, user_id: str, course: str | None = None) -> set[tuple[int, int]]:
-    """这个学生当前所在的班级：(服务器, 班级编号)。"""
+def _active_class_scope(user_id: str):
     enrollment, cls = m.Enrollment, m.XClass
-    query = select(enrollment.server_id, enrollment.class_id).outerjoin(
+    return select(enrollment.server_id, enrollment.class_id).outerjoin(
         cls, (cls.server_id == enrollment.server_id) & (cls.class_id == enrollment.class_id)
     ).where(enrollment.user_id == user_id, enrollment.status == "active", cls.removed_at.is_(None))
+
+
+def active_class_keys(s: Session, user_id: str, course: str | None = None) -> set[tuple[int, int]]:
+    """这个学生当前所在的班级：(服务器, 班级编号)。"""
+    query = _active_class_scope(user_id)
     if course is not None:
-        query = query.join(m.Server, m.Server.id == enrollment.server_id).where(m.Server.course == course)
+        query = query.join(m.Server, m.Server.id == m.Enrollment.server_id).where(m.Server.course == course)
     rows = s.execute(query).all()
     return {(r[0], r[1]) for r in rows}
+
+
+def logged_in_teacher():
+    source = m.DataSource
+    return source.enabled.is_(True) & source.removed_at.is_(None) & source.last_login_at.is_not(None)
+
+
+def student_class_scope(user_id: str, course: str | None = None):
+    """真实课程的学生权限来自当前班级及至少一位在本系统登录过的教师。"""
+    enrollment, cls, source = m.Enrollment, m.XClass, m.DataSource
+    links = select(m.ClassSource.data_source_id).where(
+        m.ClassSource.server_id == enrollment.server_id, m.ClassSource.class_id == enrollment.class_id
+    ).correlate(enrollment)
+    teacher = select(source.id).where(source.server_id == enrollment.server_id, logged_in_teacher(),
+        or_(source.id == cls.data_source_id, source.id.in_(links))).correlate(enrollment, cls).exists()
+    query = _active_class_scope(user_id).join(m.Server, m.Server.id == enrollment.server_id).where(
+        or_(m.Server.code == "demo", cls.class_id.is_not(None) & teacher))
+    return query.where(m.Server.course == course) if course is not None else query
 
 
 def student_course_removed(s: Session, user_id: str, course: str) -> bool:

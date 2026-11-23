@@ -26,6 +26,9 @@ class SyncContext:
     def now(self) -> dt.datetime:
         return self.clock()
 
+    def metadata_key(self, key: str) -> str:
+        return f"{key}:{self.source_id}" if self.source_id is not None else key
+
     def bump(self, key: str, n: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + n
 

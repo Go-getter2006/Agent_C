@@ -14,6 +14,7 @@ from app.chat.policy import Decision, PolicyInput, decide
 
 
 @pytest.mark.parametrize("display", ["figure", "page", "rejected"])
+@pytest.mark.usefixtures("registered_source")
 def test_vision_reply_reuses_sidebar_and_selected_judge_run(ctx, fake, monkeypatch, display):
     from app import pdftext
     from tests.test_pdftext import make_pdf
