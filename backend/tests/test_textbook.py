@@ -89,8 +89,14 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             assert all(title in sys for title in HEADINGS)
             if user.endswith("简单说说数组"):
                 return '{"before":"数组用同一个名字存放多个同类型的值。"}', 10, 10
+            assert "本轮先根据最近的对话与当前提问查目录" in sys
+            if user.endswith("教材哪里讲了 Rust？"):
+                return '{"textbookSearch":{"sections":[]},"before":"这本教材讲的是 C 语言。"}', 10, 10
+            if user.endswith("怎么用"):
+                assert "学生：啥叫 array index 呀？" in user
+                return '{"textbookSearch":{"sections":[2],"keywords":""}}', 10, 10
             return '{"textbookSearch":{"sections":[2,999,3,2],"keywords":"array index length"}}', 10, 10
-        return json.dumps({"before": "数组首元素的下标为 0。", "textbook": ["T1", "T999", "T1"]},
+        return json.dumps({"before": "数组首元素的下标为 0。", "textbook": ["[t1]", "T999", "T1"]},
                           ensure_ascii=False), 10, 10
 
     with TestClient(app) as client:
@@ -127,8 +133,19 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             history = client.get(f"/api/threads/{turn['thread']}").json()["messages"]
             assert history[-1]["textbook"] == msg["textbook"] and history[-1]["time"] == msg["time"]
             calls.clear()
+            followup = client.post(f"/api/threads/{turn['thread']}/messages", json={"text": "怎么用"})
+            assert followup.status_code == 200 and len(calls) == 2 and SENTENCE in calls[1][1]
+            assert followup.json()["messages"][-1]["textbook"] == msg["textbook"]
+            with db.session_scope() as s:
+                step = s.query(m.ChatStep).order_by(m.ChatStep.id.desc()).first()
+                assert step.check_result["textbookLookup"] == {
+                    "available": True, "searched": True, "candidates": 1, "cited": 1}
+            calls.clear()
             direct = client.post("/api/threads/new/messages", json={"text": "简单说说数组"}).json()
             assert len(calls) == 1 and not direct["messages"][-1].get("textbook")
+            calls.clear()
+            no_match = client.post("/api/threads/new/messages", json={"text": "教材哪里讲了 Rust？"}).json()
+            assert len(calls) == 1 and not no_match["messages"][-1].get("textbook")
         finally:
             llm.set_backend(None)
 

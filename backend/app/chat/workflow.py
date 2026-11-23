@@ -310,6 +310,8 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
         materials = prompt_context.build(s, ctx)
         testcases.extend(materials.tests)
         book_directory = textbook.directory(s, ctx.course) if ctx.knowledge and flow == "concept" else None
+        book_available = book_directory is not None
+        book_searched = False
         book_evidence = {}
         feedback = ""
         for attempt in range(2):
@@ -317,6 +319,7 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
                 draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials,
                                            book_evidence, book_directory)
                 if isinstance(draft, textbook.Lookup):
+                    book_searched = True
                     book_evidence = textbook.retrieve(s, ctx.course, text, history, book_directory, draft)
                     book_directory = None
                     draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials,
@@ -328,7 +331,11 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
                 draft.quote = reply.default_quote(ctx)  # 指出问题时，把他自己的代码贴出来
             problems = run_check(draft)
             if not problems:
-                return draft, "llm", {"ok": True, "problems": []}, retries
+                checks = {"ok": True, "problems": []}
+                if ctx.knowledge:
+                    checks["textbookLookup"] = {"available": book_available, "searched": book_searched,
+                                               "candidates": len(book_evidence), "cited": len(draft.textbook_refs)}
+                return draft, "llm", checks, retries
             retries = attempt + 1
             feedback = "；".join(problems)
         log.info("回复两次没通过校验，改用固定模板")

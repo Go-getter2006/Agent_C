@@ -24,6 +24,9 @@ _WORDS = re.compile(r"[\u3400-\u9fff]+|%[a-z]+|[a-z_]\w*|[0-9]+(?:[.][0-9]+)+|&&
 _STOP = set("什么 怎么 如何 一下 是不是 为什么 这个 那个 有什么 给我 帮我 有哪些 是什么 和例 解释 区别 想问 能否 能不".split())
 _QUESTION_WORDS = re.compile(r"为什么|是什么|这是什么|怎么|如何|帮我|解释一下|请问")
 _FIGURE_QUESTION = re.compile(r"图\s*\d|流程图|示意图|图解|这张图|上面的图|插图")
+_BOOK_QUESTION = re.compile(r"教材|课本")
+_SKIP_BOOK = re.compile(r"(?:不用|不必|不需要|不要|别|无需)(?:查阅?|参考|引用|结合|看|用)?(?:教材|课本)")
+_USAGE_QUESTION = re.compile(r"(.+?)(?:怎么用|怎么调用|如何使用|有什么用)[呢呀啊\s？?。！!]*")
 
 
 def publish(s: Session, path: Path) -> tuple[m.TextbookEdition, bool]:
@@ -72,6 +75,18 @@ def active(s: Session) -> m.TextbookEdition | None:
 class Directory:
     edition: m.TextbookEdition
     entries: dict[int, tuple[int | None, str]]
+
+    def should_lookup(self, question: str, history: list[tuple[str, str]]) -> bool:
+        if _SKIP_BOOK.search(question):
+            return False
+        if _BOOK_QUESTION.search(question):
+            return True
+        previous = previous_question_for_followup(question, history)
+        subject = definition_subject(question) or definition_subject(previous)
+        if not subject and (usage := _USAGE_QUESTION.fullmatch(question.strip())):
+            subject = usage[1]
+        terms = _terms(subject)
+        return bool(terms) and any(terms <= _terms(title) for _, title in self.entries.values())
 
     def prompt(self) -> str:
         depths = {}
@@ -152,6 +167,11 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
     query = _terms(term or _QUESTION_WORDS.sub(" ", question))
     if lookup:
         query |= _terms(lookup.keywords)
+    previous = previous_question_for_followup(question, history)
+    remembered = _terms(definition_subject(previous) or previous)
+    if not query:
+        query = remembered
+    remembered -= query
     if course != "C" or not query or (edition := book.edition if book else active(s)) is None:
         return {}
     groups = {}
@@ -162,8 +182,6 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
                 groups[number] = number
             elif parent in groups:
                 groups[number] = groups[parent]
-    previous = previous_question_for_followup(question, history)
-    remembered = _terms(definition_subject(previous) or previous) - query
     passages, frequency = _passages(s, edition)
     weights = {term: math.log(1 + len(passages) / (1 + frequency[term])) for term in query | remembered}
     wants_figure = bool(_FIGURE_QUESTION.search(question) or (lookup and _FIGURE_QUESTION.search(lookup.keywords)))
@@ -175,7 +193,7 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
             continue
         in_text = query & passage.words
         carried = remembered & passage.words
-        if not in_text and len(carried) < 2:
+        if not in_text and len(carried) < (1 if lookup else 2):
             continue
         if not lookup and len(query) >= 3 and len((passage.words | passage.title_words) & query) < 2 and len(carried) < 2:
             continue
@@ -188,7 +206,7 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
         if passage.figure and re.search(r"\d+(?:\.\d+)+", question):
             score *= 2
         ranked.append((score, passage))
-    ranked.sort(key=lambda item: item[0], reverse=True)
+    ranked.sort(key=lambda item: (item[0], item[1].figure), reverse=True)
     if groups:
         # 每处先取最相关的一段，再补其余候选，避免较长的章节吃掉所有位置。
         seen = set()
@@ -213,5 +231,6 @@ def prompt(matches: dict) -> str:
 def citations(matches: dict, selected) -> list[dict]:
     if not isinstance(selected, list):
         return []
-    keys = dict.fromkeys(key for key in selected if isinstance(key, str) and key in matches)
-    return [matches[key][1] for key in list(keys)[:2]]
+    keys = dict.fromkeys(key.strip(" []").upper() for key in selected if isinstance(key, str))
+    keys = [key for key in keys if key in matches]
+    return [matches[key][1] for key in keys[:2]]

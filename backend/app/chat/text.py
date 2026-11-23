@@ -27,6 +27,8 @@ _DEFINITION_QUESTION = re.compile(
     r"(?P<before>.+?)\s*是(?:什么|啥)(?:意思)?)[呢呀啊吗嘛\s]*[？?。！!]*"
 )
 _FOLLOWUP = re.compile(r"^(?:那|那么|那要是|这时|还是|也要|可以不|还有呢|再解释)")
+_SHORT_FOLLOWUP = re.compile(r"(?:怎么(?:用|写|调用)|如何(?:用|使用|调用)|有(?:什么|啥)用|"
+                             r"(?:能|可以)举个例子(?:吗|么)?)[呢呀啊\s]*[？?。！!]*")
 
 
 def definition_subject(text: str) -> str:
@@ -38,9 +40,11 @@ def definition_subject(text: str) -> str:
 
 
 def previous_question_for_followup(text: str, history: list[tuple[str, str]]) -> str:
-    if not _FOLLOWUP.search(text.strip()):
+    text = text.strip()
+    if not (_FOLLOWUP.search(text) or _SHORT_FOLLOWUP.fullmatch(text)):
         return ""
-    return next((question for role, question in reversed(history) if role == "student"), "")
+    return next((question for role, question in reversed(history) if role == "student"
+                 and not _SHORT_FOLLOWUP.fullmatch(question.strip())), "")
 
 
 def split_message(text: str) -> tuple[str, str]:
