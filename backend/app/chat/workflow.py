@@ -325,6 +325,8 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
                     draft = reply.generate_llm(ctx, decision, flow, text, history, prior_ref, feedback, materials,
                                                book_evidence)
             except llm.LLMUnavailable:
+                if ctx.knowledge:
+                    raise
                 break
             if draft.quote is None and flow == "help" and decision.help_level in ("H0", "H1") \
                     and not reply.ctx_located(ctx):
@@ -335,10 +337,16 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
                 if ctx.knowledge:
                     checks["textbookLookup"] = {"available": book_available, "searched": book_searched,
                                                "candidates": len(book_evidence), "cited": len(draft.textbook_refs)}
+                    if draft.textbook_skip_reason or (book_searched and not book_evidence):
+                        checks["textbookLookup"]["reason"] = draft.textbook_skip_reason or "所选章节没有可定位的段落"
                 return draft, "llm", checks, retries
             retries = attempt + 1
             feedback = "；".join(problems)
+        if ctx.knowledge:
+            raise llm.LLMUnavailable("知识问答回复未通过校验")
         log.info("回复两次没通过校验，改用固定模板")
+    if ctx.knowledge:
+        raise llm.LLMUnavailable("知识问答需要大模型")
     draft = reply.template(ctx, decision, flow, text, prior, prior_ref)
     if flow in ("help", "locate", "diagnose", "example", "reveal_line", "explain"):
         overview = reply.all_failed_overview(ctx, text)

@@ -865,6 +865,7 @@ def test_courses_are_logged_in_and_shown_separately(client, monkeypatch):
     assert [h["title"] for h in client.get("/api/homeworks").json()["homeworks"]] == ["数据结构第 1 次作业"]
     assert client.get(f"/api/problems/p{c_id}-9001").status_code == 404     # C 语言的题在数据结构里打不开
     assert client.get(f"/api/problems/p{d_id}-9101").status_code == 200
+    monkeypatch.setattr("app.llm._backend", lambda *_: ('{"before":"先保存下一个结点。"}', 10, 10))
     assert client.post("/api/threads/general/messages", json={"text": "链表逆置要注意什么？"}).status_code == 200
     assert client.get("/api/threads/general").json()["messages"]
     prog = client.get("/api/progress").json()

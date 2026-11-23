@@ -23,6 +23,7 @@ export interface Homework {
 
 export interface ProblemRow {
   key: string;
+  lastMessageId?: number;
   title: string;
   brief: string;
   attempts: number;
@@ -139,6 +140,9 @@ export interface TextbookCitation {
   section: number;
   anchor: number;
   path: string[];
+  role?: "key" | "example";
+  explanation?: string;
+  preview?: { page: number; width: number; height: number; figure: boolean; boxes: [number, number, number, number][] };
 }
 
 export interface TextbookContents {

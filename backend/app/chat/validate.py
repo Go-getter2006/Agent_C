@@ -25,6 +25,7 @@ class Draft:
     flow_steps: list[str] = field(default_factory=list)
     flow_gap: int | None = None
     textbook_refs: list[dict] = field(default_factory=list)
+    textbook_skip_reason: str = ""
 
     def text(self) -> str:
         return f"{self.before}\n{self.after}".strip()
@@ -67,7 +68,8 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
     """返回不合格的原因；空列表表示通过。"""
     problems: list[str] = []
     text = draft.text()
-    everything = "\n".join([text, draft.code or "", *draft.flow_steps])
+    explanations = "\n".join(ref["explanation"] for ref in draft.textbook_refs if ref.get("explanation"))
+    everything = "\n".join([text, draft.code or "", *draft.flow_steps, explanations])
     n_source = len(source.split("\n")) if source else 0
 
     # 1 新写的代码行数：H3 不超过 8 行，其余级别不超过 2 行；引用他自己的代码、以前给过的代码不计
@@ -137,7 +139,7 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
         problems.append("回复是空的")
 
     # 8 不能出现内部用语，不用 emoji
-    if _INTERNAL.search("\n".join([text, *draft.flow_steps])):
+    if _INTERNAL.search("\n".join([text, *draft.flow_steps, explanations])):
         problems.append("出现了内部用语")
     if EMOJI.search(everything):
         problems.append("用了 emoji")

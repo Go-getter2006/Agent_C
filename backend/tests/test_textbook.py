@@ -87,16 +87,19 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
         calls.append((sys, user))
         if "【当前版教材目录】" in sys:
             assert all(title in sys for title in HEADINGS)
-            if user.endswith("简单说说数组"):
-                return '{"before":"数组用同一个名字存放多个同类型的值。"}', 10, 10
-            assert "本轮先根据最近的对话与当前提问查目录" in sys
+            if user.endswith("谢谢，我懂了"):
+                return '{"textbookSearch":{"sections":[],"reason":"学生在确认理解"},"before":"好。"}', 10, 10
+            if user.endswith("看一下 array index") and len(messages) == 2:
+                return '{"before":"从零开始。"}', 10, 10  # 漏选目录的答复不能直接发出
+            assert "优先选到最小小节" in sys
             if user.endswith("教材哪里讲了 Rust？"):
-                return '{"textbookSearch":{"sections":[]},"before":"这本教材讲的是 C 语言。"}', 10, 10
+                return '{"textbookSearch":{"sections":[],"reason":"无 Rust 章节"},"before":"这本教材讲的是 C 语言。"}', 10, 10
             if user.endswith("怎么用"):
                 assert "学生：啥叫 array index 呀？" in user
                 return '{"textbookSearch":{"sections":[2],"keywords":""}}', 10, 10
             return '{"textbookSearch":{"sections":[2,999,3,2],"keywords":"array index length"}}', 10, 10
-        return json.dumps({"before": "数组首元素的下标为 0。", "textbook": ["[t1]", "T999", "T1"]},
+        return json.dumps({"before": "数组首元素的下标为 0。", "textbook": [
+            {"id": "[t1]", "role": "key", "explanation": "读第一个元素时，下标应写 0。"}]},
                           ensure_ascii=False), 10, 10
 
     with TestClient(app) as client:
@@ -127,8 +130,11 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
                 assert SENTENCE not in calls[0][1] and SENTENCE in calls[1][1]
                 assert "The array length counts its elements." in calls[1][1]
                 msg = turn["messages"][-1]
-                assert msg["textbook"] == [{"edition": edition, "section": 2, "anchor": target["id"],
-                                           "path": list(HEADINGS[:2])}]
+                ref, = msg["textbook"]
+                assert ref == {"edition": edition, "section": 2, "anchor": target["id"], "path": list(HEADINGS[:2]),
+                               "role": "key", "explanation": "读第一个元素时，下标应写 0。", "preview": {
+                                   "page": 0, "width": section.pages[0]["width"], "height": section.pages[0]["height"],
+                                   "figure": False, "boxes": [box[1:] for box in target["boxes"]]}}
                 assert SENTENCE not in json.dumps(msg)
             history = client.get(f"/api/threads/{turn['thread']}").json()["messages"]
             assert history[-1]["textbook"] == msg["textbook"] and history[-1]["time"] == msg["time"]
@@ -141,11 +147,19 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
                 assert step.check_result["textbookLookup"] == {
                     "available": True, "searched": True, "candidates": 1, "cited": 1}
             calls.clear()
-            direct = client.post("/api/threads/new/messages", json={"text": "简单说说数组"}).json()
+            direct = client.post("/api/threads/new/messages", json={"text": "谢谢，我懂了"}).json()
             assert len(calls) == 1 and not direct["messages"][-1].get("textbook")
             calls.clear()
             no_match = client.post("/api/threads/new/messages", json={"text": "教材哪里讲了 Rust？"}).json()
             assert len(calls) == 1 and not no_match["messages"][-1].get("textbook")
+            calls.clear()
+            repaired = client.post("/api/threads/new/messages", json={"text": "看一下 array index"}).json()
+            assert len(calls) == 3 and repaired["messages"][-1]["textbook"]
+            with db.session_scope() as s:
+                old = s.get(m.ChatMessage, msg["id"])
+                old.content = {**old.content, "textbook": [{k: ref[k] for k in ("edition", "section", "anchor", "path")}]}
+            old = next(item for item in client.get(f"/api/threads/{turn['thread']}").json()["messages"] if item["id"] == msg["id"])
+            assert old["textbook"][0]["preview"] == ref["preview"] and "explanation" not in old["textbook"][0]
         finally:
             llm.set_backend(None)
 

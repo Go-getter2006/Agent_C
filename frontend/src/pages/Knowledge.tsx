@@ -8,7 +8,7 @@ import { BookOpen, List, Plus } from "lucide-react";
 import { api } from "../api";
 import { StudentShell } from "../components/Shell";
 import Thread, { type ThreadContext } from "../components/Thread";
-import { Drawer } from "../components/ui";
+import { Drawer, Loading, Problem } from "../components/ui";
 import Textbook, { type ReadingTarget } from "../components/Textbook";
 import { useLayout, useLoad } from "../lib/hooks";
 import { forgetSection, lastProblemKey } from "../lib/memory";
@@ -97,7 +97,9 @@ export default function Knowledge() {
   const pane = (
     <TopicList topics={list} current={key} onNew={() => open("new")} onNavigate={open} />
   );
-  const reader = book ? <Textbook book={book} target={reading} onOpen={setReading} onContents={() => setReading(null)} /> : null;
+  const reader = book ? <Textbook book={book} target={reading} onOpen={setReading} onContents={() => setReading(null)} />
+    : reading && textbook.error ? <Problem message={textbook.error} onRetry={textbook.reload} />
+    : reading && textbook.loading ? <Loading what="正在取教材目录" /> : null;
 
   return (
     <StudentShell>
@@ -125,7 +127,7 @@ export default function Knowledge() {
               emptyText={ds ? "链表、栈、树、图的概念和写法，都可以直接问。" : "概念、语法、库函数怎么用，都可以直接问。"}
               placeholder={ds ? "问一个数据结构知识问题…" : "问一个 C 语言知识问题…"}
               context={context} contextOffer={offer} onThread={onThread} onActivity={topics.reload}
-              onTextbook={book ? (citation, time) => {
+              onTextbook={course === "C" ? (citation, time) => {
                 setReading({ ...citation, time });
                 if (layout !== "four") setReaderOpen(true);
               } : undefined} />

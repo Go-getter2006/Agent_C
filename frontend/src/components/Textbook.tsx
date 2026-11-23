@@ -3,8 +3,8 @@ import { ArrowLeft, BookOpen, ChevronDown } from "lucide-react";
 import { api } from "../api";
 import { useLoad } from "../lib/hooks";
 import { fullTime } from "../lib/time";
-import type { TextbookContents } from "../types";
-import { Loading, Problem } from "./ui";
+import type { TextbookCitation, TextbookContents } from "../types";
+import { Inline, Loading, Problem } from "./ui";
 
 export interface ReadingTarget {
   edition: number;
@@ -12,6 +12,37 @@ export interface ReadingTarget {
   path: string[];
   anchor?: number;
   time?: string;
+  role?: TextbookCitation["role"];
+}
+
+function markClass(figure: boolean, role?: TextbookCitation["role"]) {
+  return figure ? "textbook-mark is-figure" : role === "example" ? "textbook-mark is-example" : "textbook-mark";
+}
+
+export function CitationPreview({ citation, onOpen }: { citation: TextbookCitation; onOpen: () => void }) {
+  const preview = citation.preview;
+  const title = citation.path[citation.path.length - 1];
+  // 预览与右栏使用同一张受保护的原图。只显示标记附近的几行，完整小节仍可打开。
+  const pad = preview ? 18 / preview.height : 0;
+  const top = preview ? Math.max(0, Math.min(...preview.boxes.map(b => b[1])) - pad) : 0;
+  const bottom = preview ? Math.min(1, Math.max(...preview.boxes.map(b => b[1] + b[3])) + pad) : 1;
+  const height = bottom - top;
+  return <figure className="textbook-excerpt">
+    <button type="button" className="textbook-citation" onClick={onOpen} title={citation.path.join(" › ")}
+      aria-label={`打开教材原文：${title}`}>
+      <span className="textbook-citation-heading"><BookOpen size={15} aria-hidden="true" />{title}
+        {preview && <small>{preview.figure ? "教材插图" : citation.role === "example" ? "教材示例" : "教材原文"}</small>}
+      </span>
+      {preview && height > 0 && <span className="textbook-crop"
+        style={{ aspectRatio: `${preview.width} / ${preview.height * height}` }} onContextMenu={event => event.preventDefault()}>
+        <img src={`/api/textbook/${citation.edition}/sections/${citation.section}/images/${preview.page}`}
+          loading="lazy" draggable={false} alt="" style={{ top: `${-100 * top / height}%`, height: `${100 / height}%` }} />
+        {preview.boxes.map(([x, y, w, h], i) => <span key={i} aria-hidden="true" className={markClass(preview.figure, citation.role)}
+          style={{ left: `${100 * x}%`, top: `${100 * (y - top) / height}%`, width: `${100 * w}%`, height: `${100 * h / height}%` }} />)}
+      </span>}
+    </button>
+    {citation.explanation && <figcaption><Inline text={citation.explanation} /></figcaption>}
+  </figure>;
 }
 
 type Section = TextbookContents["sections"][number];
@@ -75,7 +106,7 @@ function Reading({ target }: { target: ReadingTarget }) {
               loading={index === 0 || index === highlighted?.boxes[0]?.[0] ? "eager" : "lazy"} />
             {highlighted?.boxes.map(([pageIndex, left, top, width, height], i) => pageIndex === index && (
               <span key={i} ref={i === 0 ? firstMark : undefined} aria-hidden="true"
-                className={highlighted.figure ? "textbook-mark is-figure" : "textbook-mark"}
+                className={markClass(highlighted.figure, target.role)}
                 style={{ left: `${left * 100}%`, top: `${top * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }} />
             ))}
           </figure>

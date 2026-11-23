@@ -2937,12 +2937,15 @@
   mix-blend-mode: multiply;
 }
 .textbook-mark.is-figure { background: transparent; outline: 2px solid var(--fail); }
-.textbook-citations { display: flex; flex-wrap: wrap; gap: var(--sp-6); margin-top: var(--sp-8); }
+.textbook-mark.is-example { background: var(--info-bg); }
+.textbook-citations { display: grid; gap: var(--sp-12); margin-top: var(--sp-12); }
+.textbook-excerpt { margin: 0; min-width: 0; }
+.textbook-excerpt figcaption { margin-top: var(--sp-4); color: var(--ink-2); }
 .textbook-citation {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-6);
-  padding: var(--sp-4) var(--sp-8);
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 0;
   text-align: start;
   border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
@@ -2952,8 +2955,12 @@
   cursor: pointer;
 }
 .textbook-citation svg { flex: none; }
+.textbook-citation-heading { display: flex; align-items: center; gap: var(--sp-6); padding: var(--sp-6) var(--sp-8); }
+.textbook-citation-heading small { margin-left: auto; color: var(--ink-2); }
+.textbook-crop { position: relative; display: block; overflow: hidden; background: var(--surface); }
+.textbook-crop img { position: absolute; left: 0; width: 100%; max-height: none; pointer-events: none; }
 .textbook-citation:hover { border-color: var(--brand); }
 .drawer-body:has(> .textbook-pane) { padding: 0; overflow: hidden; }
 @media print {
-  .textbook-side, .textbook-pane { display: none; }
+  .textbook-side, .textbook-pane, .textbook-citations { display: none; }
 }

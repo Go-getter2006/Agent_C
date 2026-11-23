@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+import pytest
 from sqlalchemy import select
 
 from app import config, db, llm, mastery, pipeline, review
@@ -224,9 +225,8 @@ def test_general_thread_binding_and_other_intents(demo):
 def test_knowledge_answers_directly_with_student_profile(demo, monkeypatch):
     notes = {"C06.02": profile.Dims(level="待加强"), "C09.01": profile.Dims(level="基本掌握")}
     monkeypatch.setattr(profile, "kp_profile", lambda s, uid, course: notes)
-    with db.session_scope() as s:
-        out = workflow.handle(s, UID, None, "函数是啥", knowledge=True)
-        assert "函数是一段" in texts(out[1])
+    with pytest.raises(llm.LLMUnavailable), db.session_scope() as s:
+        workflow.handle(s, UID, None, "函数是啥", knowledge=True)
 
     calls = []
 

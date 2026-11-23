@@ -58,7 +58,7 @@ KINDS: dict[str, str] = {
 }
 MAX_IDS = 5000   # 开发者全选所有班时也够
 # 导出文件的格式版本：列或 data 里的字段改了就改这个（logs-2：加“栏目”“代码”两列、复习小题全过程、可选提交源码）
-EXPORT_VERSION = "logs-3"
+EXPORT_VERSION = "logs-4"
 MAX_DAYS = 366
 TTL_DAYS = 7
 
@@ -251,7 +251,8 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                     text=text if include_text else "", code=code,
                     data={"message": msg.id, "round": msg.round_id, "topic": msg.topic_id, "proactive": proactive,
                           "help": None if proactive else st.help_level if st else None, "exampleCode": bool(example),
-                          **({"textbook": [{key: ref[key] for key in ("edition", "section", "anchor")}
+                          **({"textbook": [{key: ref[key] for key in ("edition", "section", "anchor", "role", "explanation")
+                                            if key in ref and (key != "explanation" or include_text)}
                                            for ref in msg.content["textbook"]]} if (msg.content or {}).get("textbook") else {}),
                           **({"codeBlocks": code_parts} if include_text else {})})
 

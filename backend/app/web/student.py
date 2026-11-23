@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from .. import accounts, catalog, changes, config, db, llm, pdftext, progress, quiz, review
+from .. import accounts, catalog, changes, config, db, llm, pdftext, progress, quiz, review, textbook
 from .. import models as m
 from ..chat import reply, workflow
 from ..chat.text import dedent, quote_range
@@ -150,7 +150,7 @@ def _message_view(s: Session, msg: m.ChatMessage, with_actions: bool) -> dict:
     out = {"id": msg.id, "role": msg.role, "kind": msg.kind, "time": msg.created_at.isoformat(),
            "blocks": blocks, "actions": content.get("actions", []) if with_actions else []}
     if msg.role == "agent" and msg.course == "C" and msg.problem_id is None and content.get("textbook"):
-        out["textbook"] = content["textbook"]
+        out["textbook"] = [dict(ref) for ref in content["textbook"]]
     if msg.failure_submission_id is not None and msg.notice_read_at is None:
         out["unreadNotice"] = True
     if msg.kind == "quiz" and msg.quiz_attempt_id:
@@ -193,6 +193,8 @@ def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None, topic
         if isinstance(attempt_no, int) and attempt_no > 0:
             view["quotedAttemptNo"] = attempt_no
         out.append(view)
+    if thread is None and user.course == "C":
+        textbook.add_previews(s, [ref for view in out for ref in view.get("textbook", [])])
     return out
 
 
@@ -244,9 +246,17 @@ def homework_detail(key: str, user: m.User = Depends(student), s: Session = Depe
                     if parsed == (c.server_id, c.contest_id)), None)
     if contest is None:
         raise HTTPException(status_code=404, detail="没有这个作业，或者它没有布置给你的班级。")
-    rows = [_problem_row(s, user, contest.server_id, pid)
-            for pid in catalog.contest_problem_ids(s, contest.server_id, contest.contest_id)]
-    return {"homework": _homework_view(s, user, contest), "problems": [r for r in rows if r]}
+    pids = catalog.contest_problem_ids(s, contest.server_id, contest.contest_id)
+    msg = m.ChatMessage
+    last_ids = dict(s.execute(select(msg.problem_id, func.max(msg.id)).where(
+        msg.user_id == user.student_id, msg.server_id == contest.server_id, msg.problem_id.in_(pids)
+    ).group_by(msg.problem_id)).all())
+    rows = []
+    for pid in pids:
+        row = _problem_row(s, user, contest.server_id, pid)
+        if row is not None:
+            rows.append({**row, "lastMessageId": last_ids.get(pid, 0)})
+    return {"homework": _homework_view(s, user, contest), "problems": rows}
 
 
 @router.get("/homeworks/{key}/submissions")

@@ -47,6 +47,32 @@ def test_topic_title():
     assert topic_title("   ") == "新的问答"
 
 
+def test_model_failure_keeps_knowledge_history_unchanged(client):
+    login(client)
+    topics = client.get("/api/topics").json()
+    assert client.post("/api/threads/new/messages", json={"text": "for 循环怎么用"}).status_code == 502
+    assert client.get("/api/topics").json() == topics
+
+
+def test_homework_list_reports_own_thread_even_without_submission(client):
+    login(client)
+    hw = client.get("/api/homeworks").json()["homeworks"][0]["key"]
+    rows = client.get(f"/api/homeworks/{hw}").json()["problems"]
+    row = next(r for r in rows if r["lastMessageId"] == 0)
+    sid, pid = map(int, row["key"][1:].split("-"))
+    with db.session_scope() as s:
+        for uid in (UID, "2500000003"):
+            msg = m.ChatMessage(user_id=uid, server_id=sid, problem_id=pid, course="C", role="agent",
+                                kind="text", content={"blocks": [{"t": "p", "text": "讲解"}]})
+            s.add(msg)
+            s.flush()
+            if uid == UID:
+                own = msg.id
+    rows = client.get(f"/api/homeworks/{hw}").json()["problems"]
+    assert next(r for r in rows if r["key"] == row["key"])["lastMessageId"] == own
+    assert client.get(f"/api/threads/{row['key']}").json()["messages"][-1]["id"] == own
+
+
 def test_knowledge_code_block_is_renderable_on_send_and_reopen(client, monkeypatch):
     login(client)
     before = "用 `struct` 定义结构体。"
@@ -84,7 +110,8 @@ def test_knowledge_code_block_is_renderable_on_send_and_reopen(client, monkeypat
         assert s.get(m.ChatMessage, msg_id).content["blocks"] == old_blocks
 
 
-def test_topics_are_separate_threads_and_do_not_bind_homework(client):
+def test_topics_are_separate_threads_and_do_not_bind_homework(client, monkeypatch):
+    monkeypatch.setattr(llm, "_backend", lambda *_: ('{"before":"整数除法先算出 2，写成 5.0 / 2 才得到 2.5。"}', 10, 10))
     login(client)
     before = client.get("/api/threads/general").json()["messages"]
     r = client.post("/api/threads/new/messages", json={"text": "为什么 5 / 2 存进 double 还是 2？"})

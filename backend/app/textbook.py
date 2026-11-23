@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import Lock
 from zipfile import ZipFile
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from . import models as m
@@ -24,9 +24,6 @@ _WORDS = re.compile(r"[\u3400-\u9fff]+|%[a-z]+|[a-z_]\w*|[0-9]+(?:[.][0-9]+)+|&&
 _STOP = set("什么 怎么 如何 一下 是不是 为什么 这个 那个 有什么 给我 帮我 有哪些 是什么 和例 解释 区别 想问 能否 能不".split())
 _QUESTION_WORDS = re.compile(r"为什么|是什么|这是什么|怎么|如何|帮我|解释一下|请问")
 _FIGURE_QUESTION = re.compile(r"图\s*\d|流程图|示意图|图解|这张图|上面的图|插图")
-_BOOK_QUESTION = re.compile(r"教材|课本")
-_SKIP_BOOK = re.compile(r"(?:不用|不必|不需要|不要|别|无需)(?:查阅?|参考|引用|结合|看|用)?(?:教材|课本)")
-_USAGE_QUESTION = re.compile(r"(.+?)(?:怎么用|怎么调用|如何使用|有什么用)[呢呀啊\s？?。！!]*")
 
 
 def publish(s: Session, path: Path) -> tuple[m.TextbookEdition, bool]:
@@ -75,18 +72,6 @@ def active(s: Session) -> m.TextbookEdition | None:
 class Directory:
     edition: m.TextbookEdition
     entries: dict[int, tuple[int | None, str]]
-
-    def should_lookup(self, question: str, history: list[tuple[str, str]]) -> bool:
-        if _SKIP_BOOK.search(question):
-            return False
-        if _BOOK_QUESTION.search(question):
-            return True
-        previous = previous_question_for_followup(question, history)
-        subject = definition_subject(question) or definition_subject(previous)
-        if not subject and (usage := _USAGE_QUESTION.fullmatch(question.strip())):
-            subject = usage[1]
-        terms = _terms(subject)
-        return bool(terms) and any(terms <= _terms(title) for _, title in self.entries.values())
 
     def prompt(self) -> str:
         depths = {}
@@ -172,7 +157,7 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
     if not query:
         query = remembered
     remembered -= query
-    if course != "C" or not query or (edition := book.edition if book else active(s)) is None:
+    if course != "C" or (not query and not lookup) or (edition := book.edition if book else active(s)) is None:
         return {}
     groups = {}
     if lookup and book:
@@ -193,7 +178,7 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
             continue
         in_text = query & passage.words
         carried = remembered & passage.words
-        if not in_text and len(carried) < (1 if lookup else 2):
+        if not lookup and not in_text and len(carried) < 2:
             continue
         if not lookup and len(query) >= 3 and len((passage.words | passage.title_words) & query) < 2 and len(carried) < 2:
             continue
@@ -229,8 +214,37 @@ def prompt(matches: dict) -> str:
 
 
 def citations(matches: dict, selected) -> list[dict]:
-    if not isinstance(selected, list):
-        return []
-    keys = dict.fromkeys(key.strip(" []").upper() for key in selected if isinstance(key, str))
-    keys = [key for key in keys if key in matches]
-    return [matches[key][1] for key in keys[:2]]
+    if not isinstance(selected, list) or len(selected) > 2:
+        raise ValueError("textbook 请选最有帮助的一到两处，无关时填 []")
+    refs = {}
+    for choice in selected:
+        if not isinstance(choice, dict):
+            raise ValueError("每处教材引用要有 id、role 和 explanation")
+        key = str(choice.get("id", "")).strip(" []").upper()
+        note = choice.get("explanation")
+        role = choice.get("role")
+        if key not in matches or role not in ("key", "example") or not isinstance(note, str) or not note.strip():
+            raise ValueError("请用本轮候选编号，标明 key 或 example，并用一句话解释这处原文")
+        refs[key] = {**matches[key][1], "role": role, "explanation": note.strip()}
+    return list(refs.values())
+
+
+def add_previews(s: Session, refs: list[dict]) -> None:
+    """按引文保存的版次取真实版面坐标，一次查询兼容新旧消息，不读取图片本身。"""
+    by_section = {}
+    for ref in refs:
+        by_section.setdefault((ref["edition"], ref["section"]), []).append(ref)
+    if not by_section:
+        return
+    section = m.TextbookSection
+    for row in s.scalars(select(section).where(tuple_(section.edition_id, section.number).in_(list(by_section)))):
+        anchors = {item["id"]: item for item in row.anchors}
+        for ref in by_section[row.edition_id, row.number]:
+            hit = anchors.get(ref["anchor"])
+            if not hit or not hit["boxes"]:
+                continue
+            page_index = hit["boxes"][0][0]
+            page = row.pages[page_index]
+            ref["preview"] = {"page": page_index, "width": page["width"], "height": page["height"],
+                              "figure": hit.get("figure", False),
+                              "boxes": [box[1:] for box in hit["boxes"] if box[0] == page_index]}

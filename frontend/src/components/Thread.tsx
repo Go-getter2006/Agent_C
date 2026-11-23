@@ -1,14 +1,16 @@
 // 一条对话线程：消息、正在输入、求助按钮、输入栏。
 // 学生只看到自然的回复、代码块和“正在输入”；没有步骤条、标签、分数。
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, BookOpen, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, X, type LucideIcon } from "lucide-react";
+import { ArrowUp, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, X, type LucideIcon } from "lucide-react";
 import { api } from "../api";
 import type { Layout } from "../lib/hooks";
 import { readDraft, readScroll, saveScroll, writeDraft } from "../lib/memory";
 import { dayLabel, sameDay } from "../lib/time";
+import { threadHistory } from "../lib/threadHistory";
 import type { HelpAction, Message, QuizView, TextbookCitation } from "../types";
 import { useSession, useStudentCache } from "../session";
 import CourseScene from "./CourseScene";
+import { CitationPreview } from "./Textbook";
 import Attempt from "./Attempt";
 import FlowChart from "./FlowChart";
 import Quiz from "./Quiz";
@@ -52,6 +54,7 @@ interface Props {
   waitingContext?: boolean;
   pollHistory?: boolean;
   latestNotice?: number;
+  lastMessageId?: number;
   onNoticeRead?: () => void;
   context?: ThreadContext | null;
   contextOffer?: { label: string; onPick: () => void } | null;   // 还没带上时：可以点一下带上
@@ -69,7 +72,7 @@ function SubmissionQuote({ attemptNo }: { attemptNo?: number }) {
   return <div className="msg-submission-quote">引用第 {attemptNo} 次提交</div>;
 }
 
-export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, onNoticeRead, context, contextOffer,
+export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, lastMessageId, onNoticeRead, context, contextOffer,
   waitingContext = false, pollHistory = true, onThread, onActivity, onTextbook }: Props) {
   const cache = useStudentCache().threads;
   const request = useRef<AbortController | null>(null);
@@ -77,9 +80,9 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   const [owner, setOwner] = useState(threadKey);
   const stale = owner !== threadKey;
   // 已经读过的新会话可以在切换的这一帧使用，避免卸载同样的空态场景。
-  const messages = stale ? cache.get(threadKey) ?? null : loadedMessages;
+  const snapshot = stale ? cache.get(threadKey) : loadedMessages;
+  const { messages, expectedId, behind, confirmedEmpty } = threadHistory(snapshot, lastMessageId, latestNotice);
   const waitingMessages = messages === null;
-  const hasNewNotice = !stale && (latestNotice ?? 0) > (messages?.[messages.length - 1]?.id ?? 0);
   const [loadedError, setLoadError] = useState<string | null>(null);
   const [ownerPending, setPending] = useState<Payload | null>(null);   // 正在发的那一条
   const [ownerFailed, setFailed] = useState<{ payload: Payload; message: string } | null>(null);
@@ -94,7 +97,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   const input = useRef<HTMLTextAreaElement>(null);
   const sending = useRef(new Map<string, Payload>());
   const failures = useRef(new Map<string, { payload: Payload; message: string }>());
-  const loadError = stale ? null : loadedError;
+  const loadError = stale || confirmedEmpty ? null : loadedError;
   const pending = stale ? sending.current.get(threadKey) ?? null : ownerPending;
   const failed = stale ? failures.current.get(threadKey) ?? null : ownerFailed;
   const keyRef = useRef(threadKey);
@@ -121,7 +124,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
         setLoadError(null);
       })
       .catch((err: Error) => {
-        if (!controller.signal.aborted && seq === loadSeq.current && key === keyRef.current && (!silent || !cache.get(key))) setLoadError(err.message);
+        if (!controller.signal.aborted && seq === loadSeq.current && key === keyRef.current && (!silent || !cache.get(key)?.length)) setLoadError(err.message);
       }).finally(() => { if (request.current === controller) request.current = null; });
   }, []);
 
@@ -131,7 +134,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
       return;
     }
     const cached = cache.get(threadKey);
-    setMessages(cached ?? null);
+    setMessages(cached?.length || cache.fresh(threadKey) ? cached ?? null : null);
     setOwner(threadKey);
     followBottom.current = true;
     setNewBelow(false);
@@ -140,24 +143,24 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     setFailed(failures.current.get(threadKey) ?? null);
     setTextRaw(readDraft(threadKey));
     restoreScroll.current = readScroll(threadKey);
-    if (!cache.fresh(threadKey)) load(false);
+    if (lastMessageId !== 0 && !cache.fresh(threadKey)) load(false);
     return () => { request.current?.abort(); loadSeq.current += 1; };
   }, [threadKey, load]);
 
   // 作业引导复用侧栏的提醒轮询；只在首次读取或收到提醒失败时定时重试。
   useEffect(() => {
-    if (!pollHistory && !waitingMessages && !hasNewNotice) return;
+    if (!pollHistory && !waitingMessages && !behind) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && !busy) load(true);
     }, 15000);
     return () => window.clearInterval(timer);
-  }, [busy, load, pollHistory, waitingMessages, hasNewNotice]);
+  }, [busy, load, pollHistory, waitingMessages, behind]);
 
   useEffect(() => {
-    if (hasNewNotice && !waitingMessages && !busy && document.visibilityState === "visible") {
+    if (behind && !busy && document.visibilityState === "visible") {
       load(true);
     }
-  }, [hasNewNotice, latestNotice, threadKey, busy, waitingMessages, load]);
+  }, [behind, expectedId, threadKey, busy, load]);
 
   useEffect(() => {
     const root = scroller.current;
@@ -268,7 +271,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
   const shown: Payload | null = pending ?? failed?.payload ?? null;
   const pendingText = shown ? (shown.action ? ACTION_LABELS[shown.action] : shown.text ?? "") : "";
   const list = messages ?? [];
-  const waitingView = messages === null || (list.length === 0 && !shown && emptyTitle === null);
+  const waitingView = !shown && (messages === null || (list.length === 0 && emptyTitle === null));
 
   return (
     <>
@@ -419,11 +422,8 @@ function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend
           {onTextbook && message.textbook?.length ? (
             <div className="textbook-citations" aria-label="教材引用">
               {message.textbook.map((citation) => (
-                <button key={`${citation.edition}-${citation.section}-${citation.anchor}`} type="button"
-                  className="textbook-citation" onClick={() => onTextbook(citation, message.time)}
-                  title={citation.path.join(" › ")}>
-                  <BookOpen size={15} aria-hidden="true" /><span>{citation.path[citation.path.length - 1]}</span>
-                </button>
+                <CitationPreview key={`${citation.edition}-${citation.section}-${citation.anchor}`}
+                  citation={citation} onOpen={() => onTextbook(citation, message.time)} />
               ))}
             </div>
           ) : null}

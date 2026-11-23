@@ -211,7 +211,7 @@ export default function Workbench() {
   ) : null;
 
   const statusKnown = !!(d || row);
-  let emptyTitle = statusKnown ? "这道题哪里卡住了？" : null;
+  let emptyTitle = latest ? `第 ${latest.attemptNo} 次提交 · ${latest.resultText}` : null;
   let emptyText = "说说你的想法，或把代码贴过来。";
   if (passed) {
     emptyTitle = "这道题已经通过了";
@@ -291,6 +291,7 @@ export default function Workbench() {
           </header>
           {isProblem ? (
             <Thread threadKey={key!} layout={layout} emptyTitle={emptyTitle} emptyText={emptyText}
+              lastMessageId={!list.stale && !list.loading ? row?.lastMessageId : undefined}
               latestNotice={status?.unread?.problems[key!]} onNoticeRead={reloadStatus}
               pollHistory={false} waitingContext={!!picked && !d} context={context} onActivity={refresh} />
           ) : (
