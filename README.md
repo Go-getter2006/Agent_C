@@ -85,7 +85,7 @@ git clone https://github.com/Go-getter2006/Agent_C.git && cd Agent_C
 
 为什么是 Linux：小题的“运行检查”要编译、运行学生改的代码，沙箱用的是 Linux 才有的限制。
 
-作业引导使用 XDOJ 的标准输入、标准输出和当前提交已取得的实际输出。公开题面里的编号样例单独分段。带图、缺文字或学生明确问图时，答疑可随请求附上这道题的 PDF 原页（当前最多前 6 页），不会在切换题目时调用模型。官方 DeepSeek 地址默认使用 `deepseek-flash` 处理带图请求；原有文字请求继续使用 `DEEPSEEK_MODEL`。第三方兼容地址可在 `.env` 指定 `DEEPSEEK_VISION_MODEL`，填 `off` 可关闭读图。旧版已整理题面的样例由后台用已存原文核对，原始 PDF 和学生提交均保留。
+作业引导使用 XDOJ 的标准输入、标准输出和当前提交已取得的实际输出。公开题面里的编号样例单独分段。带图、缺文字或学生明确问图时，答疑可随请求附上这道题的 PDF 原页（当前最多前 6 页），不会在切换题目时调用模型。文字请求默认使用 `deepseek-flash`，可通过 `DEEPSEEK_MODEL` 配置。官方 DeepSeek 地址的带图请求也默认使用 `deepseek-flash`。第三方兼容地址可在 `.env` 指定 `DEEPSEEK_VISION_MODEL`，填 `off` 可关闭读图。旧版已整理题面的样例由后台用已存原文核对，原始 PDF 和学生提交均保留。
 
 改了前端代码以后，要在装了 Node 的机器上 `cd frontend && npm run build`，把 `frontend/dist` 一起提交。
 

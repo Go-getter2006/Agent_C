@@ -63,7 +63,7 @@ def _http_backend(messages, json_mode: bool, max_tokens: int, temperature: float
                "max_tokens": max_tokens, "stream": False}
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
-    if non_thinking and config.OFFICIAL_DEEPSEEK and payload["model"] == "deepseek-flash":
+    if non_thinking and config.OFFICIAL_DEEPSEEK and payload["model"] == config.DEEPSEEK_FLASH:
         payload["thinking"] = {"type": "disabled"}
     resp = httpx.post(
         f"{config.DEEPSEEK_BASE_URL}/chat/completions", json=payload, timeout=60,
