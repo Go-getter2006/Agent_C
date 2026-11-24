@@ -37,15 +37,14 @@ def contents(response: Response, user: m.User = Depends(student), s: Session = D
 
 
 @router.get("/{edition}/sections/{number}")
-def section(edition: int, number: int, response: Response, anchor: int | None = None,
+def section(edition: int, number: int, response: Response, anchor: int | None = None, figure: int | None = None,
             user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     row = _section(s, user, edition, number)
     hit = next((item for item in row.anchors if item["id"] == anchor), None) if anchor is not None else None
     response.headers.update(PRIVATE)
     pages = [{"url": f"/api/textbook/{edition}/sections/{number}/images/{i}",
               "width": page["width"], "height": page["height"]} for i, page in enumerate(row.pages)]
-    return {"title": row.title, "pages": pages, "highlight": (
-        {"boxes": hit["boxes"], "figure": hit.get("figure", False), "text": hit["text"]} if hit else None)}
+    return {"title": row.title, "pages": pages, "highlight": textbook.highlight(s, row, hit, figure) if hit else None}
 
 
 @router.get("/{edition}/sections/{number}/images/{index}")

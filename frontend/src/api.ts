@@ -73,8 +73,12 @@ export const api = {
     post<{ messages: Message[]; thread: string }>(`/api/threads/${key}/messages`, body),
   topics: () => get<{ topics: Topic[] }>("/api/topics"),
   textbookContents: () => get<{ book: TextbookContents | null }>("/api/textbook/contents"),
-  textbookSection: (edition: number, section: number, anchor?: number) =>
-    get<TextbookSection>(`/api/textbook/${edition}/sections/${section}${anchor === undefined ? "" : `?anchor=${anchor}`}`),
+  textbookSection: (edition: number, section: number, anchor?: number, figure?: number) => {
+    const query = new URLSearchParams();
+    if (anchor !== undefined) query.set("anchor", String(anchor));
+    if (figure !== undefined) query.set("figure", String(figure));
+    return get<TextbookSection>(`/api/textbook/${edition}/sections/${section}${query.size ? `?${query}` : ""}`);
+  },
 
   quizConfidence: (id: number, value: string, elapsedMs: number) =>
     post<QuizView>(`/api/quiz/${id}/confidence`, { value, elapsedMs }),

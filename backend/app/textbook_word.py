@@ -205,6 +205,25 @@ def prepare(output: Path, title: str, files: list[Path], pdf_directory: Path, co
                 if not label and not any(isinstance(part, dict) for part in parts):
                     continue
                 text = _plain(parts)
+                if any(isinstance(part, dict) and part.get("figure") for part in parts):
+                    # Word 行内图片的显示大小（磅）。老版 OLE 图使用 VML shape。
+                    size = None
+                    for item in element.iter():
+                        tag = item.tag.rsplit("}", 1)[-1]
+                        if tag == "extent" and item.get("cx", "").isdigit() and item.get("cy", "").isdigit():
+                            size = [int(item.get(dim)) / 12700 for dim in ("cx", "cy")]
+                            break
+                        if tag == "shape":
+                            dims = dict(re.findall(r"(width|height):\s*([\d.]+)pt", item.get("style", "")))
+                            if "width" in dims and "height" in dims:
+                                size = [float(dims["width"]), float(dims["height"])]
+                                break
+                    if size and not label:
+                        add({"kind": "text", "parts": parts, "wordFigure": size})
+                        continue
+                blocks = stack[-1][1]["blocks"]
+                if blocks and blocks[-1].get("wordFigure") and re.match(r"^图\s*[\d一二三四五六七八九十]", label):
+                    stack[-1][1].setdefault("figure_sizes", {})[label] = blocks[-1]["wordFigure"]
                 fonts = {font.get(W + "ascii", "").lower() for font in element.iter(W + "rFonts")}
                 monospace = any("courier" in font or "consolas" in font for font in fonts)
                 if all(isinstance(part, str) for part in parts) and (monospace or CODE.match(text.lstrip())):

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import io
 from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
+from PIL import Image, ImageDraw
 
 import app.textbook_word as textbook_word
 from app import db, llm, textbook
@@ -15,6 +17,38 @@ from tests.test_pdftext import make_pdf
 
 SENTENCE = "An array index starts at zero."
 HEADINGS = ("1.1 Arrays", "1.1.1 Array index", "1.1.2 Array length")
+
+
+def test_figure_is_a_text_candidate_and_only_marked_when_selected(demo):
+    image = Image.new("L", (300, 240), 255)
+    ImageDraw.Draw(image).rectangle((70, 110, 210, 145), outline=0)
+    buf = io.BytesIO()
+    image.save(buf, "PNG")
+    marks = [[0, .1, .11, .04, .004], [0, .14, .1, .4, .04]]
+    anchors = [
+        {"id": 1, "text": "一个指针也能指向指针变量。", "boxes": marks},
+        {"id": 2, "text": "两个变量的指向关系如图一所示。", "boxes": [[0, .2, .36, .5, .04]]},
+        {"id": 3, "text": "图一 指向关系示意图", "boxes": [[0, .33, .65, .35, .04]]},
+    ]
+    with db.session_scope() as s:
+        edition = m.TextbookEdition(title="测试", digest="figure-test")
+        s.add(edition)
+        s.flush()
+        row = m.TextbookSection(edition_id=edition.id, number=1, title="指向指针的指针",
+                                pages=[{"image": "f", "width": 300, "height": 240}], anchors=anchors)
+        s.add_all([row, m.TextbookFigure(edition_id=edition.id, digest="f", png=buf.getvalue())])
+        s.flush()
+        choices = textbook.retrieve(s, "C", "指针的指针是啥", [], textbook.directory(s, "C"),
+                                    textbook.Lookup((1,), "指针"))
+        prompt = textbook.prompt(choices)
+        assert "[F1]" in prompt and anchors[1]["text"] in prompt and anchors[2]["text"] in prompt
+        key = next(k for k, (_, ref, _) in choices.items() if ref["anchor"] == 1)
+        choice = {"id": key, "role": "key", "explanation": "沿箭头读出指向关系。"}
+        plain, illustrated = [textbook.citations(choices, [c])[0] for c in (choice, dict(choice, figureId="F1"))]
+        textbook.add_previews(s, [plain, illustrated])
+        assert len(plain["preview"]["boxes"]) == 1 and "frame" not in plain["preview"]
+        x, y, w, h = illustrated["preview"]["frame"]
+        assert x < 70 / 300 < 210 / 300 < x + w and y < 110 / 240 < .69 < y + h
 
 
 def test_exercise_numbers_stay_in_the_exercise_section(monkeypatch, tmp_path):
@@ -112,7 +146,8 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             (None, HEADINGS[0]), (1, HEADINGS[1]), (1, HEADINGS[2])]
         assert "anchors" not in book.text
         assert client.get(prefix).json()["highlight"] is None
-        assert client.get(prefix, params={"anchor": target["id"]}).json()["highlight"]["text"] == SENTENCE
+        highlight = client.get(prefix, params={"anchor": target["id"]}).json()["highlight"]
+        assert highlight["text"] == SENTENCE
         pic = client.get(image)
         assert pic.headers["content-type"] == "image/png"
         assert pic.headers["content-disposition"] == "inline"
@@ -134,7 +169,7 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
                 assert ref == {"edition": edition, "section": 2, "anchor": target["id"], "path": list(HEADINGS[:2]),
                                "role": "key", "explanation": "读第一个元素时，下标应写 0。", "preview": {
                                    "page": 0, "width": section.pages[0]["width"], "height": section.pages[0]["height"],
-                                   "figure": False, "boxes": [box[1:] for box in target["boxes"]]}}
+                                   "figure": False, "boxes": [box[1:] for box in highlight["boxes"]]}}
                 assert SENTENCE not in json.dumps(msg)
             history = client.get(f"/api/threads/{turn['thread']}").json()["messages"]
             assert history[-1]["textbook"] == msg["textbook"] and history[-1]["time"] == msg["time"]

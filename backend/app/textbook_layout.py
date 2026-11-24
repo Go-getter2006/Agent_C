@@ -15,12 +15,11 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 import pypdfium2 as pdfium
 from pypdfium2 import raw
 
-from .textbook import BUNDLE_VERSION
+from .textbook import BUNDLE_VERSION, _figure_number
 
 Box = tuple[float, float, float, float]
 _SKIP = re.compile(r"[\s\u00ad\u200b\ufeff]")
 _PREFIX = re.compile(r"^(?:第\s*\d+\s*章|\d+(?:[.．]\d+)+|\d+[.．、])\s*")
-_FIGURE = re.compile(r"^图\s*\d+[.．-]\d+")
 _SENTENCE = re.compile(r"[^。！？\n]+[。！？]?")
 
 
@@ -156,7 +155,8 @@ def _section(layout: _Layout, section: dict, start: int, end: int, archive: ZipF
     cursor = start
     for text in _snippets(section):
         key = _key(text)
-        if len(key) < 6 or len(text) > 500:
+        figure_number = _figure_number(text)
+        if (len(key) < 6 and not figure_number) or len(text) > 500:
             continue
         found = layout.text.find(key, cursor, end)
         if found < 0:
@@ -165,7 +165,9 @@ def _section(layout: _Layout, section: dict, start: int, end: int, archive: ZipF
         lines = layout.line_boxes(found, cursor)
         if boxes := map_boxes(lines):
             anchors.append({"id": len(anchors) + 1, "text": text, "boxes": boxes})
-        if _FIGURE.match(text) and lines:
+            if size := section.get("figure_sizes", {}).get(text):
+                anchors[-1]["wordFigure"] = size
+        if figure_number and lines:
             page, caption = lines[0]
             if page not in viewports:
                 continue

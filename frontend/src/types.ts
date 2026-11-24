@@ -135,14 +135,25 @@ export interface Message {
   textbook?: TextbookCitation[];
 }
 
+type BookBox = [number, number, number, number];
+export interface TextbookPreview {
+  page: number;
+  width: number;
+  height: number;
+  figure: boolean;
+  boxes: BookBox[];
+  frame?: BookBox;
+}
 export interface TextbookCitation {
+  figureAnchor?: number;
   edition: number;
   section: number;
   anchor: number;
   path: string[];
   role?: "key" | "example";
   explanation?: string;
-  preview?: { page: number; width: number; height: number; figure: boolean; boxes: [number, number, number, number][] };
+  preview?: TextbookPreview;
+  continuation?: TextbookPreview[];
 }
 
 export interface TextbookContents {
@@ -154,7 +165,7 @@ export interface TextbookContents {
 export interface TextbookSection {
   title: string;
   pages: { url: string; width: number; height: number }[];
-  highlight: { text: string; figure: boolean; boxes: [number, number, number, number, number][] } | null;
+  highlight: { text: string; figure: boolean; boxes: [number, ...BookBox][]; frame?: [number, ...BookBox] } | null;
 }
 
 export interface DiffRow {

@@ -11,6 +11,7 @@ export interface ReadingTarget {
   section: number;
   path: string[];
   anchor?: number;
+  figureAnchor?: number;
   time?: string;
   role?: TextbookCitation["role"];
 }
@@ -22,24 +23,24 @@ function markClass(figure: boolean, role?: TextbookCitation["role"]) {
 export function CitationPreview({ citation, onOpen }: { citation: TextbookCitation; onOpen: () => void }) {
   const preview = citation.preview;
   const title = citation.path[citation.path.length - 1];
-  // 预览与右栏使用同一张受保护的原图。只显示标记附近的几行，完整小节仍可打开。
-  const pad = preview ? 18 / preview.height : 0;
-  const top = preview ? Math.max(0, Math.min(...preview.boxes.map(b => b[1])) - pad) : 0;
-  const bottom = preview ? Math.min(1, Math.max(...preview.boxes.map(b => b[1] + b[3])) + pad) : 1;
-  const height = bottom - top;
   return <figure className="textbook-excerpt">
     <button type="button" className="textbook-citation" onClick={onOpen} title={citation.path.join(" › ")}
       aria-label={`打开教材原文：${title}`}>
       <span className="textbook-citation-heading"><BookOpen size={15} aria-hidden="true" />{title}
         {preview && <small>{preview.figure ? "教材插图" : citation.role === "example" ? "教材示例" : "教材原文"}</small>}
       </span>
-      {preview && height > 0 && <span className="textbook-crop"
-        style={{ aspectRatio: `${preview.width} / ${preview.height * height}` }} onContextMenu={event => event.preventDefault()}>
-        <img src={`/api/textbook/${citation.edition}/sections/${citation.section}/images/${preview.page}`}
-          loading="lazy" draggable={false} alt="" style={{ top: `${-100 * top / height}%`, height: `${100 / height}%` }} />
-        {preview.boxes.map(([x, y, w, h], i) => <span key={i} aria-hidden="true" className={markClass(preview.figure, citation.role)}
-          style={{ left: `${100 * x}%`, top: `${100 * (y - top) / height}%`, width: `${100 * w}%`, height: `${100 * h / height}%` }} />)}
-      </span>}
+      {preview && [preview, ...(citation.continuation ?? [])].map(page => {
+        const end = page.frame ? Math.min(1, Math.max(page.frame[1] + page.frame[3],
+          ...page.boxes.map(b => b[1] + b[3])) + 10 / page.height) : 1;
+        const marks = page.frame ? [...page.boxes, page.frame] : page.boxes;
+        return <span key={page.page} className="textbook-crop"
+          style={{ aspectRatio: `${page.width} / ${page.height * end}` }} onContextMenu={event => event.preventDefault()}>
+          <img src={`/api/textbook/${citation.edition}/sections/${citation.section}/images/${page.page}`}
+            loading="lazy" draggable={false} alt="" style={{ top: 0, height: `${100 / end}%` }} />
+          {marks.map((box, i) => <span key={i} aria-hidden="true" className={markClass(page.figure || box === page.frame, citation.role)}
+            style={{ left: `${100 * box[0]}%`, top: `${100 * box[1] / end}%`, width: `${100 * box[2]}%`, height: `${100 * box[3] / end}%` }} />)}
+        </span>;
+      })}
     </button>
     {citation.explanation && <figcaption><Inline text={citation.explanation} /></figcaption>}
   </figure>;
@@ -72,8 +73,8 @@ function Contents({ nodes, onOpen, childrenOf, depth = 0 }: {
 }
 
 function Reading({ target }: { target: ReadingTarget }) {
-  const { edition, section, anchor } = target;
-  const result = useLoad(() => api.textbookSection(edition, section, anchor), [edition, section, anchor]);
+  const { edition, section, anchor, figureAnchor } = target;
+  const result = useLoad(() => api.textbookSection(edition, section, anchor, figureAnchor), [edition, section, anchor, figureAnchor]);
   const scroll = useRef<HTMLDivElement>(null);
   const firstMark = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
@@ -109,6 +110,9 @@ function Reading({ target }: { target: ReadingTarget }) {
                 className={markClass(highlighted.figure, target.role)}
                 style={{ left: `${left * 100}%`, top: `${top * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }} />
             ))}
+            {highlighted?.frame?.[0] === index && <span aria-hidden="true" className={markClass(true)}
+              style={{ left: `${highlighted.frame[1] * 100}%`, top: `${highlighted.frame[2] * 100}%`,
+                width: `${highlighted.frame[3] * 100}%`, height: `${highlighted.frame[4] * 100}%` }} />}
           </figure>
         ))}
       </div>
