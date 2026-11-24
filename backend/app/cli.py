@@ -1,6 +1,7 @@
 """命令行。运行：python -m app.cli <命令>"""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 from pathlib import Path
@@ -12,6 +13,31 @@ from . import config, db, pipeline, quiz, sources
 from . import models as m
 
 cli = typer.Typer(add_completion=False, help="程序设计智能体：后台命令")
+
+
+@cli.command("llm-usage")
+def llm_usage(day: str = typer.Argument("", help="北京时间，YYYY-MM-DD，默认今天")) -> None:
+    """按用途汇总当天记录到数据库的大模型请求、重试、token 与估算费用。"""
+    try:
+        date = dt.date.fromisoformat(day) if day else db.now().astimezone(db.BEIJING).date()
+    except ValueError as exc:
+        raise typer.BadParameter("日期格式应为 YYYY-MM-DD") from exc
+    start = dt.datetime.combine(date, dt.time.min, tzinfo=db.BEIJING).astimezone(db.UTC)
+    end = start + dt.timedelta(days=1)
+    call = m.LlmCall
+    statement = select(
+        call.prompt_id.label("purpose"), call.model,
+        func.count(call.id).label("records"),
+        func.sum(call.attempts).label("requests"),
+        func.sum(call.attempts - 1).label("retries"),
+        func.count(call.id).filter(call.ok.is_(False)).label("failed_records"),
+        func.sum(call.tokens_in).label("input_tokens"),
+        func.sum(call.tokens_out).label("output_tokens"),
+        func.sum(call.cost_yuan).label("estimated_cny"),
+    ).where(call.ts >= start, call.ts < end).group_by(call.prompt_id, call.model).order_by(func.sum(call.attempts).desc())
+    with db.session_scope() as s:
+        rows = [dict(row, estimated_cny=round(row["estimated_cny"], 4)) for row in s.execute(statement).mappings()]
+    typer.echo(json.dumps({"date": date.isoformat(), "usage": rows}, ensure_ascii=False, indent=2))
 
 
 def _logging(quiet_requests: bool = False) -> None:

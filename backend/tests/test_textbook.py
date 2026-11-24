@@ -44,11 +44,15 @@ def test_figure_is_a_text_candidate_and_only_marked_when_selected(demo):
         assert "[F1]" in prompt and anchors[1]["text"] in prompt and anchors[2]["text"] in prompt
         key = next(k for k, (_, ref, _) in choices.items() if ref["anchor"] == 1)
         choice = {"id": key, "role": "key", "explanation": "沿箭头读出指向关系。"}
-        plain, illustrated = [textbook.citations(choices, [c])[0] for c in (choice, dict(choice, figureId="F1"))]
+        plain, illustrated = [textbook.citations(choices, [c])[0] for c in (
+            choice, dict(choice, figureId="F1", excerpt=[1, 3]))]
+        assert illustrated["excerpt"] == [1, 3]
         textbook.add_previews(s, [plain, illustrated])
         assert len(plain["preview"]["boxes"]) == 1 and "frame" not in plain["preview"]
         x, y, w, h = illustrated["preview"]["frame"]
         assert x < 70 / 300 < 210 / 300 < x + w and y < 110 / 240 < .69 < y + h
+        top, bottom = illustrated["preview"]["crop"]
+        assert 0 < top < .1 * 240 < .69 * 240 < bottom < 240
 
 
 def test_exercise_numbers_stay_in_the_exercise_section(monkeypatch, tmp_path):
@@ -166,10 +170,15 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
                 assert "The array length counts its elements." in calls[1][1]
                 msg = turn["messages"][-1]
                 ref, = msg["textbook"]
-                assert ref == {"edition": edition, "section": 2, "anchor": target["id"], "path": list(HEADINGS[:2]),
-                               "role": "key", "explanation": "读第一个元素时，下标应写 0。", "preview": {
-                                   "page": 0, "width": section.pages[0]["width"], "height": section.pages[0]["height"],
-                                   "figure": False, "boxes": [box[1:] for box in highlight["boxes"]]}}
+                preview = ref["preview"]
+                assert {k: v for k, v in ref.items() if k != "preview"} == {
+                    "edition": edition, "section": 2, "anchor": target["id"], "path": list(HEADINGS[:2]),
+                    "role": "key", "explanation": "读第一个元素时，下标应写 0。"}
+                assert preview["boxes"] == [box[1:] for box in highlight["boxes"]]
+                top, bottom = preview["crop"]
+                preview_png = client.get(image, params={"top": top, "bottom": bottom})
+                with Image.open(io.BytesIO(preview_png.content)) as crop:
+                    assert crop.size == (section.pages[0]["width"], bottom - top)
                 assert SENTENCE not in json.dumps(msg)
             history = client.get(f"/api/threads/{turn['thread']}").json()["messages"]
             assert history[-1]["textbook"] == msg["textbook"] and history[-1]["time"] == msg["time"]

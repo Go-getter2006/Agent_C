@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, BookOpen, ChevronDown } from "lucide-react";
 import { api } from "../api";
 import { useLoad } from "../lib/hooks";
@@ -20,28 +20,47 @@ function markClass(figure: boolean, role?: TextbookCitation["role"]) {
   return figure ? "textbook-mark is-figure" : role === "example" ? "textbook-mark is-example" : "textbook-mark";
 }
 
-export function CitationPreview({ citation, onOpen }: { citation: TextbookCitation; onOpen: () => void }) {
+export function TextbookCitations({ citations, onOpen }: {
+  citations: TextbookCitation[];
+  onOpen: (citation: TextbookCitation) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const titles = [...new Set(citations.map(citation => citation.path[citation.path.length - 1]))];
+  return <details className="textbook-citations" onToggle={event => setExpanded(event.currentTarget.open)}>
+    <summary className="textbook-citation-heading">
+      <BookOpen size={15} aria-hidden="true" />
+      <span>教材：{titles.join("、")}</span>
+      <ChevronDown size={15} aria-hidden="true" />
+    </summary>
+    {expanded && <div className="textbook-citation-list">
+      {citations.map(citation => <CitationPreview key={`${citation.edition}-${citation.section}-${citation.anchor}`}
+        citation={citation} onOpen={() => onOpen(citation)} />)}
+    </div>}
+  </details>;
+}
+
+function CitationPreview({ citation, onOpen }: { citation: TextbookCitation; onOpen: () => void }) {
   const preview = citation.preview;
   const title = citation.path[citation.path.length - 1];
   return <figure className="textbook-excerpt">
-    <button type="button" className="textbook-citation" onClick={onOpen} title={citation.path.join(" › ")}
-      aria-label={`打开教材原文：${title}`}>
-      <span className="textbook-citation-heading"><BookOpen size={15} aria-hidden="true" />{title}
-        {preview && <small>{preview.figure ? "教材插图" : citation.role === "example" ? "教材示例" : "教材原文"}</small>}
-      </span>
+    <div className="textbook-excerpt-head">
+      <span>{title}</span>
+      <button type="button" className="btn btn-sm" onClick={onOpen} aria-label={`教材详情：${title}`}>详情</button>
+    </div>
       {preview && [preview, ...(citation.continuation ?? [])].map(page => {
-        const end = page.frame ? Math.min(1, Math.max(page.frame[1] + page.frame[3],
-          ...page.boxes.map(b => b[1] + b[3])) + 10 / page.height) : 1;
         const marks = page.frame ? [...page.boxes, page.frame] : page.boxes;
+        const [top, bottom] = page.crop ?? [0, page.height];
+        const url = `/api/textbook/${citation.edition}/sections/${citation.section}/images/${page.page}`;
+        const height = bottom - top;
         return <span key={page.page} className="textbook-crop"
-          style={{ aspectRatio: `${page.width} / ${page.height * end}` }} onContextMenu={event => event.preventDefault()}>
-          <img src={`/api/textbook/${citation.edition}/sections/${citation.section}/images/${page.page}`}
-            loading="lazy" draggable={false} alt="" style={{ top: 0, height: `${100 / end}%` }} />
+          style={{ aspectRatio: `${page.width} / ${height}` }} onContextMenu={event => event.preventDefault()}>
+          <img src={page.crop ? `${url}?top=${top}&bottom=${bottom}` : url}
+            loading="lazy" width={page.width} height={height} draggable={false} alt={`${title}的教材节选`} />
           {marks.map((box, i) => <span key={i} aria-hidden="true" className={markClass(page.figure || box === page.frame, citation.role)}
-            style={{ left: `${100 * box[0]}%`, top: `${100 * box[1] / end}%`, width: `${100 * box[2]}%`, height: `${100 * box[3] / end}%` }} />)}
+            style={{ left: `${100 * box[0]}%`, top: `${100 * (box[1] * page.height - top) / height}%`,
+              width: `${100 * box[2]}%`, height: `${100 * box[3] * page.height / height}%` }} />)}
         </span>;
       })}
-    </button>
     {citation.explanation && <figcaption><Inline text={citation.explanation} /></figcaption>}
   </figure>;
 }

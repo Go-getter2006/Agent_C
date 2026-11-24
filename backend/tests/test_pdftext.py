@@ -119,6 +119,24 @@ def test_cached_arrow_statement_is_repaired_without_network(ctx, monkeypatch):
         assert pdftext.redo_stored(s) == 0
 
 
+def test_unrepairable_pdf_does_not_reset_a_completed_cleanup(ctx, monkeypatch):
+    from app import config
+
+    unchanged = "损坏的箭头\uf0e8"
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "test-no-network")
+    monkeypatch.setattr(pdftext, "extract", lambda *_: (unchanged, "garbled", []))
+    called = []
+    monkeypatch.setattr(pdftext, "_tidy", lambda *args: called.append(args))
+    with db.session_scope() as s:
+        row = m.ProblemText(server_id=ctx.server_id, problem_id=4242, content_type="application/pdf",
+                            file_bytes=make_pdf(LINES), raw_text=unchanged, extract_status="garbled",
+                            tidied_at=db.now(), tidy_version=pdftext.TIDY_VERSION)
+        s.add(row)
+        s.flush()
+        assert pdftext.redo_stored(s) == 0
+        assert row.tidied_at is not None and not called
+
+
 # ------------------------------------------------------------ 大模型整理：程序核对
 RAW = "Input two integers a and b (1 <= a, b <= 10 5).\n[图1]\nSample input\n3 5\nSample output\n8"
 GOOD = "题目描述\nInput two integers a and b (1 ≤ a, b ≤ 10^5).\n[图1]\n样例输入\n3 5\n样例输出\n8"

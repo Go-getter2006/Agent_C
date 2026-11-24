@@ -10,7 +10,7 @@ import { threadHistory } from "../lib/threadHistory";
 import type { HelpAction, Message, QuizView, TextbookCitation } from "../types";
 import { useSession, useStudentCache } from "../session";
 import CourseScene from "./CourseScene";
-import { CitationPreview } from "./Textbook";
+import { TextbookCitations } from "./Textbook";
 import Attempt from "./Attempt";
 import FlowChart from "./FlowChart";
 import Quiz from "./Quiz";
@@ -420,12 +420,7 @@ function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend
             ),
           )}
           {onTextbook && message.textbook?.length ? (
-            <div className="textbook-citations" aria-label="教材引用">
-              {message.textbook.map((citation) => (
-                <CitationPreview key={`${citation.edition}-${citation.section}-${citation.anchor}`}
-                  citation={citation} onOpen={() => onTextbook(citation, message.time)} />
-              ))}
-            </div>
+            <TextbookCitations citations={message.textbook} onOpen={citation => onTextbook(citation, message.time)} />
           ) : null}
           {message.quiz && ((message.quiz.protocol ?? 1) >= 2
             ? <Attempt quiz={message.quiz} onChange={onQuiz} compact />

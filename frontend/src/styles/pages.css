@@ -2936,17 +2936,17 @@
   background: var(--mark);
   mix-blend-mode: multiply;
 }
-.textbook-mark.is-figure { background: transparent; outline: 2px solid var(--fail); }
+.textbook-mark.is-figure { background: transparent; box-shadow: inset 0 0 0 2px var(--fail); }
 .textbook-mark.is-example { background: var(--info-bg); }
-.textbook-citations { display: grid; gap: var(--sp-12); margin-top: var(--sp-12); }
+.textbook-citations { margin-top: var(--sp-12); }
+.textbook-citation-list { display: grid; gap: var(--sp-12); margin-top: var(--sp-8); }
 .textbook-excerpt { margin: 0; min-width: 0; }
 .textbook-excerpt figcaption { margin-top: var(--sp-4); color: var(--ink-2); }
-.textbook-citation {
-  display: block;
-  width: 100%;
-  overflow: hidden;
-  padding: 0;
-  text-align: start;
+.textbook-citation-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-6) var(--sp-8);
   border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
   background: var(--accent-bg);
@@ -2954,12 +2954,14 @@
   font-size: var(--fs-13);
   cursor: pointer;
 }
-.textbook-citation svg { flex: none; }
-.textbook-citation-heading { display: flex; align-items: center; gap: var(--sp-6); padding: var(--sp-6) var(--sp-8); }
-.textbook-citation-heading small { margin-left: auto; color: var(--ink-2); }
+.textbook-citation-heading::-webkit-details-marker { display: none; }
+.textbook-citation-heading span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.textbook-citation-heading svg { flex: none; }
+.textbook-citations[open] > summary > svg:last-child { transform: rotate(180deg); }
+.textbook-excerpt-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-8); margin-bottom: var(--sp-4); }
 .textbook-crop { position: relative; display: block; overflow: hidden; background: var(--surface); }
-.textbook-crop img { position: absolute; left: 0; width: 100%; max-height: none; pointer-events: none; }
-.textbook-citation:hover { border-color: var(--brand); }
+.textbook-crop img { display: block; width: 100%; height: auto; pointer-events: none; }
+.textbook-citation-heading:hover { border-color: var(--brand); }
 .drawer-body:has(> .textbook-pane) { padding: 0; overflow: hidden; }
 @media print {
   .textbook-side, .textbook-pane, .textbook-citations { display: none; }

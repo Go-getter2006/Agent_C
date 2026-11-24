@@ -142,6 +142,7 @@ export interface TextbookPreview {
   height: number;
   figure: boolean;
   boxes: BookBox[];
+  crop?: [number, number];
   frame?: BookBox;
 }
 export interface TextbookCitation {

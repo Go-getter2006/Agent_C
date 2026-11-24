@@ -410,14 +410,14 @@ def _tidy(raw: str, status: str) -> tuple[tuple[str, str] | None, bool]:
 
 
 # ------------------------------------------------------------ 存库、读库
-def store(s, row, content_type: str, data: bytes) -> bool:
+def store(s, row, content_type: str, data: bytes, *, parsed=None) -> bool:
     """题面文件抽出原文和示意图，写进 ProblemText 这一行和示意图表。给人看的文字变了返回 True。
     大模型整理另做（prepare：标注这道题之前、后台空闲时）。"""
     from sqlalchemy import delete
 
     from . import models as m
 
-    text, status, figures = extract(content_type, data)
+    text, status, figures = parsed if parsed is not None else extract(content_type, data)
     old = row.extracted_text or ""
     row.raw_text, row.extract_status, row.tidied_at, row.tidy_version = text, status, None, ""
     row.extracted_text = text if status in USABLE else ""
@@ -661,7 +661,10 @@ def redo_stored(s, limit: int = 2) -> int:
         if status != "garbled" and not needs_redo(status, bytes(head or b""), ctype or ""):
             continue
         row = s.get(T, (server_id, problem_id))
-        store(s, row, row.content_type, row.file_bytes)
+        parsed = extract(row.content_type, row.file_bytes)
+        if status == "garbled" and parsed[:2] == (row.raw_text, status):
+            continue  # 文本层还是同一份乱码，不能清掉整理记录、不断重新排进标注队列
+        store(s, row, row.content_type, row.file_bytes, parsed=parsed)
         enqueue(s, server_id, "label_problem", problem_id, 2)   # 标注前会先交给大模型整理
         done += 1
     if llm.available() and done < limit:

@@ -14,7 +14,7 @@ from pathlib import Path
 from threading import Lock
 from zipfile import ZipFile
 
-from PIL import Image
+from PIL import Image, ImageChops
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,14 @@ _FIG_NUMBER = re.compile(r"图(?:\d+(?:[.．-]\d+)*|[一二三四五六七八九
 def _figure_number(text):
     match = _FIG_NUMBER.match(re.sub(r"\s+", "", text))
     return match[0] if match else ""
+
+
+def _is_caption(text):
+    compact = re.sub(r"\s+", "", text)
+    number = _figure_number(text)
+    suffix = compact[len(number):]
+    return bool(number and suffix and not re.search(r"[。！？：:]", suffix)
+                and not suffix.startswith(("展示了", "给出了", "所示", "表明了")))
 
 
 def publish(s: Session, path: Path) -> tuple[m.TextbookEdition, bool]:
@@ -148,17 +156,17 @@ def _passages(s: Session, edition: m.TextbookEdition) -> tuple[list[Passage], Co
                 ref = {"section": section.number, "anchor": anchor["id"], "path": list(path)}
                 text = anchor["text"]
                 number = _figure_number(text)
-                previous = anchors[i - 1]["text"] if i else ""
+                earlier = [a["text"] for a in reversed(anchors[max(0, i - 4):i]) if a["text"] != text]
+                previous = next((value for value in earlier
+                                 if number in _FIG_NUMBER.findall(re.sub(r"\s+", "", value))), "")
                 figure = anchor.get("figure", False)
-                if figure and i >= 2 and previous == text:
-                    previous = anchors[i - 2]["text"]
-                mentions = _FIG_NUMBER.findall(re.sub(r"\s+", "", previous))
-                if number and not figure:
+                if not figure and (anchor.get("wordFigure") or _is_caption(text)):
                     if i + 1 < len(anchors) and anchors[i + 1].get("figure") and anchors[i + 1]["text"] == text:
                         continue
-                    figure = bool(anchor.get("wordFigure") or number in mentions)
-                if figure and number in mentions:
+                    figure = True
+                if figure and previous:
                     text += "\n引图原句：" + previous
+                ref["context"] = {a["id"]: a["text"] for a in anchors[max(0, i - 2): i + 3]}
                 passages.append(Passage(ref, text, words, title_words, figure))
                 frequency.update(words)
         _cache[edition.digest] = passages, frequency
@@ -191,6 +199,7 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
                 groups[number] = groups[parent]
     passages, frequency = _passages(s, edition)
     weights = {term: math.log(1 + len(passages) / (1 + frequency[term])) for term in query | remembered}
+    requested_figures = set(_FIG_NUMBER.findall(re.sub(r"\s+", "", question)))
     ranked = []
     for passage in passages:
         if lookup and passage.reference["section"] not in groups:
@@ -207,8 +216,8 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
         score += 0.28 * sum(weights[t] for t in carried)
         if term and passage.text.startswith((term + "是", term + "指", term + "由", term + "表示")):
             score += sum(weights[t] for t in in_text)
-        if passage.figure and re.search(r"\d+(?:\.\d+)+", question):
-            score *= 2
+        if passage.figure and _figure_number(passage.text) in requested_figures:
+            score += len(passages)
         ranked.append((score, passage))
     ranked.sort(key=lambda item: (item[0], item[1].figure), reverse=True)
     if groups:
@@ -221,12 +230,18 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
             seen.add(group)
         ranked = first + rest
     texts = [item for _, item in ranked if not item.figure][:5]
-    if groups:
-        # 旧版次只有图题、缺少图形边界时也给模型看，仍可引用图题并打开整页。
-        texts.extend(item for _, item in ranked if not item.figure and _figure_number(item.text) and item not in texts)
-    figures = [item for _, item in ranked if item.figure]
-    if not groups:
-        figures = figures[:2]
+    candidates = [item for score, item in ranked if item.figure and score > 0]
+    sections = m.TextbookSection
+    nearby = {row.number: row for row in s.scalars(select(sections).where(
+        sections.edition_id == edition.id, sections.number.in_({item.reference["section"] for item in candidates})))} \
+        if candidates else {}
+    figures = []
+    for item in candidates:
+        row = nearby.get(item.reference["section"])
+        if row is not None and _figure_frame(s, row, item.reference["anchor"]):
+            figures.append(item)
+            if len(figures) == 4:
+                break
     return {f"{prefix}{i}": (item.text, dict(item.reference, edition=edition.id), item.figure)
             for prefix, candidates in (("T", texts), ("F", figures)) for i, item in enumerate(candidates, 1)}
 
@@ -234,8 +249,16 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
 def prompt(matches: dict) -> str:
     if not matches:
         return ""
-    lines = [f"[{key}] {' › '.join(ref['path'])}（{'图题' if figure else '仅有题注' if _figure_number(text) else '原文'}）\n{text}"
+    lines = [f"[{key}] {' › '.join(ref['path'])}（{'图题' if figure else '原文'}，原稿编号 {ref['anchor']}）\n{text}"
              for key, (text, ref, figure) in matches.items()]
+    neighborhoods = {}
+    for _, ref, _ in matches.values():
+        context = neighborhoods.setdefault(ref["section"], {})
+        context.update(ref.get("context", {}))
+    for section, context in neighborhoods.items():
+        if len(context) > 1:
+            rows = "\n".join(f"{number} {value}" for number, value in sorted(context.items()))
+            lines.append(f"【小节 {section} 的原稿顺序，可选连续预览起止编号】\n{rows}")
     return "【本轮检索到的教材资料】\n" + "\n\n".join(lines)
 
 
@@ -251,13 +274,25 @@ def citations(matches: dict, selected) -> list[dict]:
         role = choice.get("role")
         if key not in matches or role not in ("key", "example") or not isinstance(note, str) or not note.strip():
             raise ValueError("请用本轮候选编号，标明 key 或 example，并用一句话解释这处原文")
-        refs[key] = {**matches[key][1], "role": role, "explanation": note.strip()}
+        origin = matches[key][1]
+        refs[key] = {k: origin[k] for k in ("section", "anchor", "path", "edition")}
+        refs[key].update(role=role, explanation=note.strip())
         fig = choice.get("figureId") or (key if matches[key][2] else None)
         if fig:
             fig = str(fig).strip(" []").upper()
             if fig not in matches or not matches[fig][2] or matches[fig][1]["section"] != refs[key]["section"]:
                 raise ValueError("figureId 只能选同一小节中的候选图号")
             refs[key]["figureAnchor"] = matches[fig][1]["anchor"]
+        span = choice.get("excerpt")
+        # 预览选择是附加字段，模型给错范围也能保留已经核实的原句与图。
+        if isinstance(span, list) and len(span) == 2 and all(type(n) is int for n in span):
+            start, end = span
+            shown = {i for _, ref, _ in matches.values() if ref["section"] == origin["section"]
+                     for i in ref.get("context", {})}
+            marks = origin["anchor"], refs[key].get("figureAnchor", origin["anchor"])
+            if start <= min(marks) <= max(marks) <= end and 1 <= end - start + 1 <= len(shown) \
+                    and all(i in shown for i in range(start, end + 1)):
+                refs[key]["excerpt"] = span
     return list(refs.values())
 
 
@@ -283,7 +318,19 @@ def _ink_bounds(png: bytes, top: int, bottom: int):
     """在引图句与图题之间读取印刷内容的包围盒，兼容 Word 绘制的箭头和矢量框。"""
     with Image.open(io.BytesIO(png)) as image:
         band = image.crop((0, top, image.width, bottom)).convert("L")
-        return band.point(lambda gray: 255 if gray < 160 else 0).getbbox()
+        background = band.getpixel((0, 0))
+        ink = ImageChops.difference(band, Image.new("L", band.size, background)).point(
+            lambda difference: 255 if difference >= 42 else 0)
+        # 图从新页开始时，剔除位于上方的通栏页眉线。
+        if top == 0:
+            limit = min(ink.height // 2, image.height // 6)
+            header_end = 0
+            for y in range(limit):
+                if ink.crop((0, y, ink.width, y + 1)).histogram()[255] >= ink.width * .72:
+                    header_end = y + 1
+            if header_end:
+                ink.paste(0, (0, 0, ink.width, header_end))
+        return ink.getbbox()
 
 
 def _figure_frame(s, section, selected):
@@ -299,16 +346,21 @@ def _figure_frame(s, section, selected):
                 parts.extend(b for b in previous["boxes"] if b[0] == page)
             left, y = min(b[1] for b in parts), min(b[2] for b in parts)
             return [page, left, y, max(b[1] + b[3] for b in parts) - left, max(b[2] + b[4] for b in parts) - y]
-        if not previous["boxes"] or not (caption.get("wordFigure") or
-                _figure_number(caption["text"]) in _FIG_NUMBER.findall(re.sub(r"\s+", "", previous["text"]))):
+        if not (caption.get("wordFigure") or _is_caption(caption["text"])):
             continue
-        before, label = previous["boxes"][-1], caption["boxes"]
-        if before[0] != page or any(b[0] != page for b in label):
+        label = caption["boxes"]
+        if any(b[0] != page for b in label) or len(_FIG_NUMBER.findall(re.sub(r"\s+", "", caption["text"]))) != 1:
             continue
         info = section.pages[page]
         width, height = info["width"], info["height"]
-        top = math.ceil((before[2] + before[4]) * height) + 2
-        bottom = math.floor(min(b[2] for b in label) * height) - 1
+        label_top = min(b[2] for b in label)
+        index = i - 1
+        while index > 0 and re.match(r"^[（(]\s*[a-zA-Z]\s*[）)]", anchors[index]["text"]):
+            index -= 1  # (a)、(b) 等子图题注属于同一幅图
+        earlier = [b[2] + b[4] for anchor in anchors[:index + 1] for b in anchor["boxes"]
+                   if b[0] == page and b[2] + b[4] < label_top]
+        top = math.ceil(max(earlier) * height) + 2 if earlier else 0
+        bottom = math.floor(label_top * height) - 1
         if bottom - top < 12:
             continue
         picture = s.get(m.TextbookFigure, (section.edition_id, info["image"]))
@@ -358,14 +410,23 @@ def add_previews(s: Session, refs: list[dict]) -> None:
                 continue
             mark = highlight(s, row, hit, ref.get("figureAnchor"))
             previews = []
-            marked_pages = [b[0] for b in mark["boxes"]]
-            if mark.get("frame"):
-                marked_pages.append(mark["frame"][0])
-            for page_index in sorted(set(marked_pages)):
+            frame = mark.get("frame")
+            bounds = [*mark["boxes"], *([frame] if frame else [])]
+            first, last = ref.get("excerpt", (hit["id"], hit["id"]))
+            if figure_id := ref.get("figureAnchor"):
+                first, last = min(first, figure_id), max(last, figure_id)
+            if first != last:
+                bounds.extend(b for anchor in row.anchors if first <= anchor["id"] <= last for b in anchor["boxes"])
+            for page_index in range(min(b[0] for b in bounds), max(b[0] for b in bounds) + 1):
                 page = row.pages[page_index]
+                on_page = [b for b in bounds if b[0] == page_index]
                 preview = {"page": page_index, "width": page["width"], "height": page["height"],
                            "figure": mark["figure"], "boxes": [b[1:] for b in mark["boxes"] if b[0] == page_index]}
-                if (frame := mark.get("frame")) and frame[0] == page_index:
+                if on_page:
+                    height = page["height"]
+                    preview["crop"] = [max(0, math.floor(min(b[2] for b in on_page) * height) - 8),
+                                       min(height, math.ceil(max(b[2] + b[4] for b in on_page) * height) + 8)]
+                if frame and frame[0] == page_index:
                     preview["frame"] = frame[1:]
                 previews.append(preview)
             ref["preview"] = previews[0]

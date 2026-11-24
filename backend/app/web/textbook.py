@@ -1,7 +1,10 @@
 """教材仅随 C 语言学生会话按小节在线读取。"""
 from __future__ import annotations
 
+from io import BytesIO
+
 from fastapi import APIRouter, Depends, HTTPException, Response
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -48,7 +51,8 @@ def section(edition: int, number: int, response: Response, anchor: int | None = 
 
 
 @router.get("/{edition}/sections/{number}/images/{index}")
-def image(edition: int, number: int, index: int, user: m.User = Depends(student),
+def image(edition: int, number: int, index: int, top: int | None = None, bottom: int | None = None,
+          user: m.User = Depends(student),
           s: Session = Depends(get_session)) -> Response:
     row = _section(s, user, edition, number)
     if not 0 <= index < len(row.pages):
@@ -56,5 +60,12 @@ def image(edition: int, number: int, index: int, user: m.User = Depends(student)
     picture = s.get(m.TextbookFigure, (edition, row.pages[index]["image"]))
     if picture is None:
         raise _not_found()
-    return Response(picture.png, media_type="image/png", headers={
+    png = picture.png
+    if top is not None or bottom is not None:
+        if top is None or bottom is None or not 0 <= top < bottom <= row.pages[index]["height"]:
+            raise _not_found()
+        with Image.open(BytesIO(png)) as original, BytesIO() as output:
+            original.crop((0, top, original.width, bottom)).save(output, "PNG")
+            png = output.getvalue()
+    return Response(png, media_type="image/png", headers={
         **PRIVATE, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"})
