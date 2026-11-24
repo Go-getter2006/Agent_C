@@ -265,7 +265,7 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
         return validate.check(
             d, help_level=decision.help_level, reveal_level=decision.reveal_level, kind=kind, source=ctx.source,
             testcases=testcases, reference=ctx.reference, current_title=ctx.problem.title if ctx.problem else "",
-            visible_titles=visible_titles)
+            visible_titles=visible_titles, knowledge=ctx.knowledge)
 
     if flow in ("plan", "plan_step") and plan_text is not None:   # 解题流程图（chat/plan.py），话已经生成并核对过
         draft = validate.Draft(before=plan_text)
@@ -343,7 +343,9 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
             retries = attempt + 1
             feedback = "；".join(problems)
         if ctx.knowledge:
-            raise llm.LLMUnavailable("知识问答回复未通过校验")
+            err = llm.LLMUnavailable("知识问答回复未通过校验")
+            err.invalid = True
+            raise err
         log.info("回复两次没通过校验，改用固定模板")
     if ctx.knowledge:
         raise llm.LLMUnavailable("知识问答需要大模型")

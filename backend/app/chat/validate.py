@@ -64,7 +64,7 @@ def _leaks(text: str, testcases: list[dict]) -> bool:
 
 def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source: str | None,
           testcases: list[dict], reference: str | None, current_title: str,
-          visible_titles: dict[str, str]) -> list[str]:
+          visible_titles: dict[str, str], knowledge: bool = False) -> list[str]:
     """返回不合格的原因；空列表表示通过。"""
     problems: list[str] = []
     text = draft.text()
@@ -75,7 +75,7 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
     # 1 新写的代码行数：H3 不超过 8 行，其余级别不超过 2 行；引用他自己的代码、以前给过的代码不计
     new_lines = 0 if draft.code_is_old else code_line_count(draft.code)
     limit = config.CHAT["h3_max_lines"] if help_level == "H3" else config.CHAT["other_max_lines"]
-    if new_lines > limit:
+    if not knowledge and new_lines > limit:
         problems.append(f"新写的代码有 {new_lines} 行，这一级最多 {limit} 行")
     if help_level in ("H0", "H1") and new_lines > 0:
         problems.append("这一级不能给新写的代码")

@@ -69,9 +69,11 @@ SESSION_HOURS = _env_int("SESSION_HOURS", 12)
 # 大模型（DeepSeek，OpenAI 兼容接口）。不填 key 时，对话走规则分析和固定模板。
 DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
-DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", "deepseek-chat")
-DEEPSEEK_VISION_MODEL = _env("DEEPSEEK_VISION_MODEL", "deepseek-flash" if DEEPSEEK_BASE_URL in (
-    "https://api.deepseek.com", "https://api.deepseek.com/v1") else "").strip()
+OFFICIAL_DEEPSEEK = DEEPSEEK_BASE_URL in ("https://api.deepseek.com", "https://api.deepseek.com/v1")
+DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", "deepseek-flash" if OFFICIAL_DEEPSEEK else "deepseek-chat").strip()
+if OFFICIAL_DEEPSEEK and DEEPSEEK_MODEL == "deepseek-chat":  # 老版本安装时写进 .env 的非思考模型名
+    DEEPSEEK_MODEL = "deepseek-flash"
+DEEPSEEK_VISION_MODEL = _env("DEEPSEEK_VISION_MODEL", "deepseek-flash" if OFFICIAL_DEEPSEEK else "").strip()
 # 每百万 token 的价格（元），用于记录费用；按实际计费标准填写。
 LLM_PRICE_IN = _env_float("LLM_PRICE_IN", 2.0)
 LLM_PRICE_OUT = _env_float("LLM_PRICE_OUT", 8.0)

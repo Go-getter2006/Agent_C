@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app import db, llm
+from app import config, db, llm
 from app import models as m
 from app.web.app import create_app
 from app.web.student import topic_title
@@ -52,6 +52,41 @@ def test_model_failure_keeps_knowledge_history_unchanged(client):
     topics = client.get("/api/topics").json()
     assert client.post("/api/threads/new/messages", json={"text": "for 循环怎么用"}).status_code == 502
     assert client.get("/api/topics").json() == topics
+
+
+def test_standalone_array_question_accepts_a_multiline_example(client, monkeypatch):
+    login(client)
+    code = "int a[2][3] = {{1,2,3},{4,5,6}};\nfor (int i = 0; i < 2; ++i)\n    for (int j = 0; j < 3; ++j)\n        printf(\"%d \", a[i][j]);"
+    calls = []
+
+    def answer(*args):
+        calls.append(args)
+        return json.dumps({"before": "用两个下标分别访问行和列。", "code": code}), 10, 10
+
+    monkeypatch.setattr(llm, "_backend", answer)
+    result = client.post("/api/threads/new/messages", json={"text": "二维数组如何使用"})
+    assert result.status_code == 200
+    assert result.json()["messages"][-1]["blocks"][-1]["lines"] == code.splitlines()
+    assert len(calls) == 1
+
+
+def test_provider_balance_error_is_reported_without_retry(client, monkeypatch):
+    login(client)
+    calls = []
+
+    def reject(url, **kwargs):
+        calls.append(kwargs["json"])
+        return llm.httpx.Response(402)
+
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "test-only")
+    monkeypatch.setattr(config, "OFFICIAL_DEEPSEEK", True)
+    monkeypatch.setattr(config, "DEEPSEEK_MODEL", "deepseek-flash")
+    monkeypatch.setattr(llm.httpx, "post", reject)
+    result = client.post("/api/threads/new/messages", json={"text": "二维数组如何使用"})
+    assert result.status_code == 502
+    assert "额度不足" in result.json()["error"]
+    assert len(calls) == 1
+    assert calls[0]["thinking"] == {"type": "disabled"}
 
 
 def test_homework_list_reports_own_thread_even_without_submission(client):

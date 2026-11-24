@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import difflib
 import json
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -454,8 +455,10 @@ def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session =
     try:
         workflow.handle(s, user.student_id, th, body.text, body.action, body.submissionKey, course=user.course,
                         topic=topic, knowledge=knowledge, pin=pin)
-    except llm.LLMUnavailable:
-        raise HTTPException(status_code=502, detail="这条没发出去，再发一次试试。")
+    except llm.LLMUnavailable as exc:
+        logging.getLogger(__name__).warning("答疑失败 model=%s upstream=%s invalid=%s configured=%s",
+                                            config.DEEPSEEK_MODEL, exc.status, exc.invalid, llm.available())
+        raise HTTPException(status_code=502, detail=exc.student_message()) from exc
     if topic is not None:
         row = s.get(m.ChatTopic, topic)
         if row is not None:
