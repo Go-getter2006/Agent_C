@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from . import db
 from . import models as m
+from .chat.workflow import conversation_key
 from .diagnosis import CHALLENGE_VERSION
 from .quiz import challenge_state
 from .xdoj.assemble import source_text
@@ -58,7 +59,7 @@ KINDS: dict[str, str] = {
 }
 MAX_IDS = 5000   # 开发者全选所有班时也够
 # 导出文件的格式版本：列或 data 里的字段改了就改这个（logs-2：加“栏目”“代码”两列、复习小题全过程、可选提交源码）
-EXPORT_VERSION = "logs-4"
+EXPORT_VERSION = "logs-5"
 MAX_DAYS = 366
 TTL_DAYS = 7
 
@@ -110,6 +111,12 @@ SECTION_ASK, SECTION_HOMEWORK, SECTION_REVIEW, SECTION_NOTICE = "知识问答", 
 def _section(problem_id: int | None, topic_id: int | None = None) -> str:
     """对话在哪个栏目：绑了题的是作业引导；知识问答的主题、以前不绑题的“综合”对话都算知识问答。"""
     return SECTION_HOMEWORK if problem_id is not None and topic_id is None else SECTION_ASK
+
+
+def _round_section(r: m.ChatRound) -> str:
+    if not r.conversation_key:
+        return _section(r.problem_id)
+    return SECTION_HOMEWORK if r.conversation_key.startswith("p") else SECTION_ASK
 
 
 def _proactive(msg: m.ChatMessage) -> bool:
@@ -208,7 +215,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             m.ChatMessage.created_at <= date_to, m.ChatMessage.kind == "text").order_by(m.ChatMessage.id)).all()
         steps = {st.message_id: st for st in s.scalars(select(m.ChatStep).where(
             m.ChatStep.message_id.in_([x.id for x in msgs if x.role == "student"]))).all()} if msgs else {}
-        last_step: dict[str, m.ChatStep] = {}
+        last_step: dict[tuple[str, str, str, int | None], m.ChatStep | None] = {}
         for msg in msgs:
             blocks = (msg.content or {}).get("blocks", [])
             text = "\n".join(b.get("text", "") for b in blocks if b.get("t") == "p")
@@ -217,10 +224,12 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             code = _join_code([(c["caption"], c["code"]) for c in code_parts])
             title = _problem_title(s, titles, msg.server_id, msg.problem_id)
             section = SECTION_NOTICE if _proactive(msg) else _section(msg.problem_id, msg.topic_id)
+            thread = (msg.server_id, msg.problem_id) if msg.server_id is not None and msg.problem_id is not None else None
+            conversation = conversation_key(thread, msg.topic_id)
+            step_key = (msg.user_id, msg.course, conversation, msg.round_id)
             if msg.role == "student":
                 st = steps.get(msg.id)
-                if st is not None:
-                    last_step[msg.user_id] = st
+                last_step[step_key] = st
                 if "ask" not in kinds:
                     continue
                 action = BUTTONS.get(text.strip(), "发了一条消息" + ("（贴了代码）" if codes else ""))
@@ -232,14 +241,14 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                     course=msg.course, problem_id=msg.problem_id, section=section,
                     problem=title, submission_id=st.submission_id if st else None, detail=detail,
                     text=text if include_text else "", code=code,
-                    data={"message": msg.id, "round": msg.round_id, "topic": msg.topic_id,
+                    data={"message": msg.id, "round": msg.round_id, "topic": msg.topic_id, "conversation": conversation,
                           "intent": st.intent if st else None,
                           "rule": st.rule_id if st else None, "help": st.help_level if st else None,
                           "pastedCode": bool(codes), **({"codeBlocks": code_parts} if include_text else {})})
             elif "reply" in kinds:
-                st = last_step.get(msg.user_id)
                 example = [b for b in codes if b.get("caption") in ("示例", "上次给你的那段")]
                 proactive = section == SECTION_NOTICE
+                st = None if proactive else last_step.get(step_key)
                 add(user_id=msg.user_id, time=msg.created_at, kind="reply",
                     action=("提交没过的提醒" if msg.failure_submission_id is not None else "通过后的总结")
                     if proactive else "智能体回复",
@@ -250,6 +259,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
                         f"，回复来源 {st.reply_source}" if st and st.reply_source else ""),
                     text=text if include_text else "", code=code,
                     data={"message": msg.id, "round": msg.round_id, "topic": msg.topic_id, "proactive": proactive,
+                          "conversation": conversation,
                           "help": None if proactive else st.help_level if st else None, "exampleCode": bool(example),
                           **({"textbook": [{key: ref[key] for key in ("edition", "section", "anchor", "role", "explanation")
                                             if key in ref and (key != "explanation" or include_text)}
@@ -310,13 +320,14 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             n_student = sum(1 for _ in s.scalars(select(m.ChatMessage.id).where(
                 m.ChatMessage.round_id == r.id, m.ChatMessage.role == "student", m.ChatMessage.kind == "text")).all())
             minutes = round(((r.ended_at or r.last_message_at) - r.started_at).total_seconds() / 60, 1)
-            add(user_id=r.user_id, time=r.started_at, kind="round", section=_section(r.problem_id),
+            add(user_id=r.user_id, time=r.started_at, kind="round", section=_round_section(r),
                 action="通过后的回顾" if r.end_reason == m.REFLECT_END else "求助回合", course=r.course,
                 problem_id=r.problem_id, problem=_problem_title(s, titles, r.server_id, r.problem_id),
                 submission_id=r.submission_id,
                 detail=f"{skill_name(r.skill_code) if r.skill_code else '没定技能'}，学生发了 {n_student} 条，"
                        f"最多帮助 {HELP_TEXT.get(r.max_help_level) or '没有'}，" + (r.end_reason or "还开着"),
-                data={"round": r.id, "skill": r.skill_code, "kp": kp_of_skill(r.skill_code) if r.skill_code else "",
+                data={"round": r.id, "conversation": r.conversation_key or None,
+                      "skill": r.skill_code, "kp": kp_of_skill(r.skill_code) if r.skill_code else "",
                       "error": r.error_code, "maxHelp": r.max_help_level, "helpCount": r.help_count,
                       "askedBack": r.asked_back, "failedReplies": r.failed_replies, "located": r.located,
                       "studentMessages": n_student, "endReason": r.end_reason, "status": r.status,
@@ -351,6 +362,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
             outcome = ("还没再交" if e.next_sub is None else "下一次通过" if e.next_pass
                        else "下一次还没过" if e.next_pass is False else "下一次还在评测")
             add(user_id=e.step.user_id, time=at, kind="help", action="帮助之后", course=e.step.course_id or course,
+                section=SECTION_HOMEWORK,
                 problem_id=e.step.problem_id, problem=_problem_title(s, titles, e.step.server_id, e.step.problem_id),
                 submission_id=e.next_sub.submission_id if e.next_sub else None,
                 detail=f"{helpeffect.LEVEL_NAMES.get(e.level, e.level)}，{outcome}"
@@ -378,23 +390,27 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
         if course is not None:
             q = q.where(m.AgentAssessment.course == course)
         found = list(s.scalars(q.order_by(m.AgentAssessment.id)).all())
-        reflect = set(s.scalars(select(m.ChatRound.id).where(
-            m.ChatRound.id.in_([a.round_id for a in found if a.round_id is not None] or [-1]),
-            m.ChatRound.end_reason == m.REFLECT_END)).all())
+        round_ids = {a.round_id for a in found if a.round_id is not None}
+        rounds = {r.id: r for r in s.scalars(select(m.ChatRound).where(m.ChatRound.id.in_(round_ids)))} if round_ids else {}
         for a in found:
+            rnd = rounds.get(a.round_id)
+            reflection = bool(rnd and rnd.end_reason == m.REFLECT_END)
             add(user_id=a.user_id, time=a.created_at, kind="assess", action="理解评估", course=a.course,
+                section=_round_section(rnd) if rnd else "",
                 problem_id=a.problem_id, problem=_problem_title(s, titles, a.server_id, a.problem_id),
                 submission_id=a.submission_id,
                 detail=f"{skill_name(a.skill_code)}，"
-                       f"{'通过后的回顾' if a.round_id in reflect else '看对话' if a.basis == 'chat' else '看代码怎么改的'}，"
+                       f"{'通过后的回顾' if reflection else '看对话' if a.basis == 'chat' else '看代码怎么改的'}，"
                        f"等级 {a.level if a.level is not None else '不评'}（{a.source}，原始 {a.raw_level}，规则 {a.rule_level}）"
                        + (f"，下调：{a.adjusted}" if a.adjusted else ""),
                 text="\n".join(a.evidence or []) if include_text else "",
-                data={"assessment": a.id, "round": a.round_id, "skill": a.skill_code, "kp": kp_of_skill(a.skill_code),
+                data={"assessment": a.id, "round": a.round_id,
+                      "conversation": (rnd.conversation_key or None) if rnd else None,
+                      "skill": a.skill_code, "kp": kp_of_skill(a.skill_code),
                       "basis": a.basis, "level": a.level, "rawLevel": a.raw_level, "ruleLevel": a.rule_level,
                       "source": a.source, "confidence": round(a.confidence or 0, 2), "adjusted": a.adjusted,
                       "evidenceCount": len(a.evidence or []), "promptVersion": a.prompt_version,
-                      "reflection": a.round_id in reflect})
+                      "reflection": reflection})
 
     ui_kinds = {k for k, (kind, _t) in UI_KIND.items() if kind in kinds}
     if ui_kinds:

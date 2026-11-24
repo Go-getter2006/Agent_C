@@ -1,14 +1,16 @@
 """知识问答：多个问答主题；不自动绑到作业题上，学生选了“结合当前题”才带上；各看各的、按课程分开。"""
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app import config, db, llm
+from app import assess, config, db, llm, logs
 from app import models as m
+from app.chat import workflow
 from app.web.app import create_app
 from app.web.student import topic_title
 
@@ -57,7 +59,8 @@ def test_delete_topic_removes_saved_messages_steps_and_assessment(client, monkey
     ids = [msg["id"] for msg in deleted["messages"]]
     with db.session_scope() as s:
         round_id = s.get(m.ChatMessage, ids[0]).round_id
-        assert s.get(m.ChatMessage, first["messages"][0]["id"]).round_id == round_id
+        first_round_id = s.get(m.ChatMessage, first["messages"][0]["id"]).round_id
+        assert first_round_id != round_id
         s.add(m.AgentAssessment(user_id=UID, course="C", round_id=round_id, skill_code="C01.01.01",
                                 evidence=["删除这条问答"]))
         s.add(m.SkillEvidence(user_id=UID, skill_code="C01.01.01", event_type="agent_understanding",
@@ -89,7 +92,8 @@ def test_delete_topic_removes_saved_messages_steps_and_assessment(client, monkey
         assert s.scalar(select(m.AgentAssessment).where(m.AgentAssessment.round_id == round_id)) is None
         assert s.scalar(select(m.SkillEvidence).where(m.SkillEvidence.source_key == f"assess:{round_id}")) is None
         assert s.scalar(select(m.UiEvent).where(m.UiEvent.target == key)) is None
-        assert s.get(m.ChatRound, round_id) is not None  # 另一段问答还在用
+        assert s.get(m.ChatRound, round_id) is None
+        assert s.get(m.ChatRound, first_round_id) is not None
 
     new = client.post("/api/threads/new/messages", json={"text": "新建会话"}).json()
     assert int(new["thread"][1:]) > topic_id
@@ -116,6 +120,45 @@ def test_delete_legacy_chat_leaves_homework_and_other_course(client):
     with db.session_scope() as s:
         assert s.get(m.ChatRound, ids[3]) is None
         assert [s.get(m.ChatMessage, mid) is not None for mid in ids[:3]] == [False, True, True]
+
+
+def test_rounds_follow_the_conversation_even_when_linked_to_same_homework(client, demo, monkeypatch):
+    login(client)
+    monkeypatch.setattr(llm, "_backend", lambda *_: ('{"before":"先看这个概念。"}', 10, 10))
+    homework = f"p{demo['server_id']}-406"
+    now = db.now()
+    with db.session_scope() as s:
+        if prior := workflow.open_round(s, UID, "C", homework):
+            workflow.close_round(s, prior, "超时", now)
+    pin = {"problemKey": homework}
+    first = client.post("/api/threads/new/messages", json={**pin, "text": "第一段会话"}).json()
+    second = client.post("/api/threads/new/messages", json={**pin, "text": "第二段会话"}).json()
+    follow = client.post(f"/api/threads/{first['thread']}/messages", json={**pin, "text": "第一段追问"}).json()
+    legacy = client.post("/api/threads/general/messages", json={**pin, "text": "以前的会话"}).json()
+    result = client.post(f"/api/threads/{homework}/messages", json={"action": "hint"}).json()
+
+    with db.session_scope() as s:
+        messages = [s.get(m.ChatMessage, data["messages"][-2]["id"])
+                    for data in (first, second, follow, legacy, result)]
+        one, two, continued, old, hw = [s.get(m.ChatRound, msg.round_id) for msg in messages]
+        assert one.id == continued.id
+        assert len({one.id, two.id, old.id, hw.id}) == 4
+        assert [r.conversation_key for r in (one, two, old, hw)] == [first["thread"], second["thread"], "general", homework]
+        assert all(r.problem_id == 406 for r in (one, two, old, hw))
+        assert assess.Material(s, one).student_texts == ["第一段会话", "第一段追问"]
+        assert assess.Material(s, two).student_texts == ["第二段会话"]
+        assert hw.help_count == 1 and all(r.help_count == 0 for r in (one, two, old))
+        s.add(m.AgentAssessment(user_id=UID, course="C", round_id=two.id, skill_code="C01.01.01"))
+        s.flush()
+        rows = logs.collect(s, [UID], now, db.now() + dt.timedelta(seconds=1), ["round", "assess"],
+                            include_text=False, course="C")
+        records = {(row.kind, row.data["conversation"]): row.section for row in rows}
+        assert records["round", first["thread"]] == records["assess", second["thread"]] == "知识问答"
+        assert records["round", homework] == "作业引导"
+
+        passed_at = db.now()
+        workflow.after_pass(s, m.Submission(user_id=UID, server_id=demo["server_id"], problem_id=406, submit_time=passed_at))
+        assert all((r.status, r.end_reason, r.ended_at) == ("closed", "通过", passed_at) for r in (one, two, old, hw))
 
 
 def test_model_failure_keeps_knowledge_history_unchanged(client):

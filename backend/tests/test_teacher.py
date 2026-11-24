@@ -312,7 +312,7 @@ def test_stuck_list_and_graph_page(client, demo):
     assert help_["totals"]["stuck"] >= 1 and {"version", "students", "constructive", "answerSeeking"} == set(help_["dialogue"])
     # 每次帮助之后（app/helpeffect.py）：按帮助级别，最后一行是全部，比例都有分子分母
     nxt = help_["helpNext"]
-    assert nxt["version"] == "help-next-2" and nxt["rows"] and nxt["rows"][-1]["level"] == "all"
+    assert nxt["version"] == "help-next-3" and nxt["rows"] and nxt["rows"][-1]["level"] == "all"
     assert all(set(r) >= {"n", "resubmitted", "nextPass", "errorGone", "passed", "medianMinutes", "medianTries"}
                for r in nxt["rows"])
     # 上课用：谁卡在这里，在知识图谱的知识点详情里
@@ -625,7 +625,7 @@ def test_research_export_keeps_student_ids(client, demo):
     quiz = next(r for r in js["rows"] if r["kind"] in ("小题", "复习"))["data"]
     assert {"protocol", "judgedHasBug", "firstLines", "locateHit", "firstFixPass", "firstFixClean", "hints",
             "sampleRuns", "events"} <= set(quiz)
-    assert js["request"]["versions"]["stuck"] == "stuck-kp-1" and js["request"]["versions"]["helpNext"] == "help-next-2"
+    assert js["request"]["versions"]["stuck"] == "stuck-kp-1" and js["request"]["versions"]["helpNext"] == "help-next-3"
     helped = next(r for r in js["rows"] if r["kind"].startswith("帮助之后"))["data"]
     assert {"level", "helpsBefore", "nextSubmission", "minutes", "nextPass", "errorGone", "passed", "triesToPass"} <= set(helped)
     again = client.post("/api/teacher/logs", json={**body, "format": "csv"}).json()["request"]

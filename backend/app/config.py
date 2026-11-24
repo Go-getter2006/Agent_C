@@ -138,7 +138,7 @@ ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
 LABELER_VERSION = "2026-11-20a"   # 次技能只列题目专门要求的
 PROMPT_VERSION = "2026-11-24a"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
-WORKFLOW_VERSION = "2026-11-24b"
+WORKFLOW_VERSION = "2026-11-25a"
 # 2026-11-20：次技能分“有测试点专门考”和“顺带用到”，见 MASTERY 里的说明（SECONDARY_SPLIT_VERSION）
 # 2026-11-20b：顺带用到的通过不改变“最近一次是不是独立做对”，知识点按最近一条直接证据定档
 MASTERY_VERSION = "2026-11-21"   # 掌握分 (1+S)/(2+S+F)，档位只看分数；证据系数和半衰期每周学（app/learn.py）

@@ -173,7 +173,8 @@ def _thread_view(s: Session, user: m.User, thread: tuple[int, int] | None, topic
                    m.ChatMessage.role == "student", m.ChatStep.user_id == user.student_id,
                    m.ChatStep.bind_by == "ask_why", m.ChatStep.submission_id.is_not(None))
         ).all())
-    rnd = workflow.open_round(s, user.student_id, user.course) if msgs else None
+    rnd = workflow.open_round(s, user.student_id, user.course,
+                              workflow.conversation_key(thread, topic)) if msgs else None
     now = db.now()
     if rnd and now - rnd.last_message_at > dt.timedelta(minutes=config.CHAT["round_timeout_minutes"]):
         rnd = None

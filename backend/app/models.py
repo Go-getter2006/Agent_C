@@ -499,12 +499,14 @@ REFLECT_END = "回顾"
 
 class ChatRound(Base):
     __tablename__ = "chat_rounds"
-    __table_args__ = {"sqlite_autoincrement": True}
+    __table_args__ = (Index("ix_chat_round_conversation", "user_id", "course", "conversation_key", "status"),
+                      {"sqlite_autoincrement": True})
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     problem_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 空：没有绑定到题
     course: Mapped[str] = mapped_column(String(8), default="C")  # 两门课的对话分开
+    conversation_key: Mapped[str] = mapped_column(String(64), default="", server_default="")
     submission_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     skill_code: Mapped[str] = mapped_column(String(16), default="")
     error_code: Mapped[str] = mapped_column(String(8), default="")

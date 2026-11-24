@@ -10,10 +10,17 @@ UID, SID, PID = "2500000009", 1, 701
 T0 = dt.datetime(2026, 11, 2, 10, 0, tzinfo=dt.timezone.utc)
 
 
-def _step(s, minutes: float, level: str, error: str = "LP01", pid: int = PID) -> m.ChatStep:
-    st = m.ChatStep(message_id=1, round_id=1, user_id=UID, server_id=SID, problem_id=pid, course_id="C",
+def _step(s, minutes: float, level: str, error: str = "LP01", pid: int = PID,
+          knowledge: bool = False) -> m.ChatStep:
+    at = T0 + dt.timedelta(minutes=minutes)
+    msg = m.ChatMessage(user_id=UID, role="student", course="C", created_at=at, round_id=1,
+                        server_id=None if knowledge else SID, problem_id=None if knowledge else pid,
+                        topic_id=7 if knowledge else None)
+    s.add(msg)
+    s.flush()
+    st = m.ChatStep(message_id=msg.id, round_id=1, user_id=UID, server_id=SID, problem_id=pid, course_id="C",
                     help_level=level, root_error_code=error, root_skill_code="C05.02.01",
-                    created_at=T0 + dt.timedelta(minutes=minutes))
+                    created_at=at)
     s.add(st)
     return st
 
@@ -54,6 +61,16 @@ def test_last_help_before_each_resubmission(database):
         assert rows["H0"]["resubmitted"] == {"n": 0, "d": 1} and rows["H0"]["nextPass"] is None and rows["all"]["medianTries"] == 2.0
         row = helpeffect.export_row(h1)
         assert row["version"] == helpeffect.VERSION and row["helpsBefore"] == 1 and row["nextSubmission"] == 101
+
+
+def test_knowledge_help_does_not_replace_homework_help_before_same_submission(database):
+    with db.session_scope() as s:
+        _step(s, 2, "H0")
+        _step(s, 4, "H3", knowledge=True)
+        _sub(s, 101, 10, "AC")
+    with db.session_scope() as s:
+        episode, = helpeffect.episodes(s, [UID], "C")
+        assert (episode.level, episode.helps_before, episode.next_pass) == ("H0", 0, True)
 
 
 def test_unknown_when_not_judged_or_not_labeled(database):

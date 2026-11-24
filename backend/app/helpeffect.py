@@ -1,12 +1,12 @@
 """每次帮助之后怎么样了：把作业引导里给出的帮助，和这道题后面的提交连起来。全用程序算，不用大模型。
 
-一次帮助：智能体在一道绑定了的题上给出帮助的那一步（chat_steps.help_level 是 H0～H3）。
+一次帮助：智能体在作业题会话里给出帮助的那一步（chat_steps.help_level 是 H0～H3）。
 H0 反问，H1 指出位置，H2 讲原理，H3 给示例代码。
 
 只算“再交之前的最后一次帮助”：两次提交之间给了好几次帮助，算最后那一次，前面的次数记在 helpsBefore 里
 （这样每次再交只对应一次帮助，不重复算）。还没再交的，也是最后一次帮助。
 
-指标（版本 help-next-2，研究导出里同名），按帮助级别分开：
+指标（版本 help-next-3，研究导出里同名），按帮助级别分开：
 - 再交了：帮助之后这道题又交过 / 帮助的次数
 - 下一次就通过：下一次提交通过 / 再交了、下一次已经评测完的次数
 - 四类结局的分母是已评测的下一次提交。尚未再交、仍在评测另列。
@@ -31,7 +31,7 @@ from . import changes
 from . import models as m
 from .taxonomy import kp_of_skill
 
-VERSION = "help-next-2"
+VERSION = "help-next-3"
 LEVELS = ("H0", "H1", "H2", "H3")
 LEVEL_NAMES = {"H0": "反问", "H1": "指出位置", "H2": "讲原理", "H3": "给示例代码"}
 _SKIP = {"PENDING", "UNKNOWN", ""}
@@ -70,8 +70,10 @@ def episodes(s: Session, user_ids: list[str], course: str | None = None,
     """这些学生在作业引导里得到的每一次“再交之前的最后一次帮助”和之后的结果。problems：只看这些题（班上布置的）。"""
     if not user_ids:
         return []
-    q = select(m.ChatStep).where(m.ChatStep.user_id.in_(user_ids), m.ChatStep.help_level.in_(LEVELS),
-                                 m.ChatStep.problem_id.is_not(None), m.ChatStep.end_reason != m.REFLECT_END)
+    q = select(m.ChatStep).join(m.ChatMessage, m.ChatMessage.id == m.ChatStep.message_id).where(
+        m.ChatStep.user_id.in_(user_ids), m.ChatStep.help_level.in_(LEVELS), m.ChatStep.end_reason != m.REFLECT_END,
+        m.ChatMessage.topic_id.is_(None), m.ChatMessage.server_id == m.ChatStep.server_id,
+        m.ChatMessage.problem_id == m.ChatStep.problem_id)
     if course is not None:
         q = q.where(m.ChatStep.course_id == course)
     groups: dict[tuple[str, int, int], list[m.ChatStep]] = defaultdict(list)

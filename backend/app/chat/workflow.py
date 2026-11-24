@@ -87,10 +87,21 @@ def message_text(msg: m.ChatMessage) -> str:
     return "\n".join(b.get("text", "") for b in (msg.content or {}).get("blocks", []) if b.get("t") == "p")
 
 
-def open_round(s: Session, user_id: str, course: str | None = None) -> m.ChatRound | None:
+def conversation_key(thread: tuple[int, int] | None, topic: int | None = None) -> str:
+    if topic is not None:
+        return f"t{topic}"
+    if thread is not None:
+        return catalog.problem_key(*thread)
+    return "general"
+
+
+def open_round(s: Session, user_id: str, course: str | None = None,
+               conversation: str | None = None) -> m.ChatRound | None:
     q = select(m.ChatRound).where(m.ChatRound.user_id == user_id, m.ChatRound.status == "open")
     if course is not None:
         q = q.where(m.ChatRound.course == course)  # 两门课的回合各算各的
+    if conversation is not None:
+        q = q.where(m.ChatRound.conversation_key == conversation)
     return s.scalars(q.order_by(m.ChatRound.id.desc())).first()
 
 
@@ -103,11 +114,11 @@ def close_round(s: Session, rnd: m.ChatRound, reason: str, at: dt.datetime) -> N
 
 def after_pass(s: Session, sub: m.Submission, now: dt.datetime | None = None) -> None:
     at = sub.submit_time or now or db.now()
-    rnd = s.scalars(select(m.ChatRound).where(
+    rounds = s.scalars(select(m.ChatRound).where(
         m.ChatRound.user_id == sub.user_id, m.ChatRound.server_id == sub.server_id,
         m.ChatRound.problem_id == sub.problem_id, m.ChatRound.status == "open",
-        m.ChatRound.started_at <= at).order_by(m.ChatRound.id.desc())).first()
-    if rnd is not None:
+        m.ChatRound.started_at <= at))
+    for rnd in rounds:
         close_round(s, rnd, "通过", at)
 
 
@@ -122,7 +133,7 @@ def refresh_rounds(s: Session, user_id: str, now: dt.datetime | None = None) -> 
                 m.Submission.submit_time >= rnd.started_at, m.Submission.submit_time <= now,
             ).order_by(m.Submission.submission_id)).first()
             if ac is not None:
-                after_pass(s, ac, now)
+                close_round(s, rnd, "通过", ac.submit_time)
                 continue
         if now - rnd.last_message_at > dt.timedelta(minutes=config.CHAT["round_timeout_minutes"]):
             close_round(s, rnd, "超时", rnd.last_message_at)
@@ -144,8 +155,8 @@ def close_stale_rounds(s: Session, now: dt.datetime | None = None) -> int:
 
 
 def _round_for(s: Session, user_id: str, key: tuple[int, int] | None, now: dt.datetime,
-               course: str = "C") -> m.ChatRound:
-    rnd = open_round(s, user_id, course)
+               course: str, conversation: str) -> m.ChatRound:
+    rnd = open_round(s, user_id, course, conversation)
     current = (rnd.server_id, rnd.problem_id) if rnd is not None and rnd.problem_id is not None else None
     if rnd is not None and current != key:
         if current is None and key is not None and rnd.help_count == 0:
@@ -155,7 +166,7 @@ def _round_for(s: Session, user_id: str, key: tuple[int, int] | None, now: dt.da
         rnd = None
     if rnd is None:
         rnd = m.ChatRound(user_id=user_id, server_id=key[0] if key else None, problem_id=key[1] if key else None,
-                          course=course, started_at=now, last_message_at=now)
+                          course=course, conversation_key=conversation, started_at=now, last_message_at=now)
         s.add(rnd)
         s.flush()
     return rnd
@@ -179,11 +190,12 @@ def _reflect_target(s: Session, user_id: str, thread: tuple[int, int] | None, la
 def _reflect_round(s: Session, user_id: str, thread: tuple[int, int], now: dt.datetime, course: str,
                    summary_msg: m.ChatMessage, facts) -> m.ChatRound:
     """回顾单独一个回合：挂到这道题前面没过时的技能和错误上；总结那条消息也放进来，评估能看到问的是什么。"""
-    rnd = open_round(s, user_id, course)
+    conversation = conversation_key(thread)
+    rnd = open_round(s, user_id, course, conversation)
     if rnd is not None:
-        same = (rnd.server_id, rnd.problem_id) == thread
-        close_round(s, rnd, "通过" if same else "换题", now)
+        close_round(s, rnd, "通过", now)
     rnd = m.ChatRound(user_id=user_id, server_id=thread[0], problem_id=thread[1], course=course,
+                      conversation_key=conversation,
                       started_at=now, last_message_at=now,
                       skill_code=facts.skill if facts else "", error_code=facts.error if facts else "",
                       submission_id=facts.ac.submission_id if facts else None)
@@ -449,7 +461,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         rnd = _reflect_round(s, user_id, thread, now, course, reflect_on, reflect)
         awaiting = True   # 他在回答“当时卡住的关键是什么”
     else:
-        rnd = _round_for(s, user_id, key, now, course)
+        rnd = _round_for(s, user_id, key, now, course, conversation_key(thread, topic))
     awaiting = awaiting or rnd.recall_stage in ("asked", "blanked")  # 让他回忆时也在等他回答
     # 解题流程图（chat/plan.py）：上一条带着的状态；他贴了代码、之后又交过，就不接着走流程图了
     plan_state = None
