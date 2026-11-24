@@ -3,8 +3,7 @@
 以前直接给一段示例代码（帮助级别最高的那种），学生没机会自己想。现在：
 1. 流程图（flow 块）：3～6 步，每步一个标题、一句话说要做什么、这一步最关键的知识点。不写代码。
    步骤由大模型按题面分（程序核对步数、长度、不能有代码和测试数据、知识点必须是这门课的），按（服务器, 题目）
-   存一份（problem_plans），所有学生共用，题面或题目标注变了才重新生成。后台空闲时给作业里的题提前做好
-   （prepare_assigned），学生来问时一般已经有了；还没有就当场生成一次。
+   存一份（problem_plans），所有学生共用。学生实际问到时，才为还没有缓存或材料发生变化的题生成步骤。
    大模型给不出合格的步骤（或者没配大模型）就不出流程图，按平常的引导走：按技能拼出来的步骤会误导，不用。
 2. 学生选卡在哪几步（可多选），或者“都不会”：从选中的第一步开始。每一回合只讲一步：点出关键知识点，
    再问一个让他自己说出这一步怎么做的问题；答上了换下一步，没答上就讲得更具体一点，两次还没答上讲清楚原理再往下走。
@@ -22,7 +21,7 @@ import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import config, db, llm, pdftext
@@ -35,7 +34,7 @@ VERSION = "plan-1"
 MIN_STEPS, MAX_STEPS = 3, 6
 _ASK = re.compile(r"(不会|不懂|怎么做|怎么写|咋做|咋写|没思路|没有思路|无从下手|从哪|不知道.{0,6}(做|写|开始)|毫无头绪|一点.{0,2}(不会|不懂)|帮我.{0,4}(做|写))")
 _ALL = re.compile(r"(都不会|全都不会|全不会|每一步都不会|都不懂|全部都不|一步都不|都没思路|全部不会)")
-_CODE = re.compile(r"[;{}]|\b(printf|scanf|for|while|if|int|char|return)\s*[(\w]")
+_CODE = re.compile(r"[;{}]|\b(?:printf|scanf|for|while|if)\s*\(|\b(?:int|char|return)\s+[A-Za-z_0-9]", re.ASCII)
 
 
 def wants_plan(text: str, intent: str) -> bool:
@@ -80,15 +79,18 @@ def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests:
     names = [v for k, v in KNOWLEDGE_POINTS.items() if k.startswith(course)]
 
     def validate(d: dict) -> list[dict]:
-        steps = d.get("steps") or []
-        if not MIN_STEPS <= len(steps) <= MAX_STEPS:
+        steps = d.get("steps")
+        if not isinstance(steps, list) or not MIN_STEPS <= len(steps) <= MAX_STEPS:
             raise ValueError(f"要 {MIN_STEPS}～{MAX_STEPS} 步")
         out = []
         for st in steps:
+            if not isinstance(st, dict):
+                raise ValueError("每一步必须是包含 title、how、kp 的对象")
             title, how, kp = (str(st.get(k) or "").strip() for k in ("title", "how", "kp"))
             if not title or not how or len(title) > 12 or len(how) > 40:
                 raise ValueError("每步要有 title、how，而且不能太长")
-            if _CODE.search(title + how) or _leaks(title + how, tests):
+            content = title + "\n" + how
+            if _CODE.search(content) or _leaks(content, tests):
                 raise ValueError("不能写代码，也不能出现测试数据")
             out.append({"title": title, "how": how, "kp": kp if kp in names else ""})
         return out
@@ -99,11 +101,8 @@ def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests:
     pages = pdftext.guide_pages(document, statement)
     if not statement and not pages:
         return None
-    try:
-        return llm.call_json("plan_steps", course_prompt(_SYSTEM, course), user, validate, retries=1, max_tokens=500,
-                             pages=pages, text_fallback=False)
-    except llm.LLMUnavailable:
-        return None
+    return llm.call_json("plan_steps", course_prompt(_SYSTEM, course), user, validate, retries=0, max_tokens=500,
+                         pages=pages, text_fallback=False, non_thinking=True)
 
 
 def _key(s: Session, server_id: int, problem_id: int, statement: str, label: m.ProblemLabel | None):
@@ -118,64 +117,37 @@ def steps_for(s: Session, server_id: int, problem_id: int, statement: str, label
               course: str, tests: list[dict]) -> list[dict] | None:
     """这道题的解题步骤：大模型按题面（文字整理不出来的 PDF 题面看页面图）分好、存过且题面没变就直接用
     （所有学生共用）；没有就现在生成一次存起来。大模型给不出合格的步骤、或者没配大模型，返回 None（不出流程图）。
-    刚试过没成的一小时内不再试。"""
+    同一版材料的无效输出只记一次。连接或配额问题在学生后续实际提问时按冷却时间重试。"""
     h, visual, document = _key(s, server_id, problem_id, statement, label)
+    if s.get_bind().dialect.name == "postgresql":
+        # 同一道题同时被问时，只允许一个事务生产并保存共享步骤。
+        s.execute(select(func.pg_advisory_xact_lock(server_id, func.hashtext(f"problem_plan:{problem_id}"))))
     row = s.get(m.ProblemPlan, (server_id, problem_id))
     fresh = row is not None and row.content_hash == h and row.version == VERSION
     if fresh and row.source == "llm" and row.steps:
         return list(row.steps)
+    if fresh and row.source == "invalid":
+        return None
     if fresh and row.source == "failed" and db.as_utc(row.created_at) > db.now() - dt.timedelta(hours=1):
         return None
     if not (statement or visual) or not llm.available():
         return None
-    steps = _llm_steps(statement, label, course, tests, document)
+    try:
+        steps = _llm_steps(statement, label, course, tests, document)
+    except llm.LLMUnavailable as exc:
+        steps = None
+        source = "invalid" if exc.invalid else "failed"
+    else:
+        if not steps:  # 题面图片暂时不可用，尚未调用模型
+            return None
+        source = "llm"
     if row is None:
         row = m.ProblemPlan(server_id=server_id, problem_id=problem_id)
         s.add(row)
     row.steps, row.source, row.version, row.content_hash, row.created_at = (
-        steps or [], "llm" if steps else "failed", VERSION, h, db.now())
+        steps or [], source, VERSION, h, db.now())
     s.flush()
     return steps
-
-
-def _tests(s: Session, server_id: int, problem_id: int) -> list[dict]:
-    """这道题全部测试点的输入输出：只用来检查步骤里没有出现测试数据。"""
-    from ..xdoj.util import decode_bytes
-
-    out = []
-    for tc in s.scalars(select(m.Testcase).where(m.Testcase.server_id == server_id, m.Testcase.problem_id == problem_id)).all():
-        out.append({"standardInput": decode_bytes(tc.input_bytes, tc.input_encoding)[0] if tc.input_bytes is not None else None,
-                    "standardOutput": decode_bytes(tc.output_bytes, tc.output_encoding)[0] if tc.output_bytes is not None else None})
-    return out
-
-
-def prepare_assigned(s: Session, limit: int = 2) -> int:
-    """后台空闲时：给作业里的题提前做好解题步骤（每道题一次，题面变了才重做；最近布置的作业先做）。返回做了几道。"""
-    from .. import catalog
-    from ..labeling.labeler import current_problem_label
-
-    if not llm.available():
-        return 0
-    rows = s.execute(select(m.ContestProblem.server_id, m.ContestProblem.problem_id).join(
-        m.Contest, (m.Contest.server_id == m.ContestProblem.server_id) & (m.Contest.contest_id == m.ContestProblem.contest_id))
-        .order_by(m.Contest.end_time.desc())).all()
-    done = 0
-    for server_id, problem_id in dict.fromkeys(rows):
-        if done >= limit:
-            break
-        statement = pdftext.usable_text(s.get(m.ProblemText, (server_id, problem_id)))
-        label = current_problem_label(s, server_id, problem_id)
-        h, visual, _doc = _key(s, server_id, problem_id, statement, label)
-        if not statement and not visual:
-            continue
-        row = s.get(m.ProblemPlan, (server_id, problem_id))
-        if row is not None and row.content_hash == h and row.version == VERSION \
-                and (row.source == "llm" or db.as_utc(row.created_at) > db.now() - dt.timedelta(hours=1)):
-            continue
-        steps_for(s, server_id, problem_id, statement, label, catalog.server_course(s, server_id),
-                  _tests(s, server_id, problem_id))
-        done += 1
-    return done
 
 
 # ------------------------------------------------------------ 引导一步

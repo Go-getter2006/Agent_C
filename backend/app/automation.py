@@ -7,8 +7,7 @@
 - 智能体评估刚结束的回合的“理解”（assess.py）；
 - 作业里还没标注的题按 XDOJ 的标签兜底标上，以前没记上的“第一次通过”补记（掌握程度不再只剩失败）；
 - 以前的程序处理的 PDF 题面重新抽一遍，抽好了还没交给大模型整理的整理一遍（pdftext.py）；
-- 给最近来过、有到期复习的学生提前备好一道复习题（review.prepare_active），进“复习提升”就能做；
-- 给作业里的题提前做好解题步骤（chat/plan.py 的流程图，大模型按题面分，每道题一次，所有学生共用）。
+- 给最近来过、有到期复习的学生提前备好一道复习题（review.prepare_active），进“复习提升”就能做。
 
 每天夜里（graphmodel.nightly）：把没评完的回合评完、图模型全图更新、补记预测、重新学融合权重、
 跨课程联系自动补充、检验、采用或不用（cross.auto_links）。
@@ -26,8 +25,7 @@ from .chat import workflow
 log = logging.getLogger("automation")
 
 _last: dict[str, float] = {}
-EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0,
-         "plans": 60.0}   # 秒：多久看一次（空闲时主循环转得很快，不用每次都查）
+EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0}
 
 
 def _due(name: str) -> bool:
@@ -90,13 +88,4 @@ def idle_work() -> int:
         if redone:
             _last["pdftext"] = -1e9
         done += redone
-    if _due("plans"):
-        # 作业里的题提前做好解题步骤（每次两道；题面要先整理好）
-        from .chat import plan
-
-        with db.session_scope() as s, db.releasing(s):
-            planned = plan.prepare_assigned(s, limit=2)
-        if planned:
-            _last["plans"] = -1e9
-        done += planned
     return done

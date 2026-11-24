@@ -528,7 +528,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
             decision = Decision("R00", plan_step[2], "甲", "plan_step")
             flow = "plan_step"
         elif ctx.problem is not None and ctx.submission is None and plan_mod.wants_plan(prose, analysis.intent):
-            # 大模型按题面分好的步骤（后台一般已经做好）；给不出合格的就不出流程图，按平常的引导走
+            # 有缓存直接取，首次问到时生成；没有合格步骤就按平常的引导走
             steps = plan_mod.steps_for(s, ctx.problem.server_id, ctx.problem.problem_id, ctx.statement, ctx.plabel,
                                        course, list(ctx.all_tests))
             if steps:

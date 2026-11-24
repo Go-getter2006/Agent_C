@@ -1,11 +1,12 @@
 """还没做的题问“怎么做”：先给解题流程图，问卡在哪一步，再一步一步引导（app/chat/plan.py）。"""
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 from sqlalchemy import select
 
-from app import catalog, db, llm
+from app import automation, catalog, db, llm
 from app import models as m
 from app.chat import plan, workflow
 
@@ -104,36 +105,35 @@ def test_no_flowchart_without_model_made_steps(demo):
         assert s.get(m.ProblemPlan, key) is None
 
 
-def test_steps_are_prepared_in_the_background_once(demo):
-    """后台空闲时给作业里的题提前做好步骤：每道题一次，题面没变不重做；大模型没给出合格的，一小时内不再试。"""
+def test_idle_worker_does_not_spend_requests_on_unasked_plans(demo, monkeypatch):
+    monkeypatch.setattr(automation, "_due", lambda name: name == "plans")
     calls: list = []
-    llm.set_backend(_backend(calls))
-    try:
-        with db.session_scope() as s:
-            made = plan.prepare_assigned(s, limit=3)
-            rows = s.scalars(select(m.ProblemPlan)).all()
-            assert made == 3 and len(rows) == 3 and all(r.source == "llm" and _same(r.steps) for r in rows)
-            before = calls.count("steps")
-            plan.prepare_assigned(s, limit=3)             # 下一批：前面做过的不再做
-            again = s.scalars(select(m.ProblemPlan)).all()
-            assert len(again) == 6 and calls.count("steps") == before + 3
-    finally:
-        llm.set_backend(None)
+    monkeypatch.setattr(llm, "_backend", _backend(calls))
+    assert automation.idle_work() == 0
+    with db.session_scope() as s:
+        assert not s.scalars(select(m.ProblemPlan)).all()
+    assert calls == []
+
+
+def test_invalid_steps_are_attempted_once_per_problem_statement(demo, monkeypatch):
+    calls = []
 
     def broken(messages, *_a):
+        calls.append(messages)
         return json.dumps({"steps": [{"title": "写代码", "how": "for (i = 0; i < n; i++)", "kp": ""}] * 3}), 10, 10
 
-    llm.set_backend(broken)
-    try:
-        with db.session_scope() as s:
-            row = s.scalars(select(m.ProblemPlan)).first()
-            row.content_hash = "changed"                  # 题面变了：要重做
-            key = (row.server_id, row.problem_id)
-            assert plan.steps_for(s, *key, "题面", None, "C", []) is None   # 步骤里有代码：不合格
-            assert s.get(m.ProblemPlan, key).source == "failed"
-            assert plan.steps_for(s, *key, "题面", None, "C", []) is None   # 一小时内不再试
-    finally:
-        llm.set_backend(None)
+    monkeypatch.setattr(llm, "_backend", broken)
+    with db.session_scope() as s:
+        key = _unsubmitted(s)
+        assert plan.steps_for(s, *key, "题面", None, "C", []) is None
+        row = s.get(m.ProblemPlan, key)
+        assert row.source == "invalid"
+        row.created_at = db.now() - dt.timedelta(days=1)
+    with db.session_scope() as s:
+        assert plan.steps_for(s, *key, "题面", None, "C", []) is None
+        assert len(calls) == 1
+        assert plan.steps_for(s, *key, "更新后的题面", None, "C", []) is None
+        assert len(calls) == 2
 
 
 def test_all_steps_and_correct_answers_move_forward(demo):
