@@ -27,15 +27,20 @@ _WORDS = re.compile(r"[\u3400-\u9fff]+|%[a-z]+|[a-z_]\w*|[0-9]+(?:[.][0-9]+)+|&&
 _STOP = set("什么 怎么 如何 一下 是不是 为什么 这个 那个 有什么 给我 帮我 有哪些 是什么 和例 解释 区别 想问 能否 能不".split())
 _QUESTION_WORDS = re.compile(r"为什么|是什么|这是什么|怎么|如何|帮我|解释一下|请问")
 _FIG_NUMBER = re.compile(r"图(?:\d+(?:[.．-]\d+)*|[一二三四五六七八九十百]+)")
+_EXCERPT_INTRO = re.compile(r"(?:如下|见下)[：:]\s*$")
+
+
+def _compact(text):
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
 
 
 def _figure_number(text):
-    match = _FIG_NUMBER.match(re.sub(r"\s+", "", text))
+    match = _FIG_NUMBER.match(_compact(text))
     return match[0] if match else ""
 
 
 def _is_caption(text):
-    compact = re.sub(r"\s+", "", text)
+    compact = _compact(text)
     number = _figure_number(text)
     suffix = compact[len(number):]
     return bool(number and suffix and not re.search(r"[。！？：:]", suffix)
@@ -158,7 +163,7 @@ def _passages(s: Session, edition: m.TextbookEdition) -> tuple[list[Passage], Co
                 number = _figure_number(text)
                 earlier = [a["text"] for a in reversed(anchors[max(0, i - 4):i]) if a["text"] != text]
                 previous = next((value for value in earlier
-                                 if number in _FIG_NUMBER.findall(re.sub(r"\s+", "", value))), "")
+                                 if number in _FIG_NUMBER.findall(_compact(value))), "")
                 figure = anchor.get("figure", False)
                 if not figure and (anchor.get("wordFigure") or _is_caption(text)):
                     if i + 1 < len(anchors) and anchors[i + 1].get("figure") and anchors[i + 1]["text"] == text:
@@ -199,7 +204,7 @@ def retrieve(s: Session, course: str, question: str, history: list[tuple[str, st
                 groups[number] = groups[parent]
     passages, frequency = _passages(s, edition)
     weights = {term: math.log(1 + len(passages) / (1 + frequency[term])) for term in query | remembered}
-    requested_figures = set(_FIG_NUMBER.findall(re.sub(r"\s+", "", question)))
+    requested_figures = set(_FIG_NUMBER.findall(_compact(question)))
     ranked = []
     for passage in passages:
         if lookup and passage.reference["section"] not in groups:
@@ -336,20 +341,19 @@ def _ink_bounds(png: bytes, top: int, bottom: int):
 def _figure_frame(s, section, selected):
     anchors = section.anchors
     for i, caption in enumerate(anchors):
-        if caption["id"] != selected or not _figure_number(caption["text"]) or not caption["boxes"] or not i:
+        if caption["id"] != selected or not _figure_number(caption["text"]) or not caption["boxes"]:
             continue
-        previous = anchors[i - 1]
         page = caption["boxes"][0][0]
         if caption.get("figure"):
             parts = list(caption["boxes"])
-            if previous["text"] == caption["text"]:
-                parts.extend(b for b in previous["boxes"] if b[0] == page)
+            if i and anchors[i - 1]["text"] == caption["text"]:
+                parts.extend(b for b in anchors[i - 1]["boxes"] if b[0] == page)
             left, y = min(b[1] for b in parts), min(b[2] for b in parts)
             return [page, left, y, max(b[1] + b[3] for b in parts) - left, max(b[2] + b[4] for b in parts) - y]
         if not (caption.get("wordFigure") or _is_caption(caption["text"])):
             continue
         label = caption["boxes"]
-        if any(b[0] != page for b in label) or len(_FIG_NUMBER.findall(re.sub(r"\s+", "", caption["text"]))) != 1:
+        if any(b[0] != page for b in label) or len(_FIG_NUMBER.findall(_compact(caption["text"]))) != 1:
             continue
         info = section.pages[page]
         width, height = info["width"], info["height"]
@@ -385,11 +389,24 @@ def highlight(s, section, hit, figure_anchor=None):
     figure = hit.get("figure", False)
     boxes = hit["boxes"] if figure else _line_marks(hit["boxes"], section.pages)
     result = {"text": hit["text"], "figure": figure, "boxes": boxes}
-    if figure_anchor is not None or figure:
-        frame = _figure_frame(s, section, figure_anchor if figure_anchor is not None else hit["id"])
-        if frame and (figure or figure_anchor == hit["id"]):
+    if figure and figure_anchor is None:
+        figure_anchor = hit["id"]
+    frame = _figure_frame(s, section, figure_anchor) if figure_anchor is not None else None
+    if frame is None:
+        # 原稿中的明确图号是可核对的关联，也适用于当时没有存 figureAnchor 的旧回复。
+        numbers = set(_FIG_NUMBER.findall(_compact(hit["text"])))
+        if len(numbers) == 1:
+            candidates = [anchor for anchor in section.anchors if _figure_number(anchor["text"]) in numbers]
+            candidates.sort(key=lambda anchor: not anchor.get("figure", False))
+            for candidate in candidates:
+                if frame := _figure_frame(s, section, candidate["id"]):
+                    figure_anchor = candidate["id"]
+                    break
+    if frame:
+        result["figureAnchor"] = figure_anchor
+        if figure or figure_anchor == hit["id"]:
             result.update(figure=True, boxes=[frame])
-        elif frame:
+        else:
             result["frame"] = frame
     return result
 
@@ -413,8 +430,13 @@ def add_previews(s: Session, refs: list[dict]) -> None:
             frame = mark.get("frame")
             bounds = [*mark["boxes"], *([frame] if frame else [])]
             first, last = ref.get("excerpt", (hit["id"], hit["id"]))
-            if figure_id := ref.get("figureAnchor"):
+            if figure_id := mark.get("figureAnchor"):
+                ref["figureAnchor"] = figure_id
                 first, last = min(first, figure_id), max(last, figure_id)
+            if last == hit["id"] and _EXCERPT_INTRO.search(hit["text"]):
+                following = next((anchor for anchor in row.anchors if anchor["id"] > last and anchor["boxes"]), None)
+                if following is not None:
+                    last = following["id"]
             if first != last:
                 bounds.extend(b for anchor in row.anchors if first <= anchor["id"] <= last for b in anchor["boxes"])
             for page_index in range(min(b[0] for b in bounds), max(b[0] for b in bounds) + 1):

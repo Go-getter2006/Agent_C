@@ -19,7 +19,7 @@ SENTENCE = "An array index starts at zero."
 HEADINGS = ("1.1 Arrays", "1.1.1 Array index", "1.1.2 Array length")
 
 
-def test_figure_is_a_text_candidate_and_only_marked_when_selected(demo):
+def test_figure_matches_selected_id_or_an_exact_reference_in_the_text(demo):
     image = Image.new("L", (300, 240), 255)
     ImageDraw.Draw(image).rectangle((70, 110, 210, 145), outline=0)
     buf = io.BytesIO()
@@ -27,8 +27,10 @@ def test_figure_is_a_text_candidate_and_only_marked_when_selected(demo):
     marks = [[0, .1, .11, .04, .004], [0, .14, .1, .4, .04]]
     anchors = [
         {"id": 1, "text": "一个指针也能指向指针变量。", "boxes": marks},
-        {"id": 2, "text": "两个变量的指向关系如图一所示。", "boxes": [[0, .2, .36, .5, .04]]},
-        {"id": 3, "text": "图一 指向关系示意图", "boxes": [[0, .33, .65, .35, .04]]},
+        {"id": 2, "text": "两个变量的指向关系如图 ６．２１ 所示。", "boxes": [[0, .2, .36, .5, .04]]},
+        {"id": 3, "text": "图6.21 指向关系示意图", "boxes": [[0, .33, .65, .35, .04]]},
+        {"id": 4, "text": "指针的声明格式如下：", "boxes": [[0, .2, .8, .5, .04]]},
+        {"id": 5, "text": "<类型> *<指针变量名>", "boxes": [[0, .2, .86, .4, .045]]},
     ]
     with db.session_scope() as s:
         edition = m.TextbookEdition(title="测试", digest="figure-test")
@@ -47,12 +49,24 @@ def test_figure_is_a_text_candidate_and_only_marked_when_selected(demo):
         plain, illustrated = [textbook.citations(choices, [c])[0] for c in (
             choice, dict(choice, figureId="F1", excerpt=[1, 3]))]
         assert illustrated["excerpt"] == [1, 3]
-        textbook.add_previews(s, [plain, illustrated])
+        linked = {"edition": edition.id, "section": 1, "anchor": 2}
+        format_intro = {"edition": edition.id, "section": 1, "anchor": 4}
+        textbook.add_previews(s, [plain, illustrated, linked, format_intro])
         assert len(plain["preview"]["boxes"]) == 1 and "frame" not in plain["preview"]
         x, y, w, h = illustrated["preview"]["frame"]
         assert x < 70 / 300 < 210 / 300 < x + w and y < 110 / 240 < .69 < y + h
         top, bottom = illustrated["preview"]["crop"]
         assert 0 < top < .1 * 240 < .69 * 240 < bottom < 240
+        assert linked["figureAnchor"] == 3 and linked["preview"]["frame"] == [x, y, w, h]
+        assert linked["preview"]["crop"][1] >= bottom
+        assert format_intro["preview"]["crop"][1] >= .905 * 240
+        edition_id = edition.id
+
+    with TestClient(create_app()) as client:
+        assert client.post("/api/auth/login", json={"loginName": "2500000001", "password": "test-pass"}).status_code == 200
+        detail = client.get(f"/api/textbook/{edition_id}/sections/1", params={"anchor": 2})
+        assert detail.status_code == 200
+        assert detail.json()["highlight"]["frame"] == [0, x, y, w, h]
 
 
 def test_exercise_numbers_stay_in_the_exercise_section(monkeypatch, tmp_path):
