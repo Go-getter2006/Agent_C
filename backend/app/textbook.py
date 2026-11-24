@@ -268,26 +268,25 @@ def prompt(matches: dict) -> str:
 
 
 def citations(matches: dict, selected) -> list[dict]:
-    if not isinstance(selected, list) or len(selected) > 2:
-        raise ValueError("textbook 请选最有帮助的一到两处，无关时填 []")
+    if not isinstance(selected, list):
+        return []
     refs = {}
     for choice in selected:
         if not isinstance(choice, dict):
-            raise ValueError("每处教材引用要有 id、role 和 explanation")
+            continue
         key = str(choice.get("id", "")).strip(" []").upper()
         note = choice.get("explanation")
         role = choice.get("role")
         if key not in matches or role not in ("key", "example") or not isinstance(note, str) or not note.strip():
-            raise ValueError("请用本轮候选编号，标明 key 或 example，并用一句话解释这处原文")
+            continue
         origin = matches[key][1]
         refs[key] = {k: origin[k] for k in ("section", "anchor", "path", "edition")}
         refs[key].update(role=role, explanation=note.strip())
         fig = choice.get("figureId") or (key if matches[key][2] else None)
         if fig:
             fig = str(fig).strip(" []").upper()
-            if fig not in matches or not matches[fig][2] or matches[fig][1]["section"] != refs[key]["section"]:
-                raise ValueError("figureId 只能选同一小节中的候选图号")
-            refs[key]["figureAnchor"] = matches[fig][1]["anchor"]
+            if fig in matches and matches[fig][2] and matches[fig][1]["section"] == refs[key]["section"]:
+                refs[key]["figureAnchor"] = matches[fig][1]["anchor"]
         span = choice.get("excerpt")
         # 预览选择是附加字段，模型给错范围也能保留已经核实的原句与图。
         if isinstance(span, list) and len(span) == 2 and all(type(n) is int for n in span):
@@ -298,6 +297,8 @@ def citations(matches: dict, selected) -> list[dict]:
             if start <= min(marks) <= max(marks) <= end and 1 <= end - start + 1 <= len(shown) \
                     and all(i in shown for i in range(start, end + 1)):
                 refs[key]["excerpt"] = span
+        if len(refs) == 2:
+            break
     return list(refs.values())
 
 

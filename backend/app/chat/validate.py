@@ -116,15 +116,16 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
             problems.append("引用的代码太长")
 
     # 5 不能出现题号；提到以前的题必须带简述，并且必须是这个学生可见的题
-    if _PROBLEM_NO.search(text):
-        problems.append("出现了题号")
-    for title, brief in _TITLE.findall(text):
-        if title == current_title:
-            continue
-        if title not in visible_titles:
-            problems.append(f"提到了学生看不到的题「{title}」")
-        elif visible_titles[title] and not brief:
-            problems.append(f"提到「{title}」时没有带简述")
+    if not knowledge or current_title:
+        if _PROBLEM_NO.search(text):
+            problems.append("出现了题号")
+        for title, brief in _TITLE.findall(text):
+            if title == current_title:
+                continue
+            if title not in visible_titles:
+                problems.append(f"提到了学生看不到的题「{title}」")
+            elif visible_titles[title] and not brief:
+                problems.append(f"提到「{title}」时没有带简述")
 
     # 6 回复里提到代码时必须附代码块
     if _CODE_MENTION.search(text) and draft.quote is None and not draft.code and source:
@@ -133,14 +134,14 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
 
     # 7 长度：一般不超过 150 字（代码块不计），概念讲解不超过 300 字
     limit_chars = config.CHAT["concept_max_chars"] if kind == "concept" else config.CHAT["reply_max_chars"]
-    if visible_chars(text) > limit_chars:
+    if not knowledge and visible_chars(text) > limit_chars:
         problems.append(f"太长了，最多 {limit_chars} 字")
-    if not text:
+    if not text and not (knowledge and draft.code):
         problems.append("回复是空的")
 
     # 8 不能出现内部用语，不用 emoji
     if _INTERNAL.search("\n".join([text, *draft.flow_steps, explanations])):
         problems.append("出现了内部用语")
-    if EMOJI.search(everything):
+    if not knowledge and EMOJI.search(everything):
         problems.append("用了 emoji")
     return problems

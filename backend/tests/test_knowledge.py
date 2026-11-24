@@ -68,6 +68,7 @@ def test_standalone_array_question_accepts_a_multiline_example(client, monkeypat
     assert result.status_code == 200
     assert result.json()["messages"][-1]["blocks"][-1]["lines"] == code.splitlines()
     assert len(calls) == 1
+    assert calls[0][2] is None
 
 
 def test_provider_balance_error_is_reported_without_retry(client, monkeypatch):
@@ -87,6 +88,19 @@ def test_provider_balance_error_is_reported_without_retry(client, monkeypatch):
     assert "额度不足" in result.json()["error"]
     assert len(calls) == 1
     assert calls[0]["thinking"] == {"type": "disabled"}
+    assert "max_tokens" not in calls[0]
+
+
+def test_knowledge_does_not_reject_long_explanations_or_multiple_code_examples(client, monkeypatch):
+    login(client)
+    intro = "用两个下标分别表示行和列。" * 28
+    body = intro + "\n```c\nint a[2][3];\n```\n另一个例子如下。\n```c\nint b[3][5];\n```"
+    monkeypatch.setattr(llm, "_backend", lambda *_: (json.dumps({"before": body}), 10, 10))
+    result = client.post("/api/threads/new/messages", json={"text": "二维数组可以举两个例子吗"})
+    assert result.status_code == 200
+    blocks = result.json()["messages"][-1]["blocks"]
+    assert blocks[0]["text"] == intro
+    assert [b["lines"] for b in blocks if b["t"] == "code"] == [["int a[2][3];"], ["int b[3][5];"]]
 
 
 def test_homework_list_reports_own_thread_even_without_submission(client):
