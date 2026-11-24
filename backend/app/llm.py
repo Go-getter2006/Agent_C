@@ -57,10 +57,12 @@ def available() -> bool:
     return _backend is not None or bool(config.DEEPSEEK_API_KEY)
 
 
-def _http_backend(messages, json_mode: bool, max_tokens: int, temperature: float, *, model: str | None = None,
+def _http_backend(messages, json_mode: bool, max_tokens: int | None, temperature: float, *, model: str | None = None,
                   non_thinking: bool = False):
     payload = {"model": model or config.DEEPSEEK_MODEL, "messages": messages, "temperature": temperature,
-               "max_tokens": max_tokens, "stream": False}
+               "stream": False}
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
     if non_thinking and config.OFFICIAL_DEEPSEEK and payload["model"] == config.DEEPSEEK_FLASH:
@@ -74,8 +76,9 @@ def _http_backend(messages, json_mode: bool, max_tokens: int, temperature: float
         raise err
     data = resp.json()
     usage = data.get("usage") or {}
-    return (data["choices"][0]["message"]["content"] or "",
-            int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)))
+    choice = data["choices"][0]
+    return (choice["message"]["content"] or "", int(usage.get("prompt_tokens", 0)),
+            int(usage.get("completion_tokens", 0)), choice.get("finish_reason"))
 
 
 _pending: list[dict] = []
@@ -103,10 +106,10 @@ def flush_records(s) -> int:
 
 
 def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict], T],
-              retries: int = 1, max_tokens: int = 800, *, pages: list[tuple[int, bytes]] | None = None,
+              retries: int = 1, max_tokens: int | None = 800, *, pages: list[tuple[int, bytes]] | None = None,
               text_fallback: bool = True, images: list[tuple[str, bytes]] | None = None,
               document: str = "", non_thinking: bool = False) -> T:
-    """要求输出 JSON，并用 validate 校验（不合格就抛 ValueError）。不合格时带着原因重试。"""
+    """要求输出 JSON 并校验。max_tokens 为 None 时使用服务端默认值。"""
     if not available():
         raise LLMUnavailable("没有配置大模型")
     if "json" not in system.lower():
@@ -133,6 +136,9 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
     return _json_request(prompt_id, system, user, validate, retries, max_tokens, config.DEEPSEEK_MODEL, non_thinking)
 
 
+_JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```\Z", re.IGNORECASE)
+
+
 def _json_request(prompt_id, system, user, validate, retries, max_tokens, model, non_thinking=False):
     hook = before_call.get()
     if hook is not None:
@@ -141,16 +147,27 @@ def _json_request(prompt_id, system, user, validate, retries, max_tokens, model,
     started, tin, tout, last, invalid = time.monotonic(), 0, 0, "", False
     for attempt in range(1, retries + 2):
         try:
+            finish_reason = None
             if _backend:
                 text, a, b = _backend(messages, True, max_tokens, 0.0)
             else:
-                text, a, b = _http_backend(messages, True, max_tokens, 0.0, model=model, non_thinking=non_thinking)
+                text, a, b, finish_reason = _http_backend(messages, True, max_tokens, 0.0, model=model,
+                                                          non_thinking=non_thinking)
             tin, tout = tin + a, tout + b
-            data = json.loads(text)
+            text = text.strip()
+            match = _JSON_FENCE.fullmatch(text)
+            try:
+                data = json.loads(match[1] if match else text)
+            except json.JSONDecodeError as exc:
+                if finish_reason == "length":
+                    raise ValueError("达到模型输出或上下文上限，JSON 未完整返回") from exc
+                if not text:
+                    raise ValueError("模型没有返回正文") from exc
+                raise ValueError("模型正文不是有效 JSON") from exc
             if not isinstance(data, dict):
                 raise ValueError("输出不是 JSON 对象")
             result = validate(data)
-            _record(prompt_id, True, attempt, started, tin, tout, model=model)
+            _record(prompt_id, True, attempt, started, tin, tout, last, model=model)
             last_model.set(model)
             return result
         except ValueError as exc:
@@ -160,6 +177,7 @@ def _json_request(prompt_id, system, user, validate, retries, max_tokens, model,
             if exc.status is None or exc.status < 500 or attempt > retries or isinstance(user, list):
                 _record(prompt_id, False, attempt, started, tin, tout, str(exc), model=model)
                 raise
+            last, invalid = str(exc), False
             time.sleep(0.5 * attempt)
         except Exception as exc:  # 网络、接口错误
             last, invalid = f"{type(exc).__name__}", False

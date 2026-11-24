@@ -6,7 +6,7 @@ import json
 
 from sqlalchemy import select
 
-from app import automation, catalog, db, llm
+from app import automation, catalog, config, db, llm
 from app import models as m
 from app.chat import plan, workflow
 
@@ -134,6 +134,31 @@ def test_invalid_steps_are_attempted_once_per_problem_statement(demo, monkeypatc
         assert len(calls) == 1
         assert plan.steps_for(s, *key, "更新后的题面", None, "C", []) is None
         assert len(calls) == 2
+
+
+def test_plan_accepts_two_useful_steps_and_mentions_of_c_syntax(demo, monkeypatch):
+    steps = [
+        {"title": "读入数据", "how": "用 scanf 读取数字和需要比较的范围", "kp": ""},
+        {"title": "检查哪些数字满足条件",
+         "how": "用 for 循环逐个检查这些数字，每次判断它是否满足给出的条件，把满足条件的数字累计起来，最后根据题目要求输出。",
+         "kp": ""},
+    ]
+    payloads = []
+
+    def reply(_url, *, json, **_):
+        payloads.append(json)
+        return llm.httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    content = "```json\n" + json.dumps({"steps": steps}, ensure_ascii=False) + "\n```"
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "test-no-network")
+    monkeypatch.setattr(config, "OFFICIAL_DEEPSEEK", True)
+    monkeypatch.setattr(config, "DEEPSEEK_MODEL", "deepseek-flash")
+    monkeypatch.setattr(llm.httpx, "post", reply)
+    with db.session_scope() as s:
+        key = _unsubmitted(s)
+        assert plan.steps_for(s, *key, "题面", None, "C", []) == steps
+    assert len(payloads) == 1 and "max_tokens" not in payloads[0]
+    assert payloads[0]["thinking"] == {"type": "disabled"}
 
 
 def test_all_steps_and_correct_answers_move_forward(demo):

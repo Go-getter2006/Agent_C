@@ -16,7 +16,8 @@ cli = typer.Typer(add_completion=False, help="程序设计智能体：后台命�
 
 
 @cli.command("llm-usage")
-def llm_usage(day: str = typer.Argument("", help="北京时间，YYYY-MM-DD，默认今天")) -> None:
+def llm_usage(day: str = typer.Argument("", help="北京时间，YYYY-MM-DD，默认今天"),
+              purpose: str = typer.Option("", help="只查一个用途，例如 plan_steps，并输出失败原因")) -> None:
     """按用途汇总当天记录到数据库的大模型请求、重试、token 与估算费用。"""
     try:
         date = dt.date.fromisoformat(day) if day else db.now().astimezone(db.BEIJING).date()
@@ -25,6 +26,9 @@ def llm_usage(day: str = typer.Argument("", help="北京时间，YYYY-MM-DD，�
     start = dt.datetime.combine(date, dt.time.min, tzinfo=db.BEIJING).astimezone(db.UTC)
     end = start + dt.timedelta(days=1)
     call = m.LlmCall
+    conditions = [call.ts >= start, call.ts < end]
+    if purpose:
+        conditions.append(call.prompt_id == purpose)
     statement = select(
         call.prompt_id.label("purpose"), call.model,
         func.count(call.id).label("records"),
@@ -34,10 +38,17 @@ def llm_usage(day: str = typer.Argument("", help="北京时间，YYYY-MM-DD，�
         func.sum(call.tokens_in).label("input_tokens"),
         func.sum(call.tokens_out).label("output_tokens"),
         func.sum(call.cost_yuan).label("estimated_cny"),
-    ).where(call.ts >= start, call.ts < end).group_by(call.prompt_id, call.model).order_by(func.sum(call.attempts).desc())
+    ).where(*conditions).group_by(call.prompt_id, call.model).order_by(func.sum(call.attempts).desc())
     with db.session_scope() as s:
         rows = [dict(row, estimated_cny=round(row["estimated_cny"], 4)) for row in s.execute(statement).mappings()]
-    typer.echo(json.dumps({"date": date.isoformat(), "usage": rows}, ensure_ascii=False, indent=2))
+        result = {"date": date.isoformat(), "usage": rows}
+        if purpose:
+            reasons = select(call.ok.label("eventually_ok"), call.error.label("reason"), func.count().label("records")
+                             ).where(*conditions, (call.attempts > 1) | call.ok.is_(False)
+                                     ).group_by(call.ok, call.error).order_by(func.count().desc())
+            result["errors"] = [dict(row, reason=row["reason"] or "旧记录未保存原因")
+                                for row in s.execute(reasons).mappings()]
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def _logging(quiet_requests: bool = False) -> None:

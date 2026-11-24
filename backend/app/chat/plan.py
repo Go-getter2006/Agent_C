@@ -1,8 +1,8 @@
 """还没做的题，学生说“不会”“怎么做”：先给解题流程图，问他卡在哪一步，再从那一步一步一步引导。
 
 以前直接给一段示例代码（帮助级别最高的那种），学生没机会自己想。现在：
-1. 流程图（flow 块）：3～6 步，每步一个标题、一句话说要做什么、这一步最关键的知识点。不写代码。
-   步骤由大模型按题面分（程序核对步数、长度、不能有代码和测试数据、知识点必须是这门课的），按（服务器, 题目）
+1. 流程图（flow 块）：2～6 步，每步一个标题、一句话说要做什么、这一步最关键的知识点。不写代码。
+   步骤由大模型按题面分（程序核对步数、不能有代码和测试数据、知识点必须是这门课的），按（服务器, 题目）
    存一份（problem_plans），所有学生共用。学生实际问到时，才为还没有缓存或材料发生变化的题生成步骤。
    大模型给不出合格的步骤（或者没配大模型）就不出流程图，按平常的引导走：按技能拼出来的步骤会误导，不用。
 2. 学生选卡在哪几步（可多选），或者“都不会”：从选中的第一步开始。每一回合只讲一步：点出关键知识点，
@@ -31,7 +31,7 @@ from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, skill_name
 log = logging.getLogger("chat.plan")
 
 VERSION = "plan-1"
-MIN_STEPS, MAX_STEPS = 3, 6
+MIN_STEPS, MAX_STEPS = 2, 6
 _ASK = re.compile(r"(不会|不懂|怎么做|怎么写|咋做|咋写|没思路|没有思路|无从下手|从哪|不知道.{0,6}(做|写|开始)|毫无头绪|一点.{0,2}(不会|不懂)|帮我.{0,4}(做|写))")
 _ALL = re.compile(r"(都不会|全都不会|全不会|每一步都不会|都不懂|全部都不|一步都不|都没思路|全部不会)")
 _CODE = re.compile(r"[;{}]|\b(?:printf|scanf|for|while|if)\s*\(|\b(?:int|char|return)\s+[A-Za-z_0-9]", re.ASCII)
@@ -65,12 +65,12 @@ def _hash(statement: str, label: m.ProblemLabel | None, visual_key: str = "") ->
 
 
 _SYSTEM = """你是 C 语言课程的助教。一名学生还没开始做下面这道题，不知道从哪下手。
-请把解题过程分成 3～6 步，像流程图一样从上到下。每一步：
-- title：不超过 10 个字的动宾短语（如“读入 n 和成绩”）；
-- how：一句话说这一步要做什么，不超过 30 个字；
-- kp：这一步最关键的知识点，从给出的知识点表里选一个名称照抄。
-不要写代码，不要把完整解法讲透（关键的想法点到为止，留给学生自己想），不要提测试数据和具体的输入输出。
-只输出 JSON：{"steps":[{"title":"…","how":"…","kp":"…"}]}"""
+请把解题过程分成 2～6 个有实际区别的步骤，按执行顺序列出。简单题可以只给两步。
+每步的 title 用短语写目标，how 用一句话告诉学生该想什么，kp 从给出的知识点名称里选一个，找不到可填空字符串。
+可以提到 for 循环等语法名。用自然语言描述，避免代码、完整解法和具体测试数据，用“待比较的数”等名称描述变量。
+只输出一个 JSON 对象，结构示例如下。步骤内容要针对本题。
+{"steps":[{"title":"整理输入","how":"区分要处理的量和最后要给出的结果","kp":""},
+{"title":"找出判断条件","how":"考虑每一种情况分别应该得到什么结果","kp":""}]}"""
 
 
 def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests: list[dict], document=None) -> list[dict] | None:
@@ -86,12 +86,16 @@ def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests:
         for st in steps:
             if not isinstance(st, dict):
                 raise ValueError("每一步必须是包含 title、how、kp 的对象")
-            title, how, kp = (str(st.get(k) or "").strip() for k in ("title", "how", "kp"))
-            if not title or not how or len(title) > 12 or len(how) > 40:
-                raise ValueError("每步要有 title、how，而且不能太长")
+            title, how, kp = (st.get(k) for k in ("title", "how", "kp"))
+            if not isinstance(title, str) or not title.strip() or not isinstance(how, str) or not how.strip():
+                raise ValueError("每步要有非空的文字标题和说明")
+            title, how = title.strip(), how.strip()
+            kp = kp.strip() if isinstance(kp, str) else ""
             content = title + "\n" + how
-            if _CODE.search(content) or _leaks(content, tests):
-                raise ValueError("不能写代码，也不能出现测试数据")
+            if _CODE.search(content):
+                raise ValueError("步骤包含代码语句")
+            if _leaks(content, tests):
+                raise ValueError("步骤包含隐藏测试数据")
             out.append({"title": title, "how": how, "kp": kp if kp in names else ""})
         return out
 
@@ -101,7 +105,7 @@ def _llm_steps(statement: str, label: m.ProblemLabel | None, course: str, tests:
     pages = pdftext.guide_pages(document, statement)
     if not statement and not pages:
         return None
-    return llm.call_json("plan_steps", course_prompt(_SYSTEM, course), user, validate, retries=0, max_tokens=500,
+    return llm.call_json("plan_steps", course_prompt(_SYSTEM, course), user, validate, retries=0, max_tokens=None,
                          pages=pages, text_fallback=False, non_thinking=True)
 
 
@@ -223,8 +227,8 @@ def guide(steps: list[dict], i: int, tries: int, said: str, statement: str, cour
             + ("\n【最近的对话】\n" + recent if recent else "")
             + ("\n【他刚才说的】\n" + llm.strip_identity(said, *who) if said else ""))
     try:
-        return llm.call_json("plan_guide", course_prompt(_GUIDE, course), user, validate, retries=1, max_tokens=300,
-                             pages=pdftext.guide_pages(document, statement, said)), "llm"
+        return llm.call_json("plan_guide", course_prompt(_GUIDE, course), user, validate, retries=1, max_tokens=None,
+                             pages=pdftext.guide_pages(document, statement, said), non_thinking=True), "llm"
     except llm.LLMUnavailable:
         return fallback, "template"
 

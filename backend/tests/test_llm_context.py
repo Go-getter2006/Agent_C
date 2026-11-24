@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 import random
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app import db, llm, quizgen
+from app import config, db, llm, quizgen
 from app import models as m
 from app.assess import Material, dialogue
 from app.chat import retro, workflow
@@ -22,6 +23,23 @@ from app.taxonomy import error_name
 
 UID = "2500000001"
 NAME = "林晓"
+
+
+def test_gateway_preserves_the_reason_when_retry_returns_valid_json(database, monkeypatch):
+    responses = iter([
+        httpx.Response(200, json={"choices": [{"finish_reason": "length", "message": {"content": ""}}],
+                                 "usage": {"prompt_tokens": 10, "completion_tokens": 500}}),
+        httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": '{"answer":1}'}}],
+                                 "usage": {"prompt_tokens": 20, "completion_tokens": 5}}),
+    ])
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "test-no-network")
+    monkeypatch.setattr(llm.httpx, "post", lambda *_args, **_kwargs: next(responses))
+    assert llm.call_json("test_truncated_json", "给出 JSON", "问题", lambda d: d["answer"]) == 1
+    with db.session_scope() as s:
+        llm.flush_records(s)
+        row = s.scalars(select(m.LlmCall).where(m.LlmCall.prompt_id == "test_truncated_json")).one()
+        assert row.ok and row.attempts == 2 and row.tokens_out == 505
+        assert "达到模型输出或上下文上限" in row.error
 
 
 def _capture(seen: dict, replies: list[tuple[str, dict]]):
