@@ -113,3 +113,8 @@ export function clearDrafts(): void {
 const scrolls = new Map<string, number>();
 export const saveScroll = (thread: string, top: number) => scrolls.set(`${scope}:${thread}`, top);
 export const readScroll = (thread: string): number | null => scrolls.get(`${scope}:${thread}`) ?? null;
+
+export function forgetThread(thread: string): void {
+  write(`draft:${thread}`, null);
+  scrolls.delete(`${scope}:${thread}`);
+}

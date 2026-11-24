@@ -2070,6 +2070,10 @@ button.flow-card:focus-visible {
 .topic-item:hover { background: var(--surface-3); }
 .topic-item[aria-current="true"] { background: var(--surface); border-color: var(--line); box-shadow: inset 3px 0 0 var(--select), var(--shadow-card); }
 .topic-item:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.topic-row { position: relative; }
+.topic-row .topic-item { padding-inline-end: 52px; overflow-wrap: anywhere; }
+.topic-delete { position: absolute; inset-inline-end: 6px; top: 50%; transform: translateY(-50%); }
+.topic-delete:disabled { opacity: .45; }
 
 /* 输入框上面：这条消息带着什么一起问 */
 .composer-context { display: flex; max-width: 780px; margin: 0 auto var(--sp-6); }

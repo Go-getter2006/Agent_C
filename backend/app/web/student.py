@@ -16,7 +16,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .. import accounts, catalog, changes, config, db, llm, pdftext, progress, quiz, review, textbook
@@ -424,6 +424,23 @@ def topics(user: m.User = Depends(student), s: Session = Depends(get_session)) -
     return {"topics": out}
 
 
+@router.delete("/topics/{key}")
+def delete_topic(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
+    if key != "general" and not key.startswith("t"):
+        raise HTTPException(status_code=404, detail="没有这个问答。")
+    db.lock_student(s, user.student_id)
+    topic = _topic(s, user, key)
+    workflow.delete_knowledge_thread(s, user.student_id, user.course, topic)
+    if topic is not None:
+        s.delete(s.get(m.ChatTopic, topic))
+    s.execute(delete(m.UiEvent).where(
+        m.UiEvent.user_id == user.student_id, m.UiEvent.course == user.course,
+        m.UiEvent.target == (f"t{topic}" if topic is not None else "general"),
+        m.UiEvent.kind.in_(("open_knowledge", "copy_code", "help_think", "help_hint", "help_tell"))))
+    s.flush()
+    return topics(user, s)
+
+
 @router.get("/threads/{key}")
 def thread(key: str, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
@@ -437,7 +454,6 @@ def thread(key: str, user: m.User = Depends(student), s: Session = Depends(get_s
 @router.post("/threads/{key}/messages")
 def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     th = _thread(s, user, key)
-    topic = _topic(s, user, key)
     knowledge = _knowledge(key)
     if body.submissionKey:
         _own_submission(s, user, body.submissionKey)
@@ -447,6 +463,8 @@ def send(key: str, body: SendBody, user: m.User = Depends(student), s: Session =
         pin = (info.server_id, info.problem_id)
     if not body.action and not body.text.strip():
         raise HTTPException(status_code=400, detail="消息是空的。")
+    db.lock_student(s, user.student_id)
+    topic = _topic(s, user, key)
     if key == "new":   # 新建问答：第一条消息发出时才建主题，名字取这一问
         row = m.ChatTopic(user_id=user.student_id, course=user.course, title=topic_title(body.text))
         s.add(row)
@@ -803,7 +821,9 @@ class EventBody(BaseModel):
 def ui_event(body: EventBody, user: m.User = Depends(student), s: Session = Depends(get_session)) -> dict:
     if body.kind not in UI_EVENTS:
         raise HTTPException(status_code=400, detail="不认识的事件。")
-    s.add(m.UiEvent(user_id=user.student_id, kind=body.kind, target=body.target, course=user.course))
+    knowledge_event = body.kind == "open_knowledge" or (body.kind == "copy_code" and _knowledge(body.target))
+    target = "ask" if knowledge_event else body.target
+    s.add(m.UiEvent(user_id=user.student_id, kind=body.kind, target=target, course=user.course))
     return {"ok": True}
 
 

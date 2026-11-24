@@ -6,7 +6,7 @@ import logging
 import re
 import time
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .. import catalog, config, db, llm, mastery, review, textbook
@@ -49,6 +49,38 @@ def thread_messages(s: Session, user_id: str, thread: tuple[int, int] | None,
                     course: str | None = None, topic: int | None = None) -> list[m.ChatMessage]:
     return list(s.scalars(select(m.ChatMessage).where(*thread_filter(user_id, thread, course, topic))
                           .order_by(m.ChatMessage.id)).all())
+
+
+def delete_knowledge_thread(s: Session, user_id: str, course: str, topic: int | None) -> None:
+    message_filter = thread_filter(user_id, None, course, topic)
+    round_ids = list(s.scalars(select(m.ChatMessage.round_id).where(
+        *message_filter, m.ChatMessage.round_id.is_not(None)).distinct()))
+    s.execute(delete(m.ChatStep).where(m.ChatStep.message_id.in_(
+        select(m.ChatMessage.id).where(*message_filter))))
+    s.execute(delete(m.ChatMessage).where(*message_filter))
+    if not round_ids:
+        return
+
+    # 旧回合可能混有别的问答或作业消息。保留这些消息，但移除引用过被删原话的评估。
+    s.execute(delete(m.AgentAssessment).where(
+        m.AgentAssessment.user_id == user_id, m.AgentAssessment.course == course,
+        m.AgentAssessment.basis == "chat", m.AgentAssessment.round_id.in_(round_ids)))
+    s.execute(delete(m.SkillEvidence).where(
+        m.SkillEvidence.user_id == user_id,
+        m.SkillEvidence.source_key.in_([f"assess:{rid}" for rid in round_ids])))
+
+    remaining = set(s.scalars(select(m.ChatMessage.round_id).where(m.ChatMessage.round_id.in_(round_ids))))
+    empty = set(round_ids) - remaining
+    if empty:
+        stuck_ids = list(s.scalars(select(m.StuckPoint.id).where(
+            m.StuckPoint.user_id == user_id, m.StuckPoint.round_id.in_(empty))))
+        if stuck_ids:
+            s.execute(delete(m.SkillEvidence).where(
+                m.SkillEvidence.user_id == user_id,
+                m.SkillEvidence.source_key.in_([f"stuck:{sid}" for sid in stuck_ids])))
+            s.execute(delete(m.StuckPoint).where(m.StuckPoint.id.in_(stuck_ids)))
+        s.execute(delete(m.ChatRound).where(
+            m.ChatRound.user_id == user_id, m.ChatRound.course == course, m.ChatRound.id.in_(empty)))
 
 
 def message_text(msg: m.ChatMessage) -> str:

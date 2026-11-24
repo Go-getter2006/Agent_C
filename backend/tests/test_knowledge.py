@@ -47,6 +47,77 @@ def test_topic_title():
     assert topic_title("   ") == "新的问答"
 
 
+def test_delete_topic_removes_saved_messages_steps_and_assessment(client, monkeypatch):
+    login(client)
+    monkeypatch.setattr(llm, "_backend", lambda *_: ('{"before":"解释。"}', 10, 10))
+    first = client.post("/api/threads/new/messages", json={"text": "保留这条问答"}).json()
+    deleted = client.post("/api/threads/new/messages", json={"text": "删除这条问答"}).json()
+    key = deleted["thread"]
+    topic_id = int(key[1:])
+    ids = [msg["id"] for msg in deleted["messages"]]
+    with db.session_scope() as s:
+        round_id = s.get(m.ChatMessage, ids[0]).round_id
+        assert s.get(m.ChatMessage, first["messages"][0]["id"]).round_id == round_id
+        s.add(m.AgentAssessment(user_id=UID, course="C", round_id=round_id, skill_code="C01.01.01",
+                                evidence=["删除这条问答"]))
+        s.add(m.SkillEvidence(user_id=UID, skill_code="C01.01.01", event_type="agent_understanding",
+                              success=True, weight=1, source_key=f"assess:{round_id}"))
+        s.add(m.UiEvent(user_id=UID, course="C", kind="open_knowledge", target=key))
+
+    client.post("/api/auth/logout")
+    login(client, "2500000003")
+    assert client.delete(f"/api/topics/{key}").status_code == 404
+    client.post("/api/auth/logout")
+    login(client)
+    with db.session_scope() as s:
+        s.get(m.ChatTopic, topic_id).course = "D"
+    assert client.delete(f"/api/topics/{key}").status_code == 404
+    with db.session_scope() as s:
+        s.get(m.ChatTopic, topic_id).course = "C"
+    assert client.delete("/api/topics/new").status_code == 404
+
+    result = client.delete(f"/api/topics/{key}")
+    assert result.status_code == 200
+    assert all(topic["key"] != key for topic in result.json()["topics"])
+    assert client.get(f"/api/threads/{key}").status_code == 404
+    assert client.post(f"/api/threads/{key}/messages", json={"text": "旧标签页续问"}).status_code == 404
+    assert client.get(f"/api/threads/{first['thread']}").json()["messages"] == first["messages"]
+    with db.session_scope() as s:
+        assert s.get(m.ChatTopic, topic_id) is None
+        assert all(s.get(m.ChatMessage, mid) is None for mid in ids)
+        assert s.scalar(select(m.ChatStep).where(m.ChatStep.message_id.in_(ids))) is None
+        assert s.scalar(select(m.AgentAssessment).where(m.AgentAssessment.round_id == round_id)) is None
+        assert s.scalar(select(m.SkillEvidence).where(m.SkillEvidence.source_key == f"assess:{round_id}")) is None
+        assert s.scalar(select(m.UiEvent).where(m.UiEvent.target == key)) is None
+        assert s.get(m.ChatRound, round_id) is not None  # 另一段问答还在用
+
+    new = client.post("/api/threads/new/messages", json={"text": "新建会话"}).json()
+    assert int(new["thread"][1:]) > topic_id
+    assert new["messages"][0]["id"] > ids[-1]
+
+
+def test_delete_legacy_chat_leaves_homework_and_other_course(client):
+    login(client)
+    with db.session_scope() as s:
+        round_ = m.ChatRound(user_id=UID, course="C", status="closed")
+        s.add(round_)
+        s.flush()
+        legacy = m.ChatMessage(user_id=UID, course="C", role="student", round_id=round_.id)
+        other = m.ChatMessage(user_id=UID, course="D", role="student")
+        homework = m.ChatMessage(user_id=UID, course="C", role="student", server_id=1, problem_id=1)
+        s.add_all((legacy, other, homework))
+        s.flush()
+        ids = legacy.id, other.id, homework.id, round_.id
+    assert client.get("/api/threads/general").json()["messages"]
+    result = client.delete("/api/topics/general")
+    assert result.status_code == 200
+    assert all(topic["key"] != "general" for topic in result.json()["topics"])
+    assert client.get("/api/threads/general").json() == {"messages": []}
+    with db.session_scope() as s:
+        assert s.get(m.ChatRound, ids[3]) is None
+        assert [s.get(m.ChatMessage, mid) is not None for mid in ids[:3]] == [False, True, True]
+
+
 def test_model_failure_keeps_knowledge_history_unchanged(client):
     login(client)
     topics = client.get("/api/topics").json()

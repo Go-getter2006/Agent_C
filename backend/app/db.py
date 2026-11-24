@@ -5,7 +5,7 @@ import datetime as dt
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import BigInteger, DateTime, Integer, create_engine, event
+from sqlalchemy import BigInteger, DateTime, Integer, create_engine, event, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator
@@ -118,6 +118,17 @@ def session_scope() -> Iterator[Session]:
         raise
     finally:
         s.close()
+
+
+def lock_student(s: Session, user_id: str) -> None:
+    """串行处理同一学生的发消息、删会话和写对话评估。"""
+    from .models import Student
+
+    if s.get_bind().dialect.name == "sqlite":
+        # SQLite 忽略 FOR UPDATE，先取得写事务，才能在读取会话后安全写入。
+        s.execute(update(Student).where(Student.user_id == user_id).values(name=Student.name))
+    else:
+        s.execute(select(Student.user_id).where(Student.user_id == user_id).with_for_update())
 
 
 def release(s: Session) -> None:

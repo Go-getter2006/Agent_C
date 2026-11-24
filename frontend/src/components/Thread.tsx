@@ -60,6 +60,7 @@ interface Props {
   contextOffer?: { label: string; onPick: () => void } | null;   // 还没带上时：可以点一下带上
   onThread?: (key: string) => void;   // 新建问答发出第一条以后，有了自己的编号
   onActivity?: () => void;     // 有新消息、小题有进展：让外面刷新列表和右栏
+  isDeleted?: (key: string) => boolean;
   onTextbook?: (citation: TextbookCitation, time: string) => void;
 }
 
@@ -73,7 +74,7 @@ function SubmissionQuote({ attemptNo }: { attemptNo?: number }) {
 }
 
 export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, lastMessageId, onNoticeRead, context, contextOffer,
-  waitingContext = false, pollHistory = true, onThread, onActivity, onTextbook }: Props) {
+  waitingContext = false, pollHistory = true, onThread, onActivity, onTextbook, isDeleted }: Props) {
   const cache = useStudentCache().threads;
   const request = useRef<AbortController | null>(null);
   const [loadedMessages, setMessages] = useState<Message[] | null>(() => cache.get(threadKey) ?? null);
@@ -117,7 +118,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
     request.current = controller;
     api.thread(key, controller.signal)
       .then((r) => {
-        if (controller.signal.aborted || key !== keyRef.current || seq !== loadSeq.current) return;
+        if (controller.signal.aborted || key !== keyRef.current || seq !== loadSeq.current || isDeleted?.(key)) return;
         cache.put(key, r.messages);
         setMessages(r.messages);
         setOwner(key);
@@ -126,7 +127,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
       .catch((err: Error) => {
         if (!controller.signal.aborted && seq === loadSeq.current && key === keyRef.current && (!silent || !cache.get(key)?.length)) setLoadError(err.message);
       }).finally(() => { if (request.current === controller) request.current = null; });
-  }, []);
+  }, [cache, isDeleted]);
 
   useLayoutEffect(() => {
     if (created.current === threadKey) {   // 新建的问答刚有了编号：消息已经在了，不重新取、不闪
@@ -200,6 +201,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
       const { quotedAttemptNo: _preview, ...body } = payload;
       const r = await api.send(key, body);
       still = key === keyRef.current;
+      if (isDeleted?.(key)) return;
       cache.delete(key);
       cache.put(r.thread || key, r.messages);
       if (!still) return;
@@ -215,6 +217,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
       onActivity?.();
     } catch (err) {
       still = key === keyRef.current;
+      if (isDeleted?.(key)) return;
       const retry = { payload, message: (err as Error).message };
       failures.current.set(key, retry);
       if (still) setFailed(retry);
@@ -222,7 +225,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
       sending.current.delete(key);
       if (still) setPending(null);
     }
-  }, [onActivity, onThread]);
+  }, [cache, isDeleted, onActivity, onThread]);
 
   // 换了对话以后第一次取到消息：回到上次看到的位置；以后有新消息就到最下面
   useLayoutEffect(() => {

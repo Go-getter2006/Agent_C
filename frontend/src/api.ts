@@ -72,6 +72,7 @@ export const api = {
   send: (key: string, body: { text?: string; action?: string; submissionKey?: string; problemKey?: string }) =>
     post<{ messages: Message[]; thread: string }>(`/api/threads/${key}/messages`, body),
   topics: () => get<{ topics: Topic[] }>("/api/topics"),
+  deleteTopic: (key: string) => request<{ topics: Topic[] }>("DELETE", `/api/topics/${encodeURIComponent(key)}`),
   textbookContents: () => get<{ book: TextbookContents | null }>("/api/textbook/contents"),
   textbookSection: (edition: number, section: number, anchor?: number, figure?: number) => {
     const query = new URLSearchParams();

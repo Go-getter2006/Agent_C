@@ -499,6 +499,7 @@ REFLECT_END = "回顾"
 
 class ChatRound(Base):
     __tablename__ = "chat_rounds"
+    __table_args__ = {"sqlite_autoincrement": True}
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -526,6 +527,7 @@ class ChatTopic(Base):
     """知识问答里的一个问答主题（学生新建）。以前不绑定题目的“综合”对话没有主题（topic_id 为空），列表里叫“以前的问答”。"""
 
     __tablename__ = "chat_topics"
+    __table_args__ = {"sqlite_autoincrement": True}
     id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(32), index=True)
     course: Mapped[str] = mapped_column(String(8), default="C")
@@ -553,7 +555,8 @@ class ChatMessage(Base):
     quiz_attempt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[Dt] = _ts()
     __table_args__ = (Index("ix_msg_thread", "user_id", "server_id", "problem_id", "id"),
-                      Index("ux_msg_failure", "server_id", "failure_submission_id", unique=True),)
+                      Index("ux_msg_failure", "server_id", "failure_submission_id", unique=True),
+                      {"sqlite_autoincrement": True})
 
 
 class ChatStep(Base):

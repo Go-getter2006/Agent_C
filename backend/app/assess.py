@@ -218,6 +218,15 @@ def assess_round(s: Session, rnd: m.ChatRound, use_llm: bool = True) -> m.AgentA
             log.info("理解评估：大模型两次都不合格，用规则")
     if not used_llm:
         row.level, row.raw_level, row.confidence, row.source = rule, rule, 0.6 if rule is not None else 0.0, "rule"
+    if not mat.messages or any(msg.problem_id is None for msg in mat.messages):
+        # 后台调模型期间会释放 SQLite 事务，学生可能已删除评估看过的问答。
+        db.lock_student(s, rnd.user_id)
+        current = list(s.scalars(select(m.ChatMessage.id).where(
+            m.ChatMessage.round_id == rnd.id).order_by(m.ChatMessage.id)))
+        if current != [msg.id for msg in mat.messages] or s.scalar(
+                select(m.ChatRound.id).where(m.ChatRound.id == rnd.id)) is None:
+            llm.flush_records(s)
+            return None
     s.add(row)
     s.flush()
     record_evidence(s, row)
