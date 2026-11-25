@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ class PromptContext:
     prefix: str
     index: str
     tests: list[dict]
+    sources: dict[int, str] = field(default_factory=dict)
 
 
 def student_notes(ctx: Ctx) -> str:
@@ -43,6 +44,7 @@ def build(s: Session | None, ctx: Ctx, compared: tuple[dict, ...] = ()) -> Promp
     if current_no and current:
         cache[current_no] = current
     attempts = dict(enumerate(ctx.attempts, 1))
+    sources = {}
 
     def load(no: int) -> dict | None:
         if no not in cache and s is not None and no in attempts:
@@ -60,6 +62,8 @@ def build(s: Session | None, ctx: Ctx, compared: tuple[dict, ...] = ()) -> Promp
         source = raw.get("sourceCode")
         if not source and no == current_no and ctx.source_kind != "pasted":
             source = ctx.source
+        if source:
+            sources[no] = source
         record = {"judgement": result["judgement"], "judgementCode": result["judgementCode"],
                   "compileOutput": result["compileOutput"],
                   "sourceCode": llm.numbered(source, *who, limit=len(source.split("\n"))) if source else None,
@@ -84,4 +88,4 @@ def build(s: Session | None, ctx: Ctx, compared: tuple[dict, ...] = ()) -> Promp
                           "【按次序排列的提交明细】\n\n" + "\n\n".join(record[0] for record in details)])
     index = "\n".join(f"第 {no} 次：{sub.judgement_text or sub.judgement}（{sub.detail_status}）"
                       for no, sub in attempts.items())
-    return PromptContext(document, pdftext.sidebar_images(s, ctx.document, original), prefix, index, tests)
+    return PromptContext(document, pdftext.sidebar_images(s, ctx.document, original), prefix, index, tests, sources)

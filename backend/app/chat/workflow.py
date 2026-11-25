@@ -179,7 +179,7 @@ def _reflect_target(s: Session, user_id: str, thread: tuple[int, int] | None, la
         return None
     if not ((last_agent.content or {}).get("summary") or {}).get("submission"):
         return None
-    if prose.rstrip().endswith(("？", "?")):
+    if prose.rstrip().endswith(("？", "?")) or retro.asks_history(prose):
         return None   # 他问了个新问题：照常回答
     newer = s.scalar(select(m.Submission.submission_id).where(
         m.Submission.server_id == thread[0], m.Submission.problem_id == thread[1], m.Submission.user_id == user_id,
@@ -300,14 +300,15 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
              prior: m.StuckPoint | None, prior_ref: str, kind: str,
              visible_titles: dict[str, str], reflect=None, retro_hist=None,
              plan_text: str | None = None,
-             compare: retro.Comparison | None = None) -> tuple[validate.Draft, str, dict, int]:
+             compare: retro.Comparison | None = None, retro_focus: int = 0) -> tuple[validate.Draft, str, dict, int]:
     testcases = (ctx.evidence or {}).get("testCases", []) + list(ctx.all_tests)   # 全部测试点都不能出现在回复里
     if compare is not None:
         testcases += compare.tests
 
     def run_check(d: validate.Draft) -> list[str]:
         return validate.check(
-            d, help_level=decision.help_level, reveal_level=decision.reveal_level, kind=kind, source=ctx.source,
+            d, help_level=decision.help_level, reveal_level=decision.reveal_level, kind=kind,
+            source=None if flow == "retro" else ctx.source,
             testcases=testcases, reference=ctx.reference, current_title=ctx.problem.title if ctx.problem else "",
             visible_titles=visible_titles, knowledge=ctx.knowledge)
 
@@ -319,22 +320,13 @@ def _produce(s: Session, ctx: context.Ctx, decision: Decision, flow: str, text: 
     if flow == "retro":   # 回看或对比提交：按对应版本的评测记录回答
         # 对比只用之前的学生问题解指代，避免把旧回复谈到的其他版本当作本轮证据。
         conversation = history if compare is None else [turn for turn in history if turn[0] == "student"]
-        materials = prompt_context.build(s, ctx, compare.submissions if compare is not None else ()) \
-            if llm.available() and len(retro_hist or []) > 1 else None
-        if materials is not None:
-            testcases.extend(materials.tests)
-        said, source = retro.reply(retro_hist or [], text, testcases, ctx.course,
-                                   recent=talk.dialogue(conversation, ctx.user_id, ctx.user_name),
-                                   who=(ctx.user_id, ctx.user_name), compare=compare, materials=materials,
-                                   focus=ctx.attempt_no, student_notes=prompt_context.student_notes(ctx))
-        draft = validate.Draft(before=said)
-        problems = run_check(draft)
-        if problems and source == "llm":
-            fallback = compare.fallback(retro_hist or [], complete=True) if compare is not None \
-                else retro.template(retro_hist or [])
-            draft, source = validate.Draft(before=fallback), "template"
-            problems = run_check(draft)
-        return draft, source, {"ok": not problems, "problems": problems}, 0
+        materials = prompt_context.build(s, ctx, compare.submissions if compare is not None else ())
+        testcases.extend(materials.tests)
+        draft = retro.reply(retro_hist or [], text, testcases, ctx.course,
+                            recent=talk.dialogue(conversation, ctx.user_id, ctx.user_name),
+                            who=(ctx.user_id, ctx.user_name), compare=compare, materials=materials,
+                            focus=retro_focus, student_notes=prompt_context.student_notes(ctx), check=run_check)
+        return draft, "llm", {"ok": True, "problems": []}, 0
 
     if flow == "reflect":   # 通过后的回顾：接着他说的回一两句（chat/summary.py）
         from . import summary
@@ -562,16 +554,18 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     if reflect_on is not None:
         decision, flow = Decision("R00", "NA", "甲", "reflect"), "reflect"
     plan_step = None   # (新的流程图状态, 话)
+    asking_for_approach = False
     if reflect_on is None and thread is not None and not knowledge and not pasted and not action:
         from . import plan as plan_mod
 
+        asking_for_approach = plan_mod.wants_plan(prose, analysis.intent)
         n_steps = len(plan_state["steps"]) if plan_state else 0
         pick = plan_mod.picked(prose, n_steps) if plan_state is not None and plan_state.get("picking") else None
         if pick is not None or plan_guiding:
             plan_step = _plan_next(s, ctx, plan_state, pick, analysis, prose, course, history)
             decision = Decision("R00", plan_step[2], "甲", "plan_step")
             flow = "plan_step"
-        elif ctx.problem is not None and ctx.submission is None and plan_mod.wants_plan(prose, analysis.intent):
+        elif ctx.problem is not None and ctx.submission is None and asking_for_approach:
             # 有缓存直接取，首次问到时生成；没有合格步骤就按平常的引导走
             steps = plan_mod.steps_for(s, ctx.problem.server_id, ctx.problem.problem_id, ctx.statement, ctx.plabel,
                                        course, list(ctx.all_tests))
@@ -590,15 +584,27 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
         if ctx.submission is not None and ctx.submission.detail_status != "done" and not ctx.source:
             decision, flow = Decision("R00", "NA", "甲", "pending"), "pending"
         elif ctx.submission is not None and ctx.submission.judgement == "AC" and not pasted \
-                and flow not in ("affirm",):
+                and not asking_for_approach and flow != "affirm":
             # 已经通过的题回头问：按这道题每一次提交的结果和改动回答（chat/retro.py），不再只说“已经通过了”
             decision, flow = Decision("R00", "NA", "甲", "retro"), "retro"
     compare = None
+    retro_focus = 0
     if thread is not None and ctx.submission is not None and not action and not pasted \
             and reflect_on is None and plan_step is None:
+        named = retro.attempts_in(prose)
+        if not named and not submission_key:
+            previous = previous_question_for_followup(prose, history)
+            if re.fullmatch(r"[?？]+", prose.strip()):
+                previous = next((said for role, said in reversed(history) if role == "student"
+                                 and not re.fullmatch(r"[?？]+", said.strip())), "")
+            named = retro.attempts_in(previous)
         compare = retro.comparison(s, ctx.submission, ctx.attempt_no, prose, now,
                                    switched_from=switched_from if flow not in ("concept", "task") else None)
-        if compare is not None:
+        if len(named) == 1 and not (compare and compare.named_baseline):
+            retro_focus = named[0]
+        elif submission_key or (compare and compare.named_baseline):
+            retro_focus = ctx.attempt_no
+        if compare is not None or retro.asks_history(prose) or (named and not submission_key):
             decision, flow = Decision("R00", "NA", "甲", "retro"), "retro"
     staged_fix = False
     if thread is not None and not knowledge and not pasted and ctx.has_failure and ctx.source \
@@ -647,7 +653,7 @@ def handle(s: Session, user_id: str, thread: tuple[int, int] | None, text: str =
     draft, source, check_result, retries = _produce(s, ctx, decision, flow, text, history, prior, prior_ref,
                                                     decision.kind, visible_titles, reflect, retro_hist,
                                                     plan_step[1] if plan_step else None,
-                                                    compare)
+                                                    compare, retro_focus)
     reply_model = llm.last_model.get() if source == "llm" else ""
     if stuck_point is not None and flow in ("example", "stubborn") and draft.code and not draft.code_is_old:
         stuck_point.given_code, stuck_point.key_line = draft.code, draft.key_line or 1

@@ -108,7 +108,7 @@ def flush_records(s) -> int:
 def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict], T],
               retries: int = 1, max_tokens: int | None = 800, *, pages: list[tuple[int, bytes]] | None = None,
               text_fallback: bool = True, images: list[tuple[str, bytes]] | None = None,
-              document: str = "", non_thinking: bool = False) -> T:
+              document: str = "", non_thinking: bool = True) -> T:
     """要求输出 JSON 并校验。max_tokens 为 None 时使用服务端默认值。"""
     if not available():
         raise LLMUnavailable("没有配置大模型")

@@ -55,6 +55,7 @@ def to_blocks(draft: Draft, ctx: Ctx) -> list[dict]:
         a, b = quote_range(ctx.lines, a, b)
         blocks.append({"t": "code", "caption": quote_caption(ctx, a, b), "start": a,
                        "lines": dedent(ctx.lines[a - 1:b]), "mark": [x for x in marks if a <= x <= b]})
+    blocks.extend(draft.submission_quotes)
     if draft.code:
         blocks.append({"t": "code", "caption": draft.code_caption, "start": 1,
                        "lines": draft.code.rstrip("\n").split("\n"), "mark": list(draft.code_mark)})
@@ -475,7 +476,7 @@ def generate_llm(ctx: Ctx, decision: Decision, flow: str, text: str, history: li
     prompt_id = "knowledge_search" if book_directory else "knowledge_reply" if ctx.knowledge else "reply"
     draft = llm.call_json(prompt_id, course_prompt(system, ctx.course), user, validate, retries=1,
                           max_tokens=None if ctx.knowledge else 900,
-                          images=materials.images, document=materials.document, non_thinking=ctx.knowledge)
+                          images=materials.images, document=materials.document, non_thinking=True)
     if isinstance(draft, Draft) and HELP_ORDER.get(decision.help_level, -1) >= 0 \
             and flow in ("help", "locate", "diagnose", "diagnose_where"):
         draft.actions = list(HELP_ACTIONS)

@@ -66,21 +66,16 @@ DEV_ACCOUNT = _env("DEV_ACCOUNT", "").strip()
 DEV_PASSWORD = _env("DEV_PASSWORD", "")
 SESSION_HOURS = _env_int("SESSION_HOURS", 12)
 
-# 大模型（DeepSeek，OpenAI 兼容接口）。不填 key 时，对话走规则分析和固定模板。
+# 大模型（DeepSeek，OpenAI 兼容接口）。
 DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
 OFFICIAL_DEEPSEEK = DEEPSEEK_BASE_URL in ("https://api.deepseek.com", "https://api.deepseek.com/v1")
 DEEPSEEK_FLASH = "deepseek-flash"
 
 
-def _deepseek_model(setting: str, default: str) -> str:
-    model = _env(setting, default).strip()
-    # 旧安装可能在 .env 里显式留下已经停用的名字。
-    return DEEPSEEK_FLASH if model.lower() == "deepseek-chat" else model
-
-
-DEEPSEEK_MODEL = _deepseek_model("DEEPSEEK_MODEL", DEEPSEEK_FLASH)
-DEEPSEEK_VISION_MODEL = _deepseek_model("DEEPSEEK_VISION_MODEL", DEEPSEEK_FLASH if OFFICIAL_DEEPSEEK else "")
+# 文本和图片走同一个模型。旧环境变量里的模型名不再覆盖实际请求。
+DEEPSEEK_MODEL = DEEPSEEK_FLASH
+DEEPSEEK_VISION_MODEL = "off" if _env("DEEPSEEK_VISION_MODEL", "").strip().lower() == "off" else DEEPSEEK_FLASH
 # 每百万 token 的价格（元），用于记录费用；按实际计费标准填写。
 LLM_PRICE_IN = _env_float("LLM_PRICE_IN", 2.0)
 LLM_PRICE_OUT = _env_float("LLM_PRICE_OUT", 8.0)
@@ -138,7 +133,7 @@ ERROR_LIBRARY_VERSION = "1.0"  # 错误类型库
 LABELER_VERSION = "2026-11-20a"   # 次技能只列题目专门要求的
 PROMPT_VERSION = "2026-11-24a"
 CHAT_TEACHING_PROMPT_FILE = _env("CHAT_TEACHING_PROMPT_FILE", "")
-WORKFLOW_VERSION = "2026-11-25a"
+WORKFLOW_VERSION = "2026-11-25b"
 # 2026-11-20：次技能分“有测试点专门考”和“顺带用到”，见 MASTERY 里的说明（SECONDARY_SPLIT_VERSION）
 # 2026-11-20b：顺带用到的通过不改变“最近一次是不是独立做对”，知识点按最近一条直接证据定档
 MASTERY_VERSION = "2026-11-21"   # 掌握分 (1+S)/(2+S+F)，档位只看分数；证据系数和半衰期每周学（app/learn.py）

@@ -15,6 +15,7 @@ class Draft:
 
     before: str = ""
     quote: tuple[int, int, list[int]] | None = None  # 引用最近一次提交的第几行到第几行，标出哪几行
+    submission_quotes: list[dict] = field(default_factory=list)  # 回看时由对应版本的源码构建
     code: str | None = None                          # 新写的示例代码
     code_caption: str = "示例"
     code_is_old: bool = False                        # 是以前给过的那段（不算新写的代码）
@@ -134,7 +135,7 @@ def check(draft: Draft, *, help_level: str, reveal_level: str, kind: str, source
 
     # 7 长度：一般不超过 150 字（代码块不计），概念讲解不超过 300 字
     limit_chars = config.CHAT["concept_max_chars"] if kind == "concept" else config.CHAT["reply_max_chars"]
-    if not knowledge and visible_chars(text) > limit_chars:
+    if not knowledge and kind != "retro" and visible_chars(text) > limit_chars:
         problems.append(f"太长了，最多 {limit_chars} 字")
     if not text and not (knowledge and draft.code):
         problems.append("回复是空的")

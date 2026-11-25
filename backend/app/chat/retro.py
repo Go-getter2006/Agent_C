@@ -4,30 +4,28 @@
 
 - 事实全用程序取（catalog、changes）：第几次、过没过、几组通过、程序标出的错误（学生端的说法）、
   和上一次比改了哪几行、修好了什么、还在什么、新出了什么。不出现测试数据。
-- 有大模型时让它按这些事实回答他问的那句话；没有或不合格时用模板把事实说清楚。
+- 模型回答学生当前的问题，程序核对评测事实和引用的源码版本。
 """
 from __future__ import annotations
 
 import json
-import logging
 import re
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
+from typing import Callable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import catalog, changes, config, llm, pdftext
+from .. import catalog, changes, llm, pdftext
 from .. import models as m
 from ..taxonomy import course_prompt, error_name
 from ..xdoj.assemble import assemble_submission
 from .prompt_context import PromptContext
 from .teaching import JUDGE_EVIDENCE_GUIDANCE
-from .text import visible_chars
-
-log = logging.getLogger("chat.retro")
+from .text import dedent, quote_range
+from .validate import Draft, _leaks
 
 _ATTEMPT = re.compile(r"第\s*([0-9０-９]+|[一二三四五六七八九十两]{1,3})\s*(?:次|版)"
                       r"(?!\s*(?:循环|迭代|调用|输入|输出|打印))")
@@ -36,8 +34,8 @@ _COMPARE = re.compile(r"前后两次|两次提交|两版代码|两次.{0,16}(?:�
                       r"(?:比|相比)上一(?:次|版).{0,20}(?:多|少|过|错)|"
                       r"(?:对比|比较).{0,12}(?:提交|代码|版本)")
 _NAMED_COMPARE = re.compile(r"比较|相比|对比|比\s*第|(?:和|跟|与).{0,24}比|区别|差别|不同")
-_PROGRESS_QUESTION = re.compile(r"(?:有(?:没有|无)|有什么|有啥|是否有)(?:好处|进步|改善|提升)|"
-                                r"(?:有进步|有改善|更好)(?:吗|没)|好在哪")
+_CHANGE_QUESTION = re.compile(r"改了|改动|变了|变化|有(?:没有|什么|啥)(?:好处|进步|改善|提升)|好在哪")
+_HISTORY_QUESTION = re.compile(r"(?:交|改|叫)了?(?:(?:这么|那么)多|好多|多(?:少)?)次|(?:当时|之前|上次).{0,10}(?:错|没过|修改)")
 _PAST_CODE_CHANGE = re.compile(r"第\s*(\d+)\s*行[^。！？\n]{0,28}?(?:改成了|换成了|变成了|替换成了)")
 _SPECULATION = re.compile(
     r"碰巧|凑巧|恰巧|侥幸|运气|随机抽|随机选|抽样|"
@@ -54,12 +52,21 @@ def _number(text: str) -> int:
     return (_CHINESE.get(left, 1) * 10 + _CHINESE.get(right, 0)) if sep else _CHINESE.get(text, 0)
 
 
+def attempts_in(text: str) -> list[int]:
+    return sorted({_number(match) for match in _ATTEMPT.findall(text)} - {0})
+
+
+def asks_history(text: str) -> bool:
+    return bool(attempts_in(text) or _COMPARE.search(text) or _HISTORY_QUESTION.search(text))
+
+
 @dataclass
 class Comparison:
     nos: tuple[int, int]
     submissions: tuple[dict, ...] = ()
     historical_io_uncertain: bool = False
     switched_focus: bool = False
+    named_baseline: bool = False
 
     @property
     def tests(self) -> list[dict]:
@@ -128,7 +135,7 @@ class Comparison:
         more = "等" if len(diff.hunks) > 4 else ""
         return f"改动涉及第 {self.nos[1]} 次提交的第 {where}{more} 行。"
 
-    def fallback(self, hist: list[dict], complete: bool) -> str:
+    def public_facts(self, hist: list[dict], aligned: list[dict], complete: bool) -> str:
         start, end = self.nos
         rows = {row["no"]: row for row in hist}
         if not self.submissions or any(no not in rows for no in self.nos):
@@ -142,12 +149,11 @@ class Comparison:
         summary = "，".join(facts) + "。" + code_facts
         if self.historical_io_uncertain:
             return summary + "测试点有更新记录，当前保存的输入和标准输出无法直接用于解释当时的两次结果。"
-        aligned = self.aligned()
         if not complete:
             if self.same_testcases(aligned):
                 summary += "两次使用同一组测试点。"
-            return summary + "两版代码或同一组测试的评测细节还没取齐，目前只能确认结果，无法确定通过数变化的原因。"
-        return self.case_facts(aligned) + code_facts + "可以先对照两版改动，再检查这些改动怎样影响同一组输入的输出。"
+            return summary + "现有评测证据不足，无法确定通过数变化的原因。"
+        return self.case_facts(aligned) + code_facts
 
 
 def _run(row: dict) -> dict:
@@ -166,9 +172,9 @@ def previous_focus(s: Session, sub: m.Submission, message_id: int) -> int | None
 def comparison(s: Session, sub: m.Submission, attempt_no: int, text: str, now: datetime,
                switched_from: int | None = None) -> Comparison | None:
     """对比显式提到的两次提交，或接着上一条消息切换的两个版本。"""
-    nos = sorted({_number(match) for match in _ATTEMPT.findall(text)} - {0})
+    nos = attempts_in(text)
     named_baseline = len(nos) == 1 and nos[0] != attempt_no and bool(_NAMED_COMPARE.search(text) or _COMPARE.search(text))
-    switched_focus = len(nos) < 2 and not named_baseline and switched_from is not None
+    switched_focus = not nos and switched_from is not None
     if len(nos) == 2:
         pair = (nos[0], nos[1])
     elif named_baseline:
@@ -179,6 +185,8 @@ def comparison(s: Session, sub: m.Submission, attempt_no: int, text: str, now: d
         if previous_no is None or previous_no == attempt_no:
             return None
         pair = (previous_no, attempt_no)
+    elif len(nos) == 1 and _CHANGE_QUESTION.search(text):
+        pair = (nos[0] - 1, nos[0])
     elif len(nos) < 2 and _COMPARE.search(text):
         end = nos[0] if nos else attempt_no
         pair = (end - 1, end)
@@ -190,7 +198,7 @@ def comparison(s: Session, sub: m.Submission, attempt_no: int, text: str, now: d
     if not switched_focus:
         subs = catalog.user_submissions(s, sub.user_id, sub.server_id, sub.problem_id, until=now)
     if end > len(subs):
-        return Comparison(pair)
+        return Comparison(pair, named_baseline=named_baseline)
     evidence = tuple(assemble_submission(s, sub.server_id, subs[no - 1].submission_id,
                                          include_problem_text=False) for no in pair)
     tids = {row["testcaseId"] for version in evidence for row in version["testCases"]}
@@ -198,7 +206,7 @@ def comparison(s: Session, sub: m.Submission, attempt_no: int, text: str, now: d
     changed = s.scalar(select(m.Archive.id).where(
         m.Archive.server_id == sub.server_id, m.Archive.kind == "testcase", m.Archive.target_id.in_(tids),
         m.Archive.archived_at >= subs[start - 1].submit_time).limit(1)) if tids else None
-    return Comparison(pair, evidence, changed is not None, switched_focus)
+    return Comparison(pair, evidence, changed is not None, switched_focus, named_baseline)
 
 
 def history(s: Session, user_id: str, server_id: int, problem_id: int) -> list[dict]:
@@ -265,72 +273,71 @@ def facts_text(hist: list[dict]) -> str:
     return "\n".join(rows)
 
 
-def main_trouble(hist: list[dict]) -> tuple[str, int] | None:
-    """前面没过的那几次里出现最多的错误。"""
-    c = Counter(e for h in hist if not h["passed"] for e in h["errors"])
-    return c.most_common(1)[0] if c else None
-
-
-def template(hist: list[dict]) -> str:
-    if not hist:
-        return "这道题的提交记录还没取到，稍等几秒再问一次。"
-    n = len(hist)
-    first_pass = next((h["no"] for h in hist if h["passed"]), None)
-    if n == 1 or first_pass == 1:
-        return "这道题你第一次提交就通过了。"
-    lines = [f"这道题你一共交了 {n} 次，第 {first_pass} 次通过。每一次是这样的：", facts_text(hist)]
-    trouble = main_trouble(hist)
-    if trouble:
-        name, k = trouble
-        lines.append(f"主要卡在：{name}" + (f"（没过的那几次里出现了 {k} 次）" if k > 1 else "") + "。")
-    unchanged = sum(1 for h in hist if h["changed"] == 0)
-    if unchanged:
-        lines.append(f"其中有 {unchanged} 次代码没改就又交了一次。下次没过时，先对照没过的那组情况想一想再改。")
-    return "\n".join(lines)
-
-
 _SYSTEM = """你是 C 语言课程的助教。一名学生回头问了一个问题。直接回答他问的这句话。
-先看评测事实，再解释相关源码怎样产生这样的结果，给一个具体的检查步骤。已有错误标注只作为线索。
-已经列明的评测事实无需复述。不超过 150 字，不贴大段代码，不泄露隐藏测试数据，不提学生姓名或学号。
-只输出 JSON：{"reply":"……"}"""
+他问为什么交了很多次，解释反复失败的主因、哪些改动真正有帮助。只提有解释价值的几次提交。
+他点名某一次，先讲那一次所问的事。问这次改了什么，就和前一次对照，讲清它实际改的代码、哪些问题仍在。
+如果问的是最后怎么修好的，讲后来通过的那次实际改动，并分清版本。短追问结合对话理解，不能把以前的回复当评测证据。
+先看评测事实，再根据对应版本的源码解释。错误标注只作为线索。缺评测明细时照样解释能确认的改动，说明哪些原因尚无法确定。
+不要逐次抄摘要，已经列明的评测事实无需复述。不泄露隐藏测试数据、学生姓名或学号，不手抄代码或输出 Markdown 代码块。
+涉及具体源码时用 quotes 引用原版，attempt 填提交次数，from/to 选连续上下文，mark 只标关键行。一般给一到两处引用。
+只输出 JSON：{"reply":"针对这句提问的解释","quotes":[{"attempt":4,"from":6,"to":8,"mark":[7]}]}"""
+
+
+def _quote(sources: dict[int, str], attempt: int, start: int, end: int, marks: list[int]) -> dict:
+    lines = sources[attempt].split("\n")
+    a, b = quote_range(lines, start, end)
+    where = f"第 {a} 行" if a == b else f"第 {a} 到 {b} 行"
+    return {"t": "code", "caption": f"你的第 {attempt} 次提交，{where}", "start": a,
+            "lines": dedent(lines[a - 1:b]), "mark": sorted(set(marks))}
 
 
 def reply(hist: list[dict], text: str, tests: list[dict], course: str, statement: str = "", recent: str = "",
           failure: str = "", who: tuple[str, str] = ("", ""), compare: Comparison | None = None,
-          materials: PromptContext | None = None, focus: int = 0, student_notes: str = "") -> tuple[str, str]:
-    """(回答, llm / template)。statement：题面；recent：最近的对话；failure：last_failure()；who：(学号, 姓名)。"""
-    from .validate import _leaks
-
+          materials: PromptContext | None = None, focus: int = 0, student_notes: str = "",
+          check: Callable[[Draft], list[str]] | None = None) -> Draft:
+    """让模型答本轮追问，引用由程序从相应提交的原始源码取行。"""
     aligned = compare.aligned() if compare is not None else []
     complete = compare.complete(aligned) if compare is not None else False
-    case_facts = compare.case_facts(aligned) if compare is not None and complete else ""
-    fallback = compare.fallback(hist, complete) if compare is not None else template(hist)
-    if not hist or not llm.available() or len(hist) == 1:
-        return fallback, "template"
-    if compare is not None and not complete:
-        return fallback, "template"
-    if compare is not None and _PROGRESS_QUESTION.search(text):
-        return fallback, "template"
+    facts = compare.public_facts(hist, aligned, complete) if compare is not None else ""
     diff = compare.code_diff if compare is not None else None
+    sources = materials.sources if materials else {}
 
-    def validate(d: dict) -> str:
-        out = str(d.get("reply") or "").strip()
-        if not out:
+    def validate(d: dict) -> Draft:
+        out = d.get("reply")
+        if not isinstance(out, str) or not (out := out.strip()):
             raise ValueError("reply 是空的")
-        if len(out) > 240:
-            raise ValueError("太长了")
         if "```" in out or _leaks(out, tests):
             raise ValueError("不能贴代码、不能出现测试数据")
-        if case_facts and _SPECULATION.search(out):
+        if _SPECULATION.search(out):
             raise ValueError("对照同一组固定测试点，不能用运气或数据变化解释")
-        if diff is not None and any(
+        if diff is not None and diff.available and any(
             not any(start <= int(line) <= end for start, end in diff.hunks)
             for line in _PAST_CODE_CHANGE.findall(out)
         ):
             raise ValueError("把未修改的代码行说成改过了")
-        if case_facts and visible_chars(case_facts + out) > config.CHAT["reply_max_chars"]:
-            raise ValueError("补充说明太长")
-        return out
+        quotes = {}
+        requested = d.get("quotes")
+        for item in requested[:2] if isinstance(requested, list) else []:
+            if not isinstance(item, dict):
+                continue
+            no, a, b = (item.get(key) for key in ("attempt", "from", "to"))
+            if not all(type(x) is int for x in (no, a, b)) or no not in sources \
+                    or (compare is not None and no not in compare.nos) or (compare is None and focus and no != focus):
+                continue
+            raw_marks = item.get("mark")
+            marks = [n for n in raw_marks if type(n) is int and a <= n <= b] if isinstance(raw_marks, list) else []
+            if marks and 1 <= a <= b <= len(sources[no].split("\n")) and b - a < 8:
+                quotes.setdefault(no, []).append(_quote(sources, no, a, b, marks))
+        if compare is not None and diff.hunks and compare.nos[1] in sources \
+                and (not quotes or (focus == compare.nos[1] and focus not in quotes)):
+            a, _ = diff.hunks[0]
+            no = compare.nos[1]
+            quotes[no] = [_quote(sources, no, a, a, [a])]
+        blocks = quotes.pop(focus, []) + [block for group in quotes.values() for block in group]
+        draft = Draft(before=out, after=facts, submission_quotes=blocks[:2])
+        if check is not None and (problems := check(draft)):
+            raise ValueError("；".join(problems))
+        return draft
 
     system = course_prompt(_SYSTEM + "\n\n" + JUDGE_EVIDENCE_GUIDANCE, course)
     document = materials.document if materials else (
@@ -341,13 +348,15 @@ def reply(hist: list[dict], text: str, tests: list[dict], course: str, statement
         first, second = compare.nos
         user += f"【本轮相关提交次数】\n[{first},{second}]\n\n"
         if compare.switched_focus:
-            user += f"【提交引用】\n上一条消息是第 {first} 次，本轮是第 {second} 次。\n\n"
-        user += f"【已确认的评测事实】\n{case_facts}\n\n"
+            current = focus or second
+            previous = first if current == second else second
+            user += f"【提交引用】\n上一条消息是第 {previous} 次，本轮是第 {current} 次。\n\n"
+        user += f"【已确认的评测事实】\n{facts}\n\n"
         user += "【源码改动（del 为原行，add 为新行）】\n" + json.dumps(
             [{**row, "text": llm.strip_identity(row["text"], *who)} for row in diff.excerpt],
             ensure_ascii=False) + "\n\n"
-    elif focus:
-        user += f"【本轮相关提交次数】\n[{focus}]\n\n"
+    if focus:
+        user += f"【本轮重点】\n第 {focus} 次提交。\n\n"
     related = hist if compare is None else [h for h in hist if h["no"] in compare.nos]
     user += "【提交摘要（改动相对于各自上一次提交）】\n" + facts_text(related)
     if failure and materials is None:
@@ -357,12 +366,5 @@ def reply(hist: list[dict], text: str, tests: list[dict], course: str, statement
     if recent:
         user += f"\n\n【最近的对话】\n{recent}"
     user += "\n\n【他问的】\n" + llm.strip_identity(text, *who)
-    try:
-        if compare is not None:
-            guidance = llm.call_json("retro_compare", system, user, validate, retries=0, max_tokens=450,
-                                     images=images, document=document)
-            return case_facts + "\n" + guidance, "llm"
-        return llm.call_json("retro_reply", system, user, validate, retries=1, max_tokens=300,
-                             images=images, document=document), "llm"
-    except llm.LLMUnavailable:
-        return fallback, "template"
+    return llm.call_json("retro_compare" if compare is not None else "retro_reply", system, user, validate,
+                         retries=1, max_tokens=None, images=images, document=document)

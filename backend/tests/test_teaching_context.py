@@ -87,6 +87,18 @@ def test_teaching_prompt_is_editable_without_restarting(tmp_path, monkeypatch):
     assert "代码示例" in teaching.guidance()
 
 
+def test_old_model_settings_cannot_override_deepseek_flash(monkeypatch):
+    import runpy
+
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://compatible.example")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_VISION_MODEL", "deepseek-reasoner")
+    settings = runpy.run_path(config.__file__)
+    assert settings["DEEPSEEK_MODEL"] == settings["DEEPSEEK_VISION_MODEL"] == "deepseek-flash"
+    monkeypatch.setenv("DEEPSEEK_VISION_MODEL", "off")
+    assert runpy.run_path(config.__file__)["DEEPSEEK_VISION_MODEL"] == "off"
+
+
 @pytest.mark.parametrize(("count", "output_length"), [(3, 10), (9, 10), (3, 6000)])
 def test_stable_evidence_prefix_appends_new_attempts(monkeypatch, count, output_length):
     tests = [{"testcaseId": 11, "standardInput": "PRIVATE_INPUT", "standardOutput": "PRIVATE_EXPECTED"}]

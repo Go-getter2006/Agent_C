@@ -204,18 +204,19 @@ def test_reflection_without_llm_uses_a_template(demo):
         assert s.get(m.ChatRound, q[0].round_id).end_reason != m.REFLECT_END
 
 
-def test_question_about_a_passed_problem_is_answered_from_its_history(demo):
-    """已经通过的题回头问“为什么改这么多次”：按每一次提交的结果和改动回答，不再只说“已经通过了”。"""
+def test_question_about_a_passed_problem_is_answered_from_its_history(demo, monkeypatch):
+    """已经通过的题回头问“为什么改这么多次”：从已有提交中解释原因。"""
     with db.session_scope() as s:
         sub, now = _reflect_setup(s)
         later = now + dt.timedelta(minutes=10)
         workflow.handle(s, UID, (sub.server_id, sub.problem_id), "好的", now=later)   # 先把回顾答掉
+        monkeypatch.setattr(llm, "_backend", lambda *_: ('{"reply":"前几次的修改没有处理边界。"}', 10, 10))
         for k in range(2):
             out = workflow.handle(s, UID, (sub.server_id, sub.problem_id), "我这个题为什么改这么多次",
                                   now=later + dt.timedelta(minutes=k + 1))
             reply = workflow.message_text(out[1])
             assert "已经通过了。还有哪里" not in reply
-            assert "一共交了" in reply and "第 1 次" in reply
+            assert reply == "前几次的修改没有处理边界。"
             step = s.scalars(select(m.ChatStep).where(m.ChatStep.message_id == out[0].id)).one()
             assert step.reply["flow"] == "retro" and step.check_result["ok"]
 
@@ -236,8 +237,8 @@ def test_retro_reply_uses_the_model_with_facts_only(demo):
         assert len(hist) >= 2 and hist[-1]["passed"] or any(h["passed"] for h in hist)
     llm.set_backend(backend)
     try:
-        said, source = retro.reply(hist, "为什么改这么多次", [], "C")
+        draft = retro.reply(hist, "为什么改这么多次", [], "C")
     finally:
         llm.set_backend(None)
-    assert source == "llm" and "第 17 行" in said
+    assert "第 17 行" in draft.text()
     assert "【提交摘要" in seen[0] and "为什么改这么多次" in seen[0]

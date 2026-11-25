@@ -123,7 +123,15 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
     first_fallback = scenario == "switch_first_fallback"
     single_reply = (REPLY[0], {"before": ""}) if first_fallback else REPLY
     prior_reply = ("回头问了一个问题", {"reply": "第 3 次把条件中的 || 改成了 &&。"})
-    llm.set_backend(_capture(seen, [ANALYZE, reply, single_reply, prior_reply]))
+    initial = _capture(seen, [ANALYZE, reply, single_reply, prior_reply])
+
+    def backend(messages, *args):
+        if len(messages) > 2 and comparison_section in messages[1]["content"]:
+            seen[comparison_section].append(messages[1]["content"])
+            return json.dumps({"reply": "按两版已确认的评测和改动检查条件。"}), 10, 10
+        return initial(messages, *args)
+
+    llm.set_backend(backend)
     try:
         with db.session_scope() as s:
             uid = UID
@@ -208,11 +216,11 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
         assert "第 11 行" not in shown and "改成了 &&" not in shown
     if progress_question:
         assert "其中 3 组原来的实际输出与标准输出只差空白字符" in shown
-        assert comparison_section not in seen
+        assert comparison_section in seen and "输出格式改动" in shown
     elif missing_output or scenario == "changed_tests":
         assert "第 1 次通过 0/5 组，第 2 次通过 3/5 组" in shown
         assert ("测试点有更新记录" if scenario == "changed_tests" else "无法确定通过数变化的原因") in shown
-        assert comparison_section not in seen
+        assert comparison_section in seen and "输出格式改动" in shown
     else:
         prompt = seen[comparison_section][0]
         if switches_focus and not names_baseline:
@@ -242,12 +250,12 @@ def test_compares_same_testcases_across_two_pinned_submissions(demo, scenario):
         assert all(row["passed"] and row["programOutput"] is None for row in versions[1]["testCases"][2:])
         assert uid not in prompt and NAME not in prompt
         rejected = scenario in ("leak_old_output", "switch_luck", "different_input_claim", "switch_named_wrong_line")
-        assert ("先对照两版改动" if rejected else "输出格式改动") in shown
+        assert ("按两版已确认的评测和改动" if rejected else "输出格式改动") in shown
         assert "有 3 组由未通过变为通过" in shown
         if scenario in ("switch_luck", "switch_first_fallback"):
             assert "其中 3 组原来的实际输出与标准输出只差空白字符" in shown
         assert "碰巧" not in shown and "测试数据不一样" not in shown
-        assert len(seen[comparison_section]) == 1
+        assert len(seen[comparison_section]) == (2 if rejected else 1)
 
 
 def test_plan_guide_sees_its_own_question_and_his_situation(demo):
@@ -285,14 +293,95 @@ def test_retro_reads_the_statement_and_the_last_failure(demo):
     seen: dict = {}
     llm.set_backend(_capture(seen, [("回头问了一个问题", {"reply": "前几次卡在初值，最后改对了。"})]))
     try:
-        said, source = retro.reply(hist, "当时错在哪", [], "C", statement="输入 n 个数，输出最大值。",
-                                   recent="助手：通过了！", failure=failure, who=(UID, NAME))
+        draft = retro.reply(hist, "当时错在哪", [], "C", statement="输入 n 个数，输出最大值。",
+                            recent="助手：通过了！", failure=failure, who=(UID, NAME))
     finally:
         llm.set_backend(None)
     prompt = seen["回头问了一个问题"][0]
-    assert source == "llm" and "输入 n 个数" in _section(prompt, "题目")
+    assert "前几次卡在初值" in draft.text() and "输入 n 个数" in _section(prompt, "题目")
     assert "  1| " in prompt and "通过了！" in _section(prompt, "最近的对话")
     assert UID not in prompt and NAME not in prompt
+
+
+def test_retro_answers_two_different_questions_and_quotes_attempt_four(demo, monkeypatch):
+    from app import catalog, config
+
+    sid, pid = demo["server_id"], 9100002
+    questions = ("我为什么叫了这么多次才对", "第四次具体错了什么 改了啥", "？")
+    answers = ("之前的改动没处理结束边界，第五次才补上。",
+               "第四次调整了递增的位置，循环的结束条件还漏掉边界。",
+               "接着说第四次：递增的位置和结束条件是两处不同的改动。")
+    requests = []
+    now = db.now()
+    with db.session_scope() as s:
+        cid = catalog.problem_contest(s, UID, sid, 406)
+        s.add_all([m.Problem(server_id=sid, problem_id=pid, title="边界回看测试"),
+                   m.ContestProblem(server_id=sid, contest_id=cid, problem_id=pid)])
+        for no in range(1, 6):
+            sub_id = 8100000 + no
+            statement = "i += 2;" if no == 4 else "i += 1;"
+            source = "\n".join(["#include <stdio.h>", "int main(void) {", "    int i = 0;", "    int n = 3;",
+                                "    while (i <= n) {" if no == 5 else "    while (i < n) {",
+                                "        printf(\"%d\\n\", i);", f"        {statement}", "    }", "}"])
+            s.add_all([
+                m.Submission(server_id=sid, submission_id=sub_id, user_id=UID, problem_id=pid,
+                             submit_time=now, judgement="AC" if no == 5 else "WA", detail_status="done"),
+                m.SourceSnapshot(server_id=sid, submission_id=sub_id, encoding="utf-8",
+                                 source_bytes=source.encode("utf-8")),
+            ])
+
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "test-only")
+    monkeypatch.setattr(config, "OFFICIAL_DEEPSEEK", True)
+    unavailable = False
+
+    def fake_post(url, **kwargs):
+        payload = kwargs["json"]
+        assert payload["model"] == "deepseek-flash"
+        assert payload["thinking"] == {"type": "disabled"}
+        messages = payload["messages"]
+        if "回头问了一个问题" in messages[0]["content"]:
+            assert "max_tokens" not in payload
+            if unavailable:
+                return llm.httpx.Response(402)
+            n = len(requests)
+            requests.append(messages[1]["content"])
+            out = {"reply": answers[n]}
+            if n != 1:  # 第二问即使模型没选引用，也从第 3→4 次的实测源码差异标出第 7 行。
+                out["quotes"] = [{"attempt": 5 if n == 0 else 4, "from": 5, "to": 7, "mark": [5 if n == 0 else 7]}]
+        else:
+            out = ANALYZE[1]
+        return llm.httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(out, ensure_ascii=False)},
+                                                         "finish_reason": "stop"}]})
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    from app.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        assert client.post("/api/auth/login", json={"loginName": UID, "password": "test-pass"}).status_code == 200
+        thread = f"/api/threads/p{sid}-{pid}"
+        for n, question in enumerate(questions):
+            body = {"text": question}
+            if n == 1:
+                body["submissionKey"] = catalog.submission_key(sid, 8100002)
+            result = client.post(thread + "/messages", json=body)
+            assert result.status_code == 200, result.text
+            tail = result.json()["messages"][-1]
+            assert tail["blocks"][0]["text"] == answers[n]
+            code = next(block for block in tail["blocks"] if block["t"] == "code")
+            assert f"第 {5 if n == 0 else 4} 次提交" in code["caption"]
+            assert code["mark"] == [5 if n == 0 else 7]
+            assert len(code["lines"]) >= 5
+            if n:
+                assert code["lines"][7 - code["start"]].strip() == "i += 2;"
+            assert _section(requests[n], "他问的").strip() == question
+        assert json.loads(_section(requests[1], "本轮相关提交次数")) == [3, 4]
+        assert "第 4 次提交" in _section(requests[1], "本轮重点")
+        assert "第 4 次提交" in _section(requests[2], "本轮重点")
+        assert questions[1] in _section(requests[2], "最近的对话")
+        unavailable = True
+        result = client.post(thread + "/messages", json={"text": questions[1]})
+        assert result.status_code == 502 and "额度不足" in result.json()["error"]
+        assert len(client.get(thread).json()["messages"]) == 6
 
 
 def test_quiz_generation_gets_error_names_level_and_his_own_mistake(demo):
