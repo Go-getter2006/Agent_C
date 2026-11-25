@@ -154,6 +154,7 @@ def _passages(s: Session, edition: m.TextbookEdition) -> tuple[list[Passage], Co
             paths[section.number] = path
             title_words = _terms(" ".join(path[-2:]))
             anchors = section.anchors
+            context = {a["id"]: a["text"] for a in anchors}
             for i, anchor in enumerate(anchors):
                 words = _terms(anchor["text"])
                 if not words or not anchor["boxes"]:
@@ -171,7 +172,7 @@ def _passages(s: Session, edition: m.TextbookEdition) -> tuple[list[Passage], Co
                     figure = True
                 if figure and previous:
                     text += "\n引图原句：" + previous
-                ref["context"] = {a["id"]: a["text"] for a in anchors[max(0, i - 2): i + 3]}
+                ref["context"] = context
                 passages.append(Passage(ref, text, words, title_words, figure))
                 frequency.update(words)
         _cache[edition.digest] = passages, frequency
@@ -263,11 +264,11 @@ def prompt(matches: dict) -> str:
     for section, context in neighborhoods.items():
         if len(context) > 1:
             rows = "\n".join(f"{number} {value}" for number, value in sorted(context.items()))
-            lines.append(f"【小节 {section} 的原稿顺序，可选连续预览起止编号】\n{rows}")
+            lines.append(f"【小节 {section} 的完整原稿顺序，用于选择展示范围】\n{rows}")
     return "【本轮检索到的教材资料】\n" + "\n\n".join(lines)
 
 
-def citations(matches: dict, selected) -> list[dict]:
+def citations(matches: dict, selected, *, require_excerpt: bool = False) -> list[dict]:
     if not isinstance(selected, list):
         return []
     refs = {}
@@ -287,8 +288,11 @@ def citations(matches: dict, selected) -> list[dict]:
             fig = str(fig).strip(" []").upper()
             if fig in matches and matches[fig][2] and matches[fig][1]["section"] == refs[key]["section"]:
                 refs[key]["figureAnchor"] = matches[fig][1]["anchor"]
+            elif require_excerpt:
+                del refs[key]
+                continue
         span = choice.get("excerpt")
-        # 预览选择是附加字段，模型给错范围也能保留已经核实的原句与图。
+        # 新回复必须显式选展示范围；历史引用仍兼容没有此字段的记录。
         if isinstance(span, list) and len(span) == 2 and all(type(n) is int for n in span):
             start, end = span
             shown = {i for _, ref, _ in matches.values() if ref["section"] == origin["section"]
@@ -297,6 +301,9 @@ def citations(matches: dict, selected) -> list[dict]:
             if start <= min(marks) <= max(marks) <= end and 1 <= end - start + 1 <= len(shown) \
                     and all(i in shown for i in range(start, end + 1)):
                 refs[key]["excerpt"] = span
+        if require_excerpt and "excerpt" not in refs[key]:
+            del refs[key]
+            continue
         if len(refs) == 2:
             break
     return list(refs.values())

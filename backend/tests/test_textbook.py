@@ -49,6 +49,10 @@ def test_figure_matches_selected_id_or_an_exact_reference_in_the_text(demo):
         plain, illustrated = [textbook.citations(choices, [c])[0] for c in (
             choice, dict(choice, figureId="F1", excerpt=[1, 3]))]
         assert illustrated["excerpt"] == [1, 3]
+        assert textbook.citations(choices, [choice], require_excerpt=True) == []
+        assert textbook.citations(choices, [dict(choice, excerpt=[2, 3])], require_excerpt=True) == []
+        assert textbook.citations(choices, [dict(choice, figureId="F999", excerpt=[1, 3])], require_excerpt=True) == []
+        assert textbook.citations(choices, [dict(choice, figureId="F1", excerpt=[1, 3])], require_excerpt=True) == [illustrated]
         linked = {"edition": edition.id, "section": 1, "anchor": 2}
         format_intro = {"edition": edition.id, "section": 1, "anchor": 4}
         textbook.add_previews(s, [plain, illustrated, linked, format_intro])
@@ -67,6 +71,34 @@ def test_figure_matches_selected_id_or_an_exact_reference_in_the_text(demo):
         detail = client.get(f"/api/textbook/{edition_id}/sections/1", params={"anchor": 2})
         assert detail.status_code == 200
         assert detail.json()["highlight"]["frame"] == [0, x, y, w, h]
+
+
+def test_excerpt_includes_full_context_on_multiple_pages_without_highlighting_it_all(demo):
+    anchors = [{"id": i, "text": text, "boxes": [[0 if i < 6 else 1, .1, .1 * i if i < 6 else .1 * (i - 5), .7, .04]]}
+               for i, text in enumerate(("完整段落的开头。", "介绍数组的声明。", "解释元素类型。",
+                                          "数组下标从零开始。", "说明最后一个下标。", "示例代码。", "示例的解释。"), 1)]
+    with db.session_scope() as s:
+        edition = m.TextbookEdition(title="测试", digest="full-excerpt-test")
+        s.add(edition)
+        s.flush()
+        s.add(m.TextbookSection(edition_id=edition.id, number=1, title="数组下标",
+                               pages=[{"image": "first", "width": 300, "height": 300},
+                                      {"image": "second", "width": 300, "height": 300}], anchors=anchors))
+        s.flush()
+        matches = textbook.retrieve(s, "C", "数组下标是什么", [], textbook.directory(s, "C"), textbook.Lookup((1,), "数组下标"))
+        prompt = textbook.prompt(matches)
+        assert all(anchor["text"] in prompt for anchor in anchors)
+        key = next(key for key, (_, ref, _) in matches.items() if ref["anchor"] == 4)
+        ref, = textbook.citations(matches, [{"id": key, "figureId": None, "excerpt": [1, 7],
+                                            "role": "key", "explanation": "先读完整定义，再对照示例理解下标。"}],
+                                   require_excerpt=True)
+        textbook.add_previews(s, [ref])
+        assert ref["excerpt"] == [1, 7]
+        assert ref["preview"]["crop"][0] < anchors[0]["boxes"][0][2] * 300
+        assert ref["preview"]["boxes"] == [anchors[3]["boxes"][0][1:]]
+        continuation, = ref["continuation"]
+        assert continuation["page"] == 1 and not continuation["boxes"]
+        assert continuation["crop"][1] > .24 * 300
 
 
 def test_exercise_numbers_stay_in_the_exercise_section(monkeypatch, tmp_path):
@@ -162,8 +194,11 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             return '{"before":"第一个元素从位置 0 开始数。","textbook":[{"id":"未知编号"}]}', 10, 10
         if user.endswith("数组下标怎么取") and len(messages) == 2:
             return '{"before":"数组首元素的下标为 0。"}', 10, 10
+        if user.endswith("展示完整教材") and len(messages) == 2:
+            return json.dumps({"before": "数组首元素的下标为 0。", "textbook": [
+                {"id": "T1", "role": "key", "explanation": "读第一个元素时，下标应写 0。"}]}), 10, 10
         return json.dumps({"before": "数组首元素的下标为 0。", "textbook": [
-            {"id": "[t1]", "role": "key", "explanation": "读第一个元素时，下标应写 0。"}]},
+            {"id": "[t1]", "figureId": None, "excerpt": [1, 1], "role": "key", "explanation": "读第一个元素时，下标应写 0。"}]},
                           ensure_ascii=False), 10, 10
 
     with TestClient(app) as client:
@@ -199,7 +234,7 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
                 preview = ref["preview"]
                 assert {k: v for k, v in ref.items() if k != "preview"} == {
                     "edition": edition, "section": 2, "anchor": target["id"], "path": list(HEADINGS[:2]),
-                    "role": "key", "explanation": "读第一个元素时，下标应写 0。"}
+                    "role": "key", "explanation": "读第一个元素时，下标应写 0。", "excerpt": [1, 1]}
                 assert preview["boxes"] == [box[1:] for box in highlight["boxes"]]
                 top, bottom = preview["crop"]
                 preview_png = client.get(image, params={"top": top, "bottom": bottom})
@@ -237,7 +272,7 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             calls.clear()
             repaired = client.post("/api/threads/new/messages", json={"text": "看一下 array index"}).json()
             assert len(calls) == 3 and repaired["messages"][-1]["textbook"]
-            for question in ("请解释 array index", "数组下标怎么取"):
+            for question in ("请解释 array index", "数组下标怎么取", "展示完整教材"):
                 calls.clear()
                 repaired = client.post("/api/threads/new/messages", json={"text": question})
                 assert repaired.status_code == 200 and len(calls) == 3
