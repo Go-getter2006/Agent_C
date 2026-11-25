@@ -140,13 +140,17 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
         if "【当前版教材目录】" in sys:
             assert all(title in sys for title in HEADINGS)
             if user.endswith("你好"):
-                return '{"before":"你好！今天想聊点什么？😊"}', 10, 10
+                return '{"textbookSearch":{"sections":[],"reason":"问候"},"before":"你好！今天想聊点什么？😊"}', 10, 10
             if user.endswith("早上好"):
                 return '{"before":"早上好！","textbookSearch":{"sections":[999]}}', 10, 10
             if user.endswith("谢谢，我懂了"):
                 return '{"textbookSearch":{"sections":[],"reason":"学生在确认理解"},"before":"好。"}', 10, 10
             if user.endswith("看一下 array index") and len(messages) == 2:
                 return '{"textbookSearch":{"sections":[999]}}', 10, 10
+            if user.endswith("请解释 array index"):
+                if len(messages) == 2:
+                    return '{"before":"数组首元素的下标为 0。"}', 10, 10
+                return '{"textbookSearch":{"sections":["2"],"keywords":"array index"}}', 10, 10
             assert "优先选到最小小节" in sys
             if user.endswith("教材哪里讲了 Rust？"):
                 return '{"textbookSearch":{"sections":[],"reason":"无 Rust 章节"},"before":"这本教材讲的是 C 语言。"}', 10, 10
@@ -156,6 +160,8 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             return '{"textbookSearch":{"sections":[2,999,3,2],"keywords":"array index length"}}', 10, 10
         if user.endswith("换一种说法解释数组下标"):
             return '{"before":"第一个元素从位置 0 开始数。","textbook":[{"id":"未知编号"}]}', 10, 10
+        if user.endswith("数组下标怎么取") and len(messages) == 2:
+            return '{"before":"数组首元素的下标为 0。"}', 10, 10
         return json.dumps({"before": "数组首元素的下标为 0。", "textbook": [
             {"id": "[t1]", "role": "key", "explanation": "读第一个元素时，下标应写 0。"}]},
                           ensure_ascii=False), 10, 10
@@ -217,8 +223,11 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             assert hello["blocks"][0]["text"] == "你好！今天想聊点什么？😊" and not hello.get("textbook")
             calls.clear()
             good_morning = client.post("/api/threads/new/messages", json={"text": "早上好"})
-            assert good_morning.status_code == 200 and len(calls) == 1
+            assert good_morning.status_code == 200 and len(calls) == 2
             assert good_morning.json()["messages"][-1]["blocks"][0]["text"] == "早上好！"
+            with db.session_scope() as s:
+                step = s.query(m.ChatStep).order_by(m.ChatStep.id.desc()).first()
+                assert step.check_result["textbookLookup"]["reason"] == "模型未提供有效的查书决定"
             calls.clear()
             direct = client.post("/api/threads/new/messages", json={"text": "谢谢，我懂了"}).json()
             assert len(calls) == 1 and not direct["messages"][-1].get("textbook")
@@ -228,9 +237,14 @@ def test_private_book_uses_exact_pdf_anchors_and_preserves_citations(demo, tmp_p
             calls.clear()
             repaired = client.post("/api/threads/new/messages", json={"text": "看一下 array index"}).json()
             assert len(calls) == 3 and repaired["messages"][-1]["textbook"]
+            for question in ("请解释 array index", "数组下标怎么取"):
+                calls.clear()
+                repaired = client.post("/api/threads/new/messages", json={"text": question})
+                assert repaired.status_code == 200 and len(calls) == 3
+                assert repaired.json()["messages"][-1]["textbook"] == msg["textbook"]
             calls.clear()
             partial = client.post("/api/threads/new/messages", json={"text": "换一种说法解释数组下标"})
-            assert partial.status_code == 200 and len(calls) == 2
+            assert partial.status_code == 200 and len(calls) == 3
             partial_msg = partial.json()["messages"][-1]
             assert partial_msg["blocks"][0]["text"] == "第一个元素从位置 0 开始数。"
             assert not partial_msg.get("textbook")

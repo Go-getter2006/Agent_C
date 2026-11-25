@@ -7,6 +7,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { BookOpen, List, Plus, Trash } from "lucide-react";
 import { ApiError, api } from "../api";
 import { StudentShell } from "../components/Shell";
+import KnowledgeMarkdown from "../components/KnowledgeMarkdown";
 import Thread, { type ThreadContext } from "../components/Thread";
 import { Drawer, Loading, Problem } from "../components/ui";
 import Textbook, { type ReadingTarget } from "../components/Textbook";
@@ -168,7 +169,7 @@ export default function Knowledge() {
             </span>
           </header>
           {key && (
-            <Thread threadKey={key} layout={layout}
+            <Thread threadKey={key} layout={layout} AgentText={KnowledgeMarkdown}
               emptyTitle="问一个知识问题"
               emptyText={ds ? "链表、栈、树、图的概念和写法，都可以直接问。" : "概念、语法、库函数怎么用，都可以直接问。"}
               placeholder={ds ? "问一个数据结构知识问题…" : "问一个 C 语言知识问题…"}

@@ -1,6 +1,6 @@
 // 一条对话线程：消息、正在输入、求助按钮、输入栏。
 // 学生只看到自然的回复、代码块和“正在输入”；没有步骤条、标签、分数。
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType, type KeyboardEvent } from "react";
 import { ArrowUp, Braces, Brain, Lightbulb, MessageCircle, RotateCcw, X, type LucideIcon } from "lucide-react";
 import { api } from "../api";
 import type { Layout } from "../lib/hooks";
@@ -61,6 +61,7 @@ interface Props {
   onThread?: (key: string) => void;   // 新建问答发出第一条以后，有了自己的编号
   onActivity?: () => void;     // 有新消息、小题有进展：让外面刷新列表和右栏
   isDeleted?: (key: string) => boolean;
+  AgentText?: ComponentType<{ text: string }>;
   onTextbook?: (citation: TextbookCitation, time: string) => void;
 }
 
@@ -74,7 +75,7 @@ function SubmissionQuote({ attemptNo }: { attemptNo?: number }) {
 }
 
 export default function Thread({ threadKey, layout, emptyTitle, emptyText, placeholder, latestNotice, lastMessageId, onNoticeRead, context, contextOffer,
-  waitingContext = false, pollHistory = true, onThread, onActivity, onTextbook, isDeleted }: Props) {
+  waitingContext = false, pollHistory = true, onThread, onActivity, onTextbook, isDeleted, AgentText }: Props) {
   const cache = useStudentCache().threads;
   const request = useRef<AbortController | null>(null);
   const [loadedMessages, setMessages] = useState<Message[] | null>(() => cache.get(threadKey) ?? null);
@@ -299,7 +300,7 @@ export default function Thread({ threadKey, layout, emptyTitle, emptyText, place
                 live={i === list.length - 1 && !shown} onSend={(value) => void send({ text: value })}
                 daySep={i === 0 ? (sameDay(m.time, new Date().toISOString()) ? null : dayLabel(m.time)) : sameDay(m.time, list[i - 1].time) ? null : dayLabel(m.time)}
                 onAction={(action) => void send({ action })} onQuiz={(q) => updateQuiz(m.id, q)}
-                onCopy={() => void api.event("copy_code", threadKey)} onTextbook={onTextbook} />
+                onCopy={() => void api.event("copy_code", threadKey)} onTextbook={onTextbook} AgentText={AgentText} />
             ))}
             {shown && (
               <div className="msg msg-student">
@@ -380,10 +381,11 @@ interface ItemProps {
   onSend: (text: string) => void;
   onQuiz: (quiz: QuizView) => void;
   onCopy: () => void;
+  AgentText?: Props["AgentText"];
   onTextbook?: Props["onTextbook"];
 }
 
-function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend, onQuiz, onCopy, onTextbook }: ItemProps) {
+function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend, onQuiz, onCopy, onTextbook, AgentText }: ItemProps) {
   const mine = message.role === "student";
   if (mine) {
     const text = message.blocks.filter((b) => b.t === "p").map((b) => (b as { text: string }).text).join("\n");
@@ -414,7 +416,7 @@ function MessageItem({ message, layout, disabled, daySep, live, onAction, onSend
           <span className="msg-meta"><strong>智能体</strong></span>
           {message.blocks.map((b, i) =>
             b.t === "p" ? (
-              <p key={i}><Inline text={b.text} /></p>
+              AgentText ? <AgentText key={i} text={b.text} /> : <p key={i}><Inline text={b.text} /></p>
             ) : b.t === "flow" ? (
               <FlowChart key={i} steps={b.steps} pick={b.pick} current={b.current} done={b.done}
                 live={live} disabled={disabled} onSend={onSend} />

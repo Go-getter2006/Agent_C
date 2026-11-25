@@ -1058,6 +1058,36 @@
   margin-right: var(--sp-6);
 }
 
+.knowledge-markdown {
+  overflow-wrap: anywhere;
+}
+.knowledge-markdown > * + * { margin-block-start: var(--sp-10); }
+.knowledge-markdown :is(h1, h2, h3, h4, h5, h6) { font-size: 1em; line-height: 1.4; }
+.knowledge-markdown :is(h1, h2) { font-size: 1.15em; }
+.knowledge-markdown ol { list-style: decimal; }
+.knowledge-markdown ul { list-style: disc; }
+.knowledge-markdown :is(ol, ul) { padding-inline-start: 1.6em; }
+.knowledge-markdown ul ul { list-style: circle; }
+.knowledge-markdown .task-list-item { list-style: none; }
+.knowledge-markdown blockquote {
+  margin-inline: 0;
+  padding-inline-start: var(--sp-12);
+  border-inline-start: 3px solid var(--line-strong);
+  color: var(--ink-2);
+}
+.knowledge-markdown a { color: var(--info); text-decoration: underline; }
+.knowledge-markdown :is(pre, .knowledge-table-scroll) { max-width: 100%; overflow-x: auto; }
+.knowledge-markdown pre {
+  padding: var(--sp-10) var(--sp-12);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 0.9em;
+}
+.knowledge-markdown table { border-collapse: collapse; }
+.knowledge-markdown :is(th, td) { padding: var(--sp-4) var(--sp-10); border: 1px solid var(--line); }
+.knowledge-markdown th { background: var(--surface-2); }
+
 .msg-student {
   justify-content: flex-end;
 }

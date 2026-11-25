@@ -217,6 +217,22 @@ def test_knowledge_does_not_reject_long_explanations_or_multiple_code_examples(c
     assert [b["lines"] for b in blocks if b["t"] == "code"] == [["int a[2][3];"], ["int b[3][5];"]]
 
 
+def test_knowledge_preserves_markdown_spacing_on_send_and_reopen(client, monkeypatch):
+    login(client)
+    markdown = (
+        "## 二维数组\n\n- **行**\n  - 行下标\n\n"
+        "    ```c\n    int row = 0;\n    ```\n\n"
+        "| 下标 | 含义 |\n| --- | --- |\n| `i` | 行 |"
+    )
+    monkeypatch.setattr(llm, "_backend", lambda *_: (json.dumps({"before": markdown}), 10, 10))
+    result = client.post("/api/threads/new/messages", json={"text": "二维数组的下标怎么用？"})
+    assert result.status_code == 200
+    data = result.json()
+    blocks = [{"t": "p", "text": markdown}]
+    assert data["messages"][-1]["blocks"] == blocks
+    assert client.get(f"/api/threads/{data['thread']}").json()["messages"][-1]["blocks"] == blocks
+
+
 def test_homework_list_reports_own_thread_even_without_submission(client):
     login(client)
     hw = client.get("/api/homeworks").json()["homeworks"][0]["key"]
