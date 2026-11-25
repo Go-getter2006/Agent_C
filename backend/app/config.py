@@ -73,9 +73,11 @@ OFFICIAL_DEEPSEEK = DEEPSEEK_BASE_URL in ("https://api.deepseek.com", "https://a
 DEEPSEEK_FLASH = "deepseek-flash"
 
 
-# 文本和图片走同一个模型。旧环境变量里的模型名不再覆盖实际请求。
-DEEPSEEK_MODEL = DEEPSEEK_FLASH
-DEEPSEEK_VISION_MODEL = "off" if _env("DEEPSEEK_VISION_MODEL", "").strip().lower() == "off" else DEEPSEEK_FLASH
+# 文本和图片走同一个模型。兼容旧安装留在 .env 里的停用名称。
+DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", DEEPSEEK_FLASH).strip()
+if DEEPSEEK_MODEL.lower() in ("deepseek-chat", "deepseek-reasoner"):
+    DEEPSEEK_MODEL = DEEPSEEK_FLASH
+DEEPSEEK_VISION_MODEL = "off" if _env("DEEPSEEK_VISION_MODEL", "").strip().lower() == "off" else DEEPSEEK_MODEL
 # 每百万 token 的价格（元），用于记录费用；按实际计费标准填写。
 LLM_PRICE_IN = _env_float("LLM_PRICE_IN", 2.0)
 LLM_PRICE_OUT = _env_float("LLM_PRICE_OUT", 8.0)

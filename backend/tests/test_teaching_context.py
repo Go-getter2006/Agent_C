@@ -87,16 +87,41 @@ def test_teaching_prompt_is_editable_without_restarting(tmp_path, monkeypatch):
     assert "代码示例" in teaching.guidance()
 
 
-def test_old_model_settings_cannot_override_deepseek_flash(monkeypatch):
+@pytest.mark.parametrize("configured", ["", "deepseek-chat", " DEEPSEEK-REASONER "])
+def test_blank_or_retired_model_names_use_deepseek_flash(monkeypatch, configured):
     import runpy
 
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://compatible.example")
-    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_MODEL", configured)
     monkeypatch.setenv("DEEPSEEK_VISION_MODEL", "deepseek-reasoner")
     settings = runpy.run_path(config.__file__)
     assert settings["DEEPSEEK_MODEL"] == settings["DEEPSEEK_VISION_MODEL"] == "deepseek-flash"
     monkeypatch.setenv("DEEPSEEK_VISION_MODEL", "off")
     assert runpy.run_path(config.__file__)["DEEPSEEK_VISION_MODEL"] == "off"
+
+
+def test_custom_model_name_is_shared_by_text_and_image_requests(monkeypatch):
+    import runpy
+
+    monkeypatch.setenv("DEEPSEEK_MODEL", "  future-test-model  ")
+    monkeypatch.setenv("DEEPSEEK_VISION_MODEL", "legacy-vision-model")
+    settings = runpy.run_path(config.__file__)
+    assert settings["DEEPSEEK_MODEL"] == settings["DEEPSEEK_VISION_MODEL"] == "future-test-model"
+    monkeypatch.setattr(config, "DEEPSEEK_MODEL", settings["DEEPSEEK_MODEL"])
+    monkeypatch.setattr(config, "DEEPSEEK_VISION_MODEL", settings["DEEPSEEK_VISION_MODEL"])
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "test-only")
+    calls = []
+
+    def post(_url, *, json, **_):
+        calls.append(json)
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{}'}}]})
+
+    monkeypatch.setattr(httpx, "post", post)
+    llm.call_json("test", "返回 JSON", "题目", dict)
+    llm.call_json("test", "返回 JSON", "问题", dict, images=[("题面图", b"test")], document="题面")
+    assert [payload["model"] for payload in calls] == ["future-test-model", "future-test-model"]
+    assert isinstance(calls[0]["messages"][1]["content"], str)
+    assert any(part["type"] == "image_url" for part in calls[1]["messages"][1]["content"])
 
 
 @pytest.mark.parametrize(("count", "output_length"), [(3, 10), (9, 10), (3, 6000)])
