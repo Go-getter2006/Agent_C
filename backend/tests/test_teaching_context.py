@@ -49,6 +49,7 @@ def test_vision_reply_reuses_sidebar_and_selected_judge_run(ctx, fake, monkeypat
                                    materials=materials)
         assert draft.before == "先检查计算表达式。"
         assert calls[0]["model"] == "deepseek-flash"
+        assert all("max_tokens" not in call for call in calls)
         content = calls[0]["messages"][1]["content"]
         assert base64.b64decode(content[2]["image_url"]["url"].split(",")[1]) == png
         assert ("[图1]" if display == "figure" else "第 1 页") in content[1]["text"]
@@ -87,15 +88,18 @@ def test_teaching_prompt_is_editable_without_restarting(tmp_path, monkeypatch):
     assert "代码示例" in teaching.guidance()
 
 
-@pytest.mark.parametrize("configured", ["", "deepseek-chat", " DEEPSEEK-REASONER "])
-def test_blank_or_retired_model_names_use_deepseek_flash(monkeypatch, configured):
+@pytest.mark.parametrize(("configured", "expected"), [
+    ("", "deepseek-flash"), ("deepseek-flash", "deepseek-flash"),
+    ("deepseek-chat", "deepseek-chat"), (" DEEPSEEK-REASONER ", "DEEPSEEK-REASONER"),
+])
+def test_model_configuration_preserves_explicit_names(monkeypatch, configured, expected):
     import runpy
 
     monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://compatible.example")
     monkeypatch.setenv("DEEPSEEK_MODEL", configured)
     monkeypatch.setenv("DEEPSEEK_VISION_MODEL", "deepseek-reasoner")
     settings = runpy.run_path(config.__file__)
-    assert settings["DEEPSEEK_MODEL"] == settings["DEEPSEEK_VISION_MODEL"] == "deepseek-flash"
+    assert settings["DEEPSEEK_MODEL"] == settings["DEEPSEEK_VISION_MODEL"] == expected
     monkeypatch.setenv("DEEPSEEK_VISION_MODEL", "off")
     assert runpy.run_path(config.__file__)["DEEPSEEK_VISION_MODEL"] == "off"
 
