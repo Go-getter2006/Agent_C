@@ -6,7 +6,7 @@ from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, Response
 from PIL import Image
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from .. import models as m
 from .. import textbook
@@ -25,6 +25,38 @@ def _section(s: Session, user: m.User, edition: int, number: int) -> m.TextbookS
     if row is None:
         raise _not_found()
     return row
+
+
+def _annotations(s: Session, user: m.User, row: m.TextbookSection) -> list[dict]:
+    message = m.ChatMessage
+    asked = aliased(message)
+    question = (select(asked.content).where(
+        asked.user_id == user.student_id, asked.course == "C", asked.role == "student",
+        asked.server_id.is_(None), asked.problem_id.is_(None),
+        asked.topic_id.is_not_distinct_from(message.topic_id), asked.id < message.id)
+        .order_by(asked.id.desc()).limit(1).correlate(message).scalar_subquery())
+    messages = s.execute(select(message, question).where(
+        message.user_id == user.student_id, message.course == "C", message.role == "agent",
+        message.server_id.is_(None), message.problem_id.is_(None),
+        message.content["textbook"].as_string().is_not(None)).order_by(message.id.desc()))
+    anchors = {item["id"]: item for item in row.anchors}
+    annotations = []
+    for reply, question_content in messages:
+        refs = (reply.content or {}).get("textbook", [])
+        for index, ref in enumerate(refs):
+            if ref.get("edition") != row.edition_id or ref.get("section") != row.number:
+                continue
+            hit = anchors.get(ref.get("anchor"))
+            if not hit or not hit.get("boxes"):
+                continue
+            question_text = "\n".join(block.get("text", "") for block in (question_content or {}).get("blocks", [])
+                                      if block.get("t") == "p")
+            annotations.append({
+                "id": f"{reply.id}-{index}", "time": reply.created_at.isoformat(),
+                "question": question_text, "explanation": ref.get("explanation", ""), "role": ref.get("role", "key"),
+                "highlight": textbook.highlight(s, row, hit, ref.get("figureAnchor")),
+            })
+    return annotations
 
 
 @router.get("/contents")
@@ -47,7 +79,8 @@ def section(edition: int, number: int, response: Response, anchor: int | None = 
     response.headers.update(PRIVATE)
     pages = [{"url": f"/api/textbook/{edition}/sections/{number}/images/{i}",
               "width": page["width"], "height": page["height"]} for i, page in enumerate(row.pages)]
-    return {"title": row.title, "pages": pages, "highlight": textbook.highlight(s, row, hit, figure) if hit else None}
+    return {"title": row.title, "pages": pages, "highlight": textbook.highlight(s, row, hit, figure) if hit else None,
+            "annotations": _annotations(s, user, row)}
 
 
 @router.get("/{edition}/sections/{number}/images/{index}")

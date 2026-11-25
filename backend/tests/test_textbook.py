@@ -101,6 +101,51 @@ def test_excerpt_includes_full_context_on_multiple_pages_without_highlighting_it
         assert continuation["crop"][1] > .24 * 300
 
 
+def test_directory_loads_own_saved_annotations_and_removes_deleted_topic_records(demo):
+    with db.session_scope() as s:
+        edition = m.TextbookEdition(title="测试", digest="saved-annotations-test")
+        s.add(edition)
+        s.flush()
+        edition_id = edition.id
+        s.add(m.TextbookSection(edition_id=edition_id, number=1, title="数组",
+                               pages=[{"image": "unused", "width": 300, "height": 300}],
+                               anchors=[{"id": 1, "text": "数组下标从零开始。", "boxes": [[0, .1, .2, .7, .04]]}]))
+        topic = m.ChatTopic(user_id="2500000001", course="C", title="数组")
+        unrelated = m.ChatTopic(user_id="2500000001", course="C", title="另一个话题")
+        s.add_all([topic, unrelated])
+        s.flush()
+        topic_key = f"t{topic.id}"
+        s.add(m.ChatMessage(user_id="2500000001", topic_id=topic.id, course="C", role="student",
+                            content={"blocks": [{"t": "p", "text": "为什么从零开始？"}]}))
+        s.flush()
+        s.add(m.ChatMessage(user_id="2500000001", topic_id=unrelated.id, course="C", role="student",
+                            content={"blocks": [{"t": "p", "text": "这是别的会话的提问"}]}))
+        s.flush()
+        ref = {"edition": edition_id, "section": 1, "anchor": 1, "role": "example", "explanation": "对照第一个元素。"}
+        s.add(m.ChatMessage(user_id="2500000001", topic_id=topic.id, course="C", role="agent", content={"textbook": [ref]}))
+        for uid, course, reference in (
+            ("2500000003", "C", ref), ("2500000001", "D", ref),
+            ("2500000001", "C", dict(ref, edition=edition_id + 1)),
+            ("2500000001", "C", dict(ref, section=2)),
+        ):
+            s.add(m.ChatMessage(user_id=uid, course=course, role="agent", content={"textbook": [reference]}))
+
+    with TestClient(create_app()) as client:
+        assert client.post("/api/auth/login", json={"loginName": "2500000001", "password": "test-pass"}).status_code == 200
+        url = f"/api/textbook/{edition_id}/sections/1"
+        response = client.get(url)
+        assert response.status_code == 200 and response.headers["cache-control"] == "private, no-store"
+        assert response.json()["highlight"] is None
+        record, = response.json()["annotations"]
+        assert record["question"] == "为什么从零开始？" and record["role"] == "example"
+        assert record["explanation"] == "对照第一个元素。" and record["time"]
+        assert record["highlight"]["boxes"] == [[0, .1, .2, .7, .04]]
+        assert client.get(url).json()["annotations"] == [record]
+        assert client.get(url, params={"anchor": 1}).json()["annotations"] == [record]
+        assert client.delete(f"/api/topics/{topic_key}").status_code == 200
+        assert client.get(url).json()["annotations"] == []
+
+
 def test_exercise_numbers_stay_in_the_exercise_section(monkeypatch, tmp_path):
     paragraphs = [
         ("第1章 基础", None), ("1.1 基础语法", None), ("习　题　1", 1),

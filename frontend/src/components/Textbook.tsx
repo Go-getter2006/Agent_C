@@ -3,7 +3,7 @@ import { ArrowLeft, BookOpen, ChevronDown } from "lucide-react";
 import { api } from "../api";
 import { useLoad } from "../lib/hooks";
 import { fullTime } from "../lib/time";
-import type { TextbookCitation, TextbookContents } from "../types";
+import type { TextbookCitation, TextbookContents, TextbookSection } from "../types";
 import { Inline, Loading, Problem } from "./ui";
 
 export interface ReadingTarget {
@@ -93,7 +93,33 @@ function Contents({ nodes, onOpen, childrenOf, depth = 0 }: {
 
 function Reading({ target }: { target: ReadingTarget }) {
   const { edition, section, anchor, figureAnchor } = target;
-  const result = useLoad(() => api.textbookSection(edition, section, anchor, figureAnchor), [edition, section, anchor, figureAnchor]);
+  const result = useLoad(() => api.textbookSection(edition, section, anchor, figureAnchor), [edition, section, anchor, figureAnchor, target.time]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const annotations = result.data?.annotations ?? [];
+  const selected = annotations.find(item => item.id === selectedId);
+  const highlighted = selected?.highlight ?? result.data?.highlight;
+  const time = selected?.time ?? target.time;
+  const marks = useMemo(() => {
+    const sources = [
+      ...(highlighted ? [{ highlight: highlighted, role: selected?.role ?? target.role }] : []),
+      ...annotations,
+    ];
+    const unique = new Map<string, { box: NonNullable<TextbookSection["highlight"]>["boxes"][number]; figure: boolean; role?: TextbookCitation["role"] }>();
+    for (const source of sources) {
+      for (const box of source.highlight.boxes) {
+        const key = `${source.highlight.figure}-${box.join(",")}`;
+        if (!unique.has(key)) unique.set(key, { box, figure: source.highlight.figure, role: source.role });
+      }
+      if (source.highlight.frame) {
+        const box = source.highlight.frame;
+        const key = `true-${box.join(",")}`;
+        if (!unique.has(key)) unique.set(key, { box, figure: true });
+      }
+    }
+    return [...unique.entries()];
+  }, [highlighted, annotations, selected?.role, target.role]);
+  const firstBox = highlighted?.boxes[0];
+  const focusKey = firstBox ? `${highlighted.figure}-${firstBox.join(",")}` : null;
   const scroll = useRef<HTMLDivElement>(null);
   const firstMark = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
@@ -103,35 +129,47 @@ function Reading({ target }: { target: ReadingTarget }) {
       area.scrollTop = mark ? mark.getBoundingClientRect().top - area.getBoundingClientRect().top
         + area.scrollTop - area.clientHeight * 0.25 : 0;
     }
-  }, [result.data, target]);
+  }, [result.data, target, selectedId]);
 
-  const highlighted = result.data?.highlight;
   const title = target.path[target.path.length - 1];
   return (
     <>
       {target.path.length > 0 && <header className="textbook-location">
         {target.path.length > 1 && <span>{target.path.slice(0, -1).join(" › ")}</span>}
         <h3>{title}</h3>
-        {target.time && highlighted && <time dateTime={target.time}>高亮于 {fullTime(target.time)}</time>}
+        {time && highlighted && <time dateTime={time}>高亮于 {fullTime(time)}</time>}
       </header>}
       <div className="textbook-scroll" ref={scroll}>
         {result.loading && !result.data && <Loading />}
         {result.error && <Problem message={result.error} onRetry={result.reload} />}
         {highlighted && <p className="sr-only">高亮的教材原文：{highlighted.text}</p>}
+        {annotations.length > 0 && <details className="textbook-annotations">
+          <summary>标注记录（{annotations.length}）</summary>
+          <ul>
+            {annotations.map(item => <li key={item.id}>
+              <button type="button" className="textbook-annotation-jump" aria-pressed={selectedId === item.id}
+                onClick={() => setSelectedId(item.id)}>
+                <time dateTime={item.time}>{fullTime(item.time)}</time><span>查看标注</span>
+              </button>
+              <details>
+                <summary>查看原提问</summary>
+                {item.question && <p>{item.question}</p>}
+                {item.explanation && <p><Inline text={item.explanation} /></p>}
+              </details>
+            </li>)}
+          </ul>
+        </details>}
         {result.data?.pages.map((page, index) => (
           <figure key={page.url} className="textbook-page" style={{ aspectRatio: `${page.width} / ${page.height}` }}
             onContextMenu={(e) => e.preventDefault()}>
             <img src={page.url} alt={result.data?.title ?? ""} draggable={false}
               width={page.width} height={page.height}
-              loading={index === 0 || index === highlighted?.boxes[0]?.[0] ? "eager" : "lazy"} />
-            {highlighted?.boxes.map(([pageIndex, left, top, width, height], i) => pageIndex === index && (
-              <span key={i} ref={i === 0 ? firstMark : undefined} aria-hidden="true"
-                className={markClass(highlighted.figure, target.role)}
-                style={{ left: `${left * 100}%`, top: `${top * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }} />
+              loading={index === 0 || index === firstBox?.[0] ? "eager" : "lazy"} />
+            {marks.map(([key, mark]) => mark.box[0] === index && (
+              <span key={key} ref={key === focusKey ? firstMark : undefined} aria-hidden="true"
+                className={markClass(mark.figure, mark.role)}
+                style={{ left: `${mark.box[1] * 100}%`, top: `${mark.box[2] * 100}%`, width: `${mark.box[3] * 100}%`, height: `${mark.box[4] * 100}%` }} />
             ))}
-            {highlighted?.frame?.[0] === index && <span aria-hidden="true" className={markClass(true)}
-              style={{ left: `${highlighted.frame[1] * 100}%`, top: `${highlighted.frame[2] * 100}%`,
-                width: `${highlighted.frame[3] * 100}%`, height: `${highlighted.frame[4] * 100}%` }} />}
           </figure>
         ))}
       </div>

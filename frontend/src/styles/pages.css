@@ -2921,6 +2921,16 @@
 }
 .textbook-location h3 { margin: var(--sp-4) 0; color: var(--ink); }
 .textbook-location time { color: var(--solid); }
+.textbook-annotations { margin-bottom: var(--sp-12); font-size: var(--fs-12); }
+.textbook-annotations summary { cursor: pointer; padding-block: var(--sp-6); }
+.textbook-annotations li { padding-block: var(--sp-8); border-bottom: 1px solid var(--line); }
+.textbook-annotations p { margin-block: var(--sp-6); white-space: pre-wrap; }
+.textbook-annotation-jump {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-8);
+  width: 100%; min-height: 40px; padding: var(--sp-6) var(--sp-8);
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface);
+}
+.textbook-annotation-jump:hover, .textbook-annotation-jump[aria-pressed="true"] { border-color: var(--brand); }
 .textbook-page {
   position: relative;
   overflow: hidden;

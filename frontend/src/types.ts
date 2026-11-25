@@ -167,6 +167,14 @@ export interface TextbookSection {
   title: string;
   pages: { url: string; width: number; height: number }[];
   highlight: { text: string; figure: boolean; boxes: [number, ...BookBox][]; frame?: [number, ...BookBox] } | null;
+  annotations: {
+    id: string;
+    time: string;
+    question: string;
+    explanation: string;
+    role: "key" | "example";
+    highlight: NonNullable<TextbookSection["highlight"]>;
+  }[];
 }
 
 export interface DiffRow {
