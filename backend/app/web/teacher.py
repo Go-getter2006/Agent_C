@@ -32,7 +32,7 @@ from ..xdoj import api as sync_api
 from ..xdoj import store
 from ..xdoj.client import SessionError, XdojClient, XdojError, limiter_for
 from .auth import record_failure, set_login_cookie, throttle
-from .. import misconceptions, research
+from .. import misconceptions, modelcomparison, research
 from . import cache
 from .deps import admin, get_session, teacher
 
@@ -1046,6 +1046,17 @@ def _dialogue_vs_outcome(s: Session, ids: list[str], course: str, subs: dict) ->
 
 
 # ------------------------------------------------------------ 图模型（试验中）
+@router.get("/classes/{key}/model-comparison")
+@page_cache("model-comparison")
+def model_comparison(key: str, days: int = 14, start: dt.date | None = None, end: dt.date | None = None,
+                     version: str | None = None, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
+    cls = _class(s, user, key)
+    if days not in (0, 14, 30) or (start is None) != (end is None) or (start and end and start > end):
+        raise HTTPException(400, detail="请选择有效的起止日期。")
+    ids = [student.user_id for student in class_students(s, cls)]
+    return modelcomparison.compare(s, ids, _course_of_class(s, cls), version, days=days, start=start, end=end)
+
+
 @router.get("/classes/{key}/graph")
 @page_cache("graph")
 def graph(key: str, user: m.User = Depends(admin), s: Session = Depends(get_session)) -> dict:
@@ -1097,6 +1108,12 @@ def graph(key: str, user: m.User = Depends(admin), s: Session = Depends(get_sess
     comparisons = graphmodel.prediction_overview(s, ids, course)
     edges = [{**e, "parentName": skill_name(e["parent"]), "childName": skill_name(e["child"])}
              for e in graphmodel.edge_stats(per_simple) if in_course(e["child"], course)]
+    score_data = _ClassData(s, cls)
+    score_breakdown = []
+    for student in score_data.students:
+        submissions = [sub for group in score_data.subs[student.user_id].values() for sub in group]
+        breakdown = assignment_mastery(score_data.topics, submissions, score_data.kps[student.user_id])
+        score_breakdown.append({"userId": student.user_id, "name": student.name, **breakdown})
     return {
         "class": {"key": key, "name": cls.class_name},
         "trial": True, "version": config.GRAPH_VERSION, "prereqStatus": PREREQ_STATUS,
@@ -1116,6 +1133,13 @@ def graph(key: str, user: m.User = Depends(admin), s: Session = Depends(get_sess
         "fusionWeekly": comparisons["fusionWeekly"],
         "fusion": _fusion_view(s, course),
         "masteryParams": _params_view(s, course),
+        "scoreBreakdown": score_breakdown,
+        "scoringRules": {"model": config.MASTERY_MODEL, "mastered": config.MASTERY_V2["mastered_score"],
+                         "basic": config.MASTERY_V2["basic_score"], "copyFactor": config.MASTERY_V2["copy_reliability"],
+                         "secondaryTested": config.MASTERY["secondary_tested_factor"],
+                         "secondaryIncidental": config.MASTERY["secondary_incidental_factor"],
+                         "resolvedFailure": config.MASTERY_V2["resolved_fail_factor"],
+                         "repeatedFailure": config.MASTERY_V2["repeated_fail_factor"]},
     }
 
 
@@ -1569,7 +1593,8 @@ EXPORT_PAGES = {
 
 
 @router.get("/export/{page}")
-def export_page(page: str, key: str, format: str = "json", user: m.User = Depends(admin),
+def export_page(page: str, key: str, format: str = "json", days: int | None = None, start: dt.date | None = None,
+                end: dt.date | None = None, version: str | None = None, user: m.User = Depends(admin),
                 s: Session = Depends(get_session)):
     """开发者：把一页的数据（这个班或选的几个班）导成 JSON，有主表的也能导成 CSV（Excel 能直接打开）。"""
     import csv
@@ -1582,6 +1607,11 @@ def export_page(page: str, key: str, format: str = "json", user: m.User = Depend
     title, fetch, table = EXPORT_PAGES[page]
     cls = _class(s, user, key)
     data = fetch(s, user, key)
+    if page == "models" and (days is not None or start is not None or end is not None or version is not None):
+        comparison = model_comparison.__wrapped__(key=key, days=14 if days is None else days,
+                                                  start=start, end=end, version=version, user=user, s=s)
+        periods = [dict(row, weekStart=row["date"]) for row in comparison["periods"] if row["n"]]
+        data = {**data, "comparison": comparison, "weekly": periods, "fusionWeekly": periods}
     stamp = db.now().astimezone(db.BEIJING).strftime("%Y%m%d-%H%M")
     name = f"{title}-{cls.class_name}-{stamp}".replace("/", "-")
     if format == "csv":

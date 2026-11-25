@@ -42,7 +42,7 @@ function Routed() {
           ? <TeacherPage title="跨课程" sub="要先补哪些 C 语言基础。只有掌握程度，不含 C 语言的答题记录">{(cls) => cls && !loading && <Cross cls={cls} />}</TeacherPage>
           : overview} />
         {/* 研究（论文用，只给开发者） */}
-        <Route path="models" element={dev(<TeacherPage title="模型检验" sub="掌握程度怎么算更准：用学生之后的真实表现来检验" exportPage={{ page: "models" }}>{(cls) => cls && <Models cls={cls} />}</TeacherPage>)} />
+        <Route path="models" element={dev(<TeacherPage title="模型检验" sub="查看分数依据，并用后续作答检验预测">{(cls) => cls && <Models cls={cls} />}</TeacherPage>)} />
         <Route path="rating" element={dev(<TeacherPage title="理解评估" sub="智能体评“理解”和只看事实的规则对照：一致率、按事实下调了多少" exportPage={{ page: "rating" }}>{(cls) => cls && <Rating cls={cls} />}</TeacherPage>)} />
         <Route path="help" element={dev(<TeacherPage title="求助效果" sub="来问的和没来问的，卡住以后怎么样了；每次帮助之后怎么样了" exportPage={{ page: "help", csv: true }}>{(cls) => cls && <Help cls={cls} />}</TeacherPage>)} />
         {/* 数据（只给开发者） */}

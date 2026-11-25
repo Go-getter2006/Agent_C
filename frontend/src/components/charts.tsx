@@ -1,7 +1,7 @@
 // 手写的 SVG 图表：柱状图、折线图、分布条、横向条。
 // 规则：只有一根纵轴；柱子细、顶端 4px 圆角、贴着基线；线宽 2px；网格是很淡的实线；两个系列以上一定有图例；
 // 数值和标签用文字色，不用系列色；每个图都能悬停看数。
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type PointerEvent, type ReactNode } from "react";
 import { useWidth } from "../lib/hooks";
 
 export interface Series {
@@ -154,19 +154,28 @@ interface LineProps {
   label: string;
   format?: (v: number) => string;
   lowerIsBetter?: boolean;
+  interactive?: boolean;
 }
 
-export function LineChart({ labels, series, height = 200, min = 0, max: maxIn, unit = "", label, format = fmtNum }: LineProps) {
+export function LineChart({ labels, series, height = 200, min = 0, max: maxIn, unit = "", label, format = fmtNum, interactive = false }: LineProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
+  const [hidden, setHidden] = useState<string[]>([]);
+  const shown = series.filter(s => !interactive || !hidden.includes(s.name));
   const padL = 40, padR = 12, padT = 10, padB = 26;
-  const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
+  const all = shown.flatMap((s) => s.values.filter((v): v is number => v !== null));
   const { max, ticks: tickVals } = useMemo(() => scale(min, Math.max(min + 1e-9, ...all), maxIn, false), [min, maxIn, all.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   const plotW = Math.max(0, width - padL - padR);
   const plotH = height - padT - padB;
   const step = labels.length > 1 ? plotW / (labels.length - 1) : 0;
-  const x = (i: number) => padL + step * i;
+  const x = (i: number) => padL + (labels.length === 1 ? plotW / 2 : step * i);
   const y = (v: number) => padT + plotH - ((v - min) / (max - min)) * plotH;
+
+  const inspectPoint = (event: PointerEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const index = labels.length === 1 ? 0 : Math.round((event.clientX - rect.left - padL) / (step || 1));
+    setHover(labels.length ? Math.min(labels.length - 1, Math.max(0, index)) : null);
+  };
 
   const path = (vals: (number | null)[]) => {
     let d = "";
@@ -182,13 +191,13 @@ export function LineChart({ labels, series, height = 200, min = 0, max: maxIn, u
     return d;
   };
 
-  const tip: Tip | null = hover === null ? null : {
+  const tip: Tip | null = hover === null || !labels.length || !shown.length ? null : {
     x: x(hover) - 70,
-    y: Math.min(...series.map((s) => (s.values[hover] === null ? padT + plotH : y(s.values[hover]!)))),
+    y: Math.min(...shown.map((s) => (s.values[hover] === null ? padT + plotH : y(s.values[hover]!)))),
     content: (
       <>
         <b>{labels[hover]}</b>
-        {series.map((s) => (
+        {shown.map((s) => (
           <div key={s.name} className="tip-row">
             <span><i className="swatch" style={{ background: s.color }} />{s.name}</span>
             <b className="num">{s.values[hover] === null ? "没有数据" : `${format(s.values[hover]!)}${unit}`}</b>
@@ -200,33 +209,45 @@ export function LineChart({ labels, series, height = 200, min = 0, max: maxIn, u
 
   return (
     <div className="chart" ref={ref}>
-      {series.length > 1 && <Legend series={series} />}
+      {series.length > 1 && (interactive ? <div className="legend chart-legend" role="group" aria-label="选择显示的模型">
+        {series.map((s, i) => <button type="button" key={s.name} className="chart-toggle" aria-pressed={!hidden.includes(s.name)}
+          onClick={() => setHidden(current => current.includes(s.name) ? current.filter(name => name !== s.name) : [...current, s.name])}>
+          <svg width="24" height="12" aria-hidden="true"><line x1="0" y1="6" x2="24" y2="6" stroke={s.color} strokeWidth="2"
+            strokeDasharray={[undefined, "8 5", "2 5"][i % 3]} /></svg>{s.name}
+        </button>)}
+      </div> : <Legend series={series} />)}
       {width > 0 && (
         <div className="chart-plot">
-          <svg width={width} height={height} role="img" aria-label={label}
+          <svg width={width} height={height} role="img" aria-label={label} tabIndex={interactive ? 0 : undefined}
+            onFocus={() => { if (interactive && labels.length) setHover(0); }}
+            onKeyDown={e => {
+              if (interactive && labels.length && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+                e.preventDefault();
+                setHover(current => Math.max(0, Math.min(labels.length - 1, (current ?? 0) + (e.key === "ArrowRight" ? 1 : -1))));
+              }
+            }}
             onMouseLeave={() => setHover(null)}
-            onMouseMove={(e) => {
-              const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
-              const i = Math.round((e.clientX - rect.left - padL) / (step || 1));
-              setHover(Math.min(labels.length - 1, Math.max(0, i)));
-            }}>
+            onPointerDown={inspectPoint} onPointerMove={inspectPoint}>
             {tickVals.map((t) => (
               <g key={t}>
                 <line x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} className={t === min ? "axis-base" : "grid-line"} />
                 <text x={padL - 8} y={y(t)} dy="0.32em" textAnchor="end" className="axis-text">{format(t)}</text>
               </g>
             ))}
-            {labels.map((lab, i) => (
+            {labels.map((lab, i) => (!interactive || i === 0 || i === labels.length - 1
+              || (i % Math.max(1, Math.ceil(64 / (step || 1))) === 0 && x(labels.length - 1) - x(i) >= 60)) && (
               <text key={lab + i} x={x(i)} y={height - 8} textAnchor={i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle"} className="axis-text">
                 {lab}
               </text>
             ))}
             {hover !== null && <line x1={x(hover)} x2={x(hover)} y1={padT} y2={padT + plotH} className="crosshair" />}
-            {series.map((s) => (
+            {shown.map((s) => (
               <g key={s.name}>
-                <path d={path(s.values)} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-                {s.values.map((v, i) => v !== null && (hover === i || s.values.filter((u) => u !== null).length === 1) && (
-                  <circle key={i} cx={x(i)} cy={y(v)} r={4.5} fill={s.color} stroke="var(--surface)" strokeWidth={2} />
+                <path d={path(s.values)} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round"
+                  strokeDasharray={interactive ? [undefined, "8 5", "2 5"][series.indexOf(s) % 3] : undefined} />
+                {s.values.map((v, i) => v !== null && (interactive || hover === i || s.values.filter((u) => u !== null).length === 1) && (
+                  <circle key={i} cx={x(i)} cy={y(v)} r={interactive ? 6 - series.indexOf(s) % 3 * 1.5 : 4.5}
+                    fill={interactive ? "var(--surface)" : s.color} stroke={interactive ? s.color : "var(--surface)"} strokeWidth={2} />
                 ))}
               </g>
             ))}

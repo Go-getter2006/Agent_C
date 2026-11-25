@@ -2842,6 +2842,24 @@
 /* 开发者：每一页右上角的导出 */
 .export-links { display: inline-flex; gap: var(--sp-4); }
 .cand-near { display: block; white-space: nowrap; }
+.model-filters { display: flex; flex-wrap: wrap; gap: var(--sp-12); align-items: flex-end; }
+.model-filters label { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 160px; font-size: var(--fs-12); color: var(--ink-2); }
+.model-filters label:first-child { flex: 1; min-width: min(300px, 100%); }
+.model-filters .field { width: 100%; min-width: 0; }
+.model-scope { color: var(--ink-2); font-size: var(--fs-13); }
+.model-explanation { padding: var(--sp-12) 0; border-block-end: 1px solid var(--line); }
+.model-explanation > summary { cursor: pointer; min-height: 32px; font-weight: 600; }
+.model-explanation p { margin-block-start: var(--sp-10); line-height: 1.75; }
+.model-explanation .table-scroll { margin-block-start: var(--sp-12); }
+.model-formula { padding: var(--sp-12); background: var(--surface-2); border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.chart-toggle { display: inline-flex; align-items: center; gap: var(--sp-6); min-height: 36px; padding: var(--sp-4) var(--sp-6); border: 1px solid transparent; border-radius: var(--r-sm); background: none; font: inherit; color: var(--ink-2); }
+.chart-toggle:hover, .chart-toggle:focus-visible { border-color: var(--line-strong); }
+.chart-toggle[aria-pressed="false"] { color: var(--ink-disabled); text-decoration: line-through; }
+@media (max-width: 600px) {
+  .model-filters label { width: 100%; }
+  .model-filters label:first-child { min-width: 0; }
+}
+
 .textbook-side {
   flex: 0 0 clamp(365px, 35vw, 605px);
   width: clamp(365px, 35vw, 605px);
