@@ -10,6 +10,7 @@ import base64
 import json
 import datetime as dt
 import logging
+from typing import Callable
 
 from sqlalchemy import delete, select
 
@@ -402,13 +403,16 @@ def _sync_problem_text(ctx: SyncContext, problem_id: int) -> bool:
         return changed or text_changed
 
 
-def sync_metadata(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False) -> dict:
+def sync_metadata(ctx: SyncContext, max_requests: int | None = None, inline_all: bool = False,
+                  before_bank: Callable[[], None] | None = None) -> dict:
     """一位老师的元数据：他名下的班级、名单、作业（几十个请求，一两分钟）。
 
     题库是这台服务器上所有老师共用的，一台服务器一天只同步一次（谁先触发谁做），老师登录不会再重复下载。
     """
     sync_classes_and_roster(ctx)
     sync_contests(ctx)
+    if before_bank is not None:
+        before_bank()  # 首次接入先落首批提交，不让题库列表挡住班级数据。
     if inline_all or bank_due(ctx):
         sync_problems(ctx, max_requests=max_requests, inline_all=inline_all)
     else:

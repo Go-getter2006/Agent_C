@@ -150,6 +150,23 @@ class Daemon:
         self._post_process = post_process
         self.poll_failures: dict[tuple[int, int | None], int] = {(c.server_id, c.source_id): 0 for c in contexts}
         self._poll_next = 0
+        self._last_trigger_reload: float | None = None
+        self._waiting_trigger_ids: set[int] = set()
+
+    def _reload_contexts(self) -> None:
+        if self._reload is None:
+            return
+        known = {(c.server_id, c.source_id) for c in self.contexts}
+        live_clients = {id(c.client) for c in self.contexts}
+        for ctx in self._reload():
+            key = (ctx.server_id, ctx.source_id)
+            if key not in known:
+                known.add(key)
+                self.contexts.append(ctx)
+                self.poll_failures[(ctx.server_id, ctx.source_id)] = 0
+                log.info("发现新的数据源 %s", ctx.source_id)
+            elif id(ctx.client) not in live_clients:
+                ctx.client.close()
 
     def _maintain(self, ctx: SyncContext) -> bool:
         if self._maintenance is None:
@@ -204,15 +221,36 @@ class Daemon:
                     store.set_time(s, ctx.server_id, ctx.metadata_key("last_poll_at"), ctx.now())
                     store.set_state(s, ctx.server_id, ctx.metadata_key("poll_failures"), self.poll_failures[source])
 
-    def _handle_triggers(self) -> bool:
+    def _handle_triggers(self) -> str | None:
         with db.session_scope() as s:
             rows = s.scalars(select(m.Trigger).where(m.Trigger.handled_at.is_(None)).order_by(m.Trigger.id)).all()
             if not rows:
-                return False
-            # 同一个目标短时间内的重复触发合并成一次
-            todo = {(t.kind, t.target_id, t.server_id) for t in rows}
-            for t in rows:
-                t.handled_at = db.now()
+                return None
+            pending = [(t.id, t.kind, t.target_id, t.server_id) for t in rows]
+        def matches(target, server_id):
+            return any((server_id is None or c.server_id == server_id)
+                       and (not target or str(c.source_id) == target) for c in self.contexts)
+
+        # 登录已写入数据源和触发，新教师不应再等一分钟才被主循环发现。
+        if any(kind == "sync_meta" and not matches(target, server) for _, kind, target, server in pending):
+            now = time.monotonic()
+            if self._last_trigger_reload is None or now - self._last_trigger_reload >= 5:
+                self._last_trigger_reload = now
+                self._reload_contexts()
+        ready = [(tid, kind, target, server) for tid, kind, target, server in pending
+                 if kind == "sync_meta" and matches(target, server)]
+        ready += [r for r in pending if r[1] != "sync_meta" and self.contexts]
+        if not ready:
+            # 首次发现先让出这一轮；之后仍未加载成功时，其他同步任务可继续。
+            # 始终保留触发，不提前标成已处理，也不能一直空转挡住其他教师。
+            waiting = {r[0] for r in pending}
+            first_wait = bool(waiting - self._waiting_trigger_ids)
+            self._waiting_trigger_ids = waiting
+            return "trigger" if first_wait else None
+        self._waiting_trigger_ids.difference_update(r[0] for r in ready)
+        todo = {(kind, target, server) for _, kind, target, server in ready}
+        with db.session_scope() as s:
+            s.execute(m.Trigger.__table__.update().where(m.Trigger.id.in_([r[0] for r in ready])).values(handled_at=db.now()))
             store.set_time(s, 0, "last_trigger_at", db.now())
         polled: set[int] = set()
 
@@ -250,7 +288,7 @@ class Daemon:
                 for ctx in self.contexts:
                     if (server_id is None or ctx.server_id == server_id) and (not target or target == str(ctx.source_id)):
                         self._run_meta(ctx)
-        return True
+        return "meta" if all(kind == "sync_meta" for kind, _target, _server in todo) else "trigger"
 
     @staticmethod
     def _raise_to_p0(s, ctx: SyncContext, submission_id: int) -> None:
@@ -344,11 +382,13 @@ class Daemon:
     def _run_meta(self, ctx: SyncContext) -> None:
         _state["activity"] = "同步名单和作业"
         with db.session_scope() as s:
+            first = (store.get_time(s, ctx.server_id, ctx.metadata_key("last_meta_at")) is None
+                     and store.get_time(s, ctx.server_id, ctx.metadata_key("last_poll_at")) is None)
             store.set_time(s, ctx.server_id, "last_meta_try_at", ctx.now())
             if ctx.source_id is not None:
                 store.set_time(s, ctx.server_id, ctx.metadata_key("last_meta_try_at"), ctx.now())
         try:
-            sync_meta.sync_metadata(ctx)
+            sync_meta.sync_metadata(ctx, before_bank=(lambda: self._poll(ctx)) if first else None)
         except SessionError:
             raise
         except XdojError as exc:
@@ -406,8 +446,9 @@ class Daemon:
                     if ctx.source_id in removed:
                         ctx.client.close()
                 self.contexts[:] = [ctx for ctx in self.contexts if ctx.source_id not in removed]
-        if self._handle_triggers():
-            return "trigger"
+        triggered = self._handle_triggers()
+        if triggered:
+            return triggered
         for ctx in self.contexts:  # 先同步名单：学生要在名单里才能登录
             if self._meta_due(ctx):
                 self._run_meta(ctx)
@@ -465,15 +506,8 @@ class Daemon:
             schedule_reviews()
             if self._reload is not None and time.monotonic() - last_reload >= 60:
                 last_reload = time.monotonic()
-                known = {c.source_id for c in self.contexts}
-                for ctx in self._reload():
-                    if ctx.source_id not in known:
-                        self.contexts.append(ctx)
-                        self.poll_failures[(ctx.server_id, ctx.source_id)] = 0
-                        log.info("发现新的数据源 %s", ctx.source_id)
-                    else:
-                        ctx.client.close()
-            did = self.step() if self.contexts else None
+                self._reload_contexts()
+            did = self.step()
             if did is None and self._idle_work is not None:
                 try:
                     if self._idle_work():
