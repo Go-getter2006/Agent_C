@@ -47,6 +47,8 @@ def poll_new_submissions(ctx: SyncContext, backfill: bool = False, max_requests:
             if len(batch) < rows_per_page:
                 set_state(s, ctx.server_id, key + ":caught_up", "1")
             set_time(s, ctx.server_id, "last_poll_at", ctx.now())
+            if ctx.source_id is not None:
+                set_time(s, ctx.server_id, ctx.metadata_key("last_poll_at"), ctx.now())
         if len(batch) < rows_per_page:
             ctx.stats["poll_has_more"] = False
             break

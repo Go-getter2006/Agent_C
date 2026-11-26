@@ -143,41 +143,49 @@ class Daemon:
         self._idle_work = idle_work  # 空闲时做的本地的事（智能体评估刚结束的回合）：不请求 XDOJ
         # 本地任务（标注、学情证据）的处理函数：(server_id, kind, target_id)
         self._post_process = post_process
-        self.poll_failures: dict[int, int] = {c.server_id: 0 for c in contexts}
+        self.poll_failures: dict[tuple[int, int | None], int] = {(c.server_id, c.source_id): 0 for c in contexts}
+        self._poll_next = 0
 
     # ------------------------------------------------------------ 状态
     def tier(self, ctx: SyncContext) -> tuple[str, int]:
         with db.session_scope() as s:
             last_new = store.get_time(s, ctx.server_id, "last_new_submission_at")
             last_trigger = store.get_time(s, 0, "last_trigger_at")
-        return poll_tier(ctx.now(), last_new, last_trigger, self.poll_failures.get(ctx.server_id, 0))
+        return poll_tier(ctx.now(), last_new, last_trigger, self.poll_failures.get((ctx.server_id, ctx.source_id), 0))
 
     def _poll_due(self, ctx: SyncContext) -> bool:
         if ctx.stats.get("poll_has_more"):
             return True
         with db.session_scope() as s:
-            last = store.get_time(s, ctx.server_id, "last_poll_at")
+            last = store.get_time(s, ctx.server_id, ctx.metadata_key("last_poll_at"))
         if last is None:
             return True
         return ctx.now() - last >= dt.timedelta(seconds=self.tier(ctx)[1])
 
     # ------------------------------------------------------------ 各类工作
     def _poll(self, ctx: SyncContext) -> None:
+        source = (ctx.server_id, ctx.source_id)
         try:
             sync_submissions.poll_new_submissions(ctx, max_requests=1)
-            self.poll_failures[ctx.server_id] = 0
+            self.poll_failures[source] = 0
             with db.session_scope() as s:
                 store.set_time(s, ctx.server_id, "last_ok_poll_at", ctx.now())
                 store.set_state(s, ctx.server_id, "poll_failures", 0)
+                if ctx.source_id is not None:
+                    store.set_time(s, ctx.server_id, ctx.metadata_key("last_ok_poll_at"), ctx.now())
+                    store.set_state(s, ctx.server_id, ctx.metadata_key("poll_failures"), 0)
         except SessionError:
             raise
         except XdojError as exc:
             ctx.stats["poll_has_more"] = False
-            self.poll_failures[ctx.server_id] = self.poll_failures.get(ctx.server_id, 0) + 1
-            log.warning("查新提交失败（连续第 %d 次）：%s", self.poll_failures[ctx.server_id], exc)
+            self.poll_failures[source] = self.poll_failures.get(source, 0) + 1
+            log.warning("查新提交失败（数据源 %s，连续第 %d 次）：%s", ctx.source_id, self.poll_failures[source], exc)
             with db.session_scope() as s:
                 store.set_time(s, ctx.server_id, "last_poll_at", ctx.now())
-                store.set_state(s, ctx.server_id, "poll_failures", self.poll_failures[ctx.server_id])
+                store.set_state(s, ctx.server_id, "poll_failures", self.poll_failures[source])
+                if ctx.source_id is not None:
+                    store.set_time(s, ctx.server_id, ctx.metadata_key("last_poll_at"), ctx.now())
+                    store.set_state(s, ctx.server_id, ctx.metadata_key("poll_failures"), self.poll_failures[source])
 
     def _handle_triggers(self) -> bool:
         with db.session_scope() as s:
@@ -378,8 +386,13 @@ class Daemon:
             ("p3", lambda c: self._run_task(c, ("recheck", "detail", "problem_assets", "problem_check"), 3)),
         ]
         for name, fn in stages:
-            for ctx in self.contexts:
+            # 每页让给下一位老师，避免一个老师补历史时其他老师一直等。
+            offset = self._poll_next % len(self.contexts) if name == "poll" and self.contexts else 0
+            ordered = self.contexts[offset:] + self.contexts[:offset]
+            for index, ctx in enumerate(ordered):
                 if fn(ctx):
+                    if name == "poll":
+                        self._poll_next = (offset + index + 1) % len(self.contexts)
                     return name
         return None
 
@@ -417,7 +430,7 @@ class Daemon:
                 for ctx in self._reload():
                     if ctx.source_id not in known:
                         self.contexts.append(ctx)
-                        self.poll_failures[ctx.server_id] = 0
+                        self.poll_failures[(ctx.server_id, ctx.source_id)] = 0
                         log.info("发现新的数据源 %s", ctx.source_id)
                     else:
                         ctx.client.close()

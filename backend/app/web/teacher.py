@@ -1190,7 +1190,7 @@ def _fusion_view(s: Session, course: str) -> dict:
 # ------------------------------------------------------------ 数据源
 def _source_view(s: Session, source: m.DataSource) -> dict:
     server = s.get(m.Server, source.server_id)
-    last_ok = store.get_time(s, source.server_id, "last_ok_poll_at")
+    last_ok = store.get_time(s, source.server_id, f"last_ok_poll_at:{source.id}")
     last_meta = store.get_time(s, source.server_id, f"last_meta_at:{source.id}")
     classes = accounts.source_classes(s, source)
     teacher_user = accounts.owner_of_source(s, source.id)
@@ -1206,7 +1206,7 @@ def _source_view(s: Session, source: m.DataSource) -> dict:
                      "removed": cls.removed_at is not None} for cls in classes],
         "lastLogin": source.last_login_at.isoformat() if source.last_login_at else None,
         "lastPoll": last_ok.isoformat() if last_ok else None, "lastMeta": last_meta.isoformat() if last_meta else None,
-        "pollFailures": int(store.get_state(s, source.server_id, "poll_failures", "0") or 0),
+        "pollFailures": int(store.get_state(s, source.server_id, f"poll_failures:{source.id}", "0") or 0),
         "submissions": s.scalar(select(func.count()).select_from(m.Submission).where(m.Submission.server_id == source.server_id)),
         "pendingDetails": s.scalar(select(func.count()).select_from(m.Submission).where(
             m.Submission.server_id == source.server_id, m.Submission.detail_status != "done")),
