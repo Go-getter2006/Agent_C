@@ -2,7 +2,8 @@
 
 每一轮按下面的顺序找第一件该做的事，做完回到开头；所有 XDOJ 请求都过同一个限速器：
 1. 未处理的触发；2. P0 详情；3. 到期的新提交轮询；4. 到期的“评测未完成”跟进；
-5. P1 详情；6. 本地的标注任务；7. P2 详情；8. 到期的回读和每日元数据同步；9. P3（回读）。
+5. 已取齐提交的分析；6. P1 详情；7. 题目标注；8. P2 详情；
+9. 到期的回读和每日元数据同步；10. P3（回读）。
 都没有就睡 0.5 秒。
 """
 from __future__ import annotations
@@ -254,6 +255,8 @@ class Daemon:
             if task is None:
                 return False
             task_id, kind, target, prio, attempts = task.id, task.kind, task.target_id, task.priority, task.attempts
+            if kind in ("detail", "pending_judge", "recheck"):
+                ctx = self._submission_context(s, ctx, target)
         _state["activity"] = ACTIVITY.get(kind, kind)
         try:
             if kind in ("problem_assets", "problem_check"):
@@ -303,6 +306,24 @@ class Daemon:
             with db.session_scope() as s:
                 store.fail_task(s, task_id, f"{type(exc).__name__}: {exc}", retry=True, at=ctx.now())
         return True
+
+    def _submission_context(self, s, ctx: SyncContext, submission_id: int) -> SyncContext:
+        """队列按服务器共用，详情要用这次提交所属班级的教师会话获取。"""
+        sub = s.get(m.Submission, (ctx.server_id, submission_id))
+        if sub is None:
+            return ctx
+        sources = set(s.scalars(select(m.ClassSource.data_source_id).where(
+            m.ClassSource.server_id == ctx.server_id, m.ClassSource.class_id == sub.class_id)).all()) \
+            if sub.class_id is not None else set()
+        available = [c for c in self.contexts if c.server_id == ctx.server_id]
+        if not any(c.source_id in sources for c in available):
+            # 部分提交不带班号或带的是另一种编号，按已同步的学生名单找教师。
+            sources = set(s.scalars(select(m.ClassSource.data_source_id).join(
+                m.Enrollment, (m.Enrollment.server_id == m.ClassSource.server_id)
+                & (m.Enrollment.class_id == m.ClassSource.class_id)).where(
+                m.Enrollment.server_id == ctx.server_id, m.Enrollment.user_id == sub.user_id,
+                m.Enrollment.status == "active")).all())
+        return next((c for c in available if c.source_id in sources), ctx)
 
     def _run_meta(self, ctx: SyncContext) -> None:
         _state["activity"] = "同步名单和作业"
@@ -379,8 +400,9 @@ class Daemon:
             ("p0", lambda c: self._run_task(c, ("detail", "pending_judge", "problem_assets"), 0)),
             ("poll", lambda c: self._poll_due(c) and (self._poll(c) or True)),
             ("pending", lambda c: self._run_task(c, ("pending_judge",), None)),
+            ("local", lambda c: self._run_task(c, ("post_process",), None)),
             ("p1", lambda c: self._run_task(c, ("detail", "problem_assets"), 1)),
-            ("local", lambda c: self._run_task(c, store.LOCAL_KINDS, None)),
+            ("local", lambda c: self._run_task(c, ("label_problem",), None)),
             ("p2", lambda c: self._run_task(c, ("detail", "problem_assets"), 2)),
             ("periodic", self._periodic),
             ("p3", lambda c: self._run_task(c, ("recheck", "detail", "problem_assets", "problem_check"), 3)),

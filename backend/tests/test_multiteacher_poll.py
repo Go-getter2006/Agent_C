@@ -12,6 +12,10 @@ from .conftest import make_context, small_fake
 
 
 def teachers(clock):
+    return _teachers(clock)
+
+
+def _teachers(clock, distinct_students=False):
     first, second = small_fake(), small_fake()
     first.submissions = {k: v for k, v in first.submissions.items() if k == 537104}
     second.submissions = {k: v for k, v in second.submissions.items() if k != 537104}
@@ -20,8 +24,12 @@ def teachers(clock):
     second.contests[0].update(id=502, classes=[{"id": 32}])
     for student in second.students:
         student["classId"] = 32
+        if distinct_students:
+            student["userId"] = "26" + student["userId"][2:]
     for sub in second.submissions.values():
         sub.class_id, sub.contest_id = 32, 502
+        if distinct_students:
+            sub.user_id = "26" + sub.user_id[2:]
     contexts = [make_context(fake, clock) for fake in (first, second)]
     for ctx, fake in zip(contexts, (first, second)):
         with db.session_scope() as s:
@@ -102,3 +110,41 @@ def test_failure_and_retry_time_are_per_teacher(database, clock, monkeypatch):
         assert bad["pollFailures"] == config.SYNC["fail_streak_slowdown"]
         assert bad["lastPoll"] is None
         assert good["pollFailures"] == 0 and good["lastPoll"] is not None
+
+
+def test_detail_uses_teacher_who_owns_submission_class(database, clock):
+    first, second = _teachers(clock, distinct_students=True)
+    daemon = Daemon([first, second])
+    daemon._poll(first)
+    daemon._poll(second)
+    requests = first.client.request_count
+    # 队列是共用的，即便入口是第一位老师，也不能用他的账号取第二位老师的详情。
+    assert daemon._run_task(first, ("detail",), 1, target_id=537101)
+    assert first.client.request_count == requests
+    with db.session_scope() as s:
+        sub = s.get(m.Submission, (1, 537101))
+        assert sub.detail_status == "done"
+        assert s.get(m.SourceSnapshot, (1, 537101)) is not None
+        task = s.scalar(select(m.FetchTask).where(m.FetchTask.target_id == 537101, m.FetchTask.kind == "detail"))
+        assert task.status == "done" and task.attempts == 0
+        # 提交没班号时，也可以沿学生名单找到可用教师。
+        sub.class_id = None
+        s.flush()
+        routed = daemon._submission_context(s, first, sub.submission_id)
+        assert routed.server_id == sub.server_id
+        assert routed.source_id == second.source_id
+
+
+def test_analysis_runs_before_historical_detail_backlog(database, clock):
+    first, _second = teachers(clock)
+    processed = []
+    daemon = Daemon([first], post_process=lambda *task: processed.append(task))
+    daemon._poll(first)
+    with db.session_scope() as s:
+        store.enqueue(s, 1, "post_process", 123, 1, when=clock.now())
+    requests = first.client.request_count
+    assert daemon.step() == "local"
+    assert processed == [(1, "post_process", 123)]
+    assert first.client.request_count == requests
+    with db.session_scope() as s:
+        assert s.get(m.Submission, (1, 537104)).detail_status != "done"
