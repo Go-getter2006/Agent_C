@@ -113,7 +113,8 @@ def start_in_thread() -> threading.Thread:
         while True:
             try:
                 Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
-                       nightly=graphmodel.nightly, idle_work=automation.idle_work).run_forever()
+                       nightly=graphmodel.nightly, idle_work=automation.idle_work,
+                       maintenance=automation.maintain_mastery).run_forever()
             except Exception:  # 出错了等一会儿重来，不能把网页带崩
                 log.exception("后台同步出错，30 秒后重启")
                 time.sleep(30)
@@ -136,16 +137,31 @@ class Daemon:
                  post_process: Callable[[int, str, int], None] | None = None,
                  reload: Callable[[], list[SyncContext]] | None = None,
                  nightly: Callable[[], object] | None = None,
-                 idle_work: Callable[[], int] | None = None):
+                 idle_work: Callable[[], int] | None = None,
+                 maintenance: Callable[[], int] | None = None):
         self.contexts = contexts
         self._sleep = sleep
         self._reload = reload      # 重新读一遍数据源：教师新登记的账号要能被发现
         self._nightly = nightly    # 每天夜里做一次的事（图模型全图更新）
         self._idle_work = idle_work  # 空闲时做的本地的事（智能体评估刚结束的回合）：不请求 XDOJ
+        self._maintenance = maintenance
+        self._last_maintenance: dt.datetime | None = None
         # 本地任务（标注、学情证据）的处理函数：(server_id, kind, target_id)
         self._post_process = post_process
         self.poll_failures: dict[tuple[int, int | None], int] = {(c.server_id, c.source_id): 0 for c in contexts}
         self._poll_next = 0
+
+    def _maintain(self, ctx: SyncContext) -> bool:
+        if self._maintenance is None:
+            return False
+        now = ctx.now()
+        if self._last_maintenance is None or now - self._last_maintenance >= dt.timedelta(seconds=60):
+            self._last_maintenance = now
+            try:
+                self._maintenance()
+            except Exception:
+                log.exception("自动补记掌握证据失败")
+        return False  # 维护不能让本轮的同步或分析任务失去执行机会。
 
     # ------------------------------------------------------------ 状态
     def tier(self, ctx: SyncContext) -> tuple[str, int]:
@@ -400,6 +416,7 @@ class Daemon:
             ("p0", lambda c: self._run_task(c, ("detail", "pending_judge", "problem_assets"), 0)),
             ("poll", lambda c: self._poll_due(c) and (self._poll(c) or True)),
             ("pending", lambda c: self._run_task(c, ("pending_judge",), None)),
+            ("maintenance", self._maintain),
             ("local", lambda c: self._run_task(c, ("post_process",), None)),
             ("p1", lambda c: self._run_task(c, ("detail", "problem_assets"), 1)),
             ("local", lambda c: self._run_task(c, ("label_problem",), None)),

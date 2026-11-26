@@ -324,7 +324,8 @@ def daemon_cmd() -> None:
     db.migrate()
     # 还没有数据源也能启动：教师在网页上登记后，一分钟内会被发现
     Daemon(sources.build_contexts(), post_process=pipeline.local_task, reload=sources.build_contexts,
-           nightly=graphmodel.nightly, idle_work=automation.idle_work).run_forever()
+           nightly=graphmodel.nightly, idle_work=automation.idle_work,
+           maintenance=automation.maintain_mastery).run_forever()
 
 
 @cli.command("assess-pending")

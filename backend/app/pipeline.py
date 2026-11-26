@@ -86,7 +86,7 @@ def local_task(server_id: int, kind: str, target_id: int) -> None:
             problems.annotate_problem(s, server_id, target_id)
 
 
-def backfill_passes(s: Session, limit: int = 100) -> int:
+def backfill_passes(s: Session, limit: int = 100, *, existing_labels_only: bool = False) -> int:
     """以前因为题目还没有标注、没记上证据的“第一次通过”，补记上（后台空闲时自动做）。返回补了几条。
 
     只补掌握程度的证据，不再发对话里的总结、不出小题（那是当时的事）。
@@ -106,8 +106,12 @@ def backfill_passes(s: Session, limit: int = 100) -> int:
         if f"pass:{server_id}:{submission_id}" in recorded:
             continue
         sub = s.get(m.Submission, (server_id, submission_id))
-        label = labeler.current_problem_label(s, server_id, problem_id) or problems.tag_label(s, server_id, problem_id)
+        label = labeler.current_problem_label(s, server_id, problem_id)
+        if label is None and not existing_labels_only:
+            label = problems.tag_label(s, server_id, problem_id)
         if sub is None or label is None:
+            continue
+        if accounts.submission_removed(s, server_id, user_id, sub.class_id, sub.contest_id):
             continue
         earlier = s.scalar(select(func.count()).select_from(m.Submission).where(
             m.Submission.server_id == server_id, m.Submission.user_id == user_id,
@@ -120,4 +124,33 @@ def backfill_passes(s: Session, limit: int = 100) -> int:
         done += 1
     if done:
         log.info("补记了 %d 次以前没记上的通过", done)
+    return done
+
+
+def repair_mastery_evidence(s: Session, limit: int = 200) -> int:
+    """只用已取齐的提交和已有标注补记证据，不生成回复、不调模型，也不重复计分。"""
+    done = backfill_passes(s, limit=limit, existing_labels_only=True)
+    if done >= limit:
+        return done
+    from sqlalchemy import String, cast, exists, func, literal
+
+    sub, label, ev = m.Submission, m.SubmissionLabel, m.SkillEvidence
+    key = literal("fail:") + cast(sub.server_id, String) + ":" + cast(sub.problem_id, String) + ":" + cast(sub.submission_id, String)
+    recorded = exists(select(ev.id).where(ev.user_id == sub.user_id, ev.source_key == key,
+                                         ev.skill_code == label.skill_code))
+    episode = literal("fail:") + cast(sub.server_id, String) + ":" + cast(sub.problem_id, String) + ":%"
+    count = select(func.count(ev.id)).where(ev.user_id == sub.user_id,
+        ev.skill_code == label.skill_code, ev.event_type == "submit_failed",
+        ev.source_key.like(episode)).correlate(sub, label).scalar_subquery()
+    rows = s.execute(select(sub, label.skill_code).join(label,
+        (label.server_id == sub.server_id) & (label.submission_id == sub.submission_id)).where(
+        sub.detail_status == "done", sub.judgement.not_in(("AC", "PENDING", "UNKNOWN", "")),
+        label.is_current.is_(True), label.role == "primary", label.confidence >= 0.5,
+        label.skill_code.is_not(None), label.skill_code != "", ~recorded,
+        count < len(config.MASTERY["w_submit_failed"])
+    ).order_by(sub.submission_id).limit(limit - done)).all()
+    for submission, skill in rows:
+        if not accounts.submission_removed(s, submission.server_id, submission.user_id,
+                                           submission.class_id, submission.contest_id):
+            done += int(mastery.record_failed_submission(s, submission, skill))
     return done

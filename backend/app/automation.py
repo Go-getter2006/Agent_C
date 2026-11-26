@@ -24,6 +24,12 @@ from .chat import workflow
 
 log = logging.getLogger("automation")
 
+
+def maintain_mastery() -> int:
+    """同步繁忙时也定期修复掌握证据。仅复用已有评测和标注，不调大模型。"""
+    with db.session_scope() as s:
+        return pipeline.repair_mastery_evidence(s)
+
 _last: dict[str, float] = {}
 EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0}
 
