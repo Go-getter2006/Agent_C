@@ -7,7 +7,8 @@
 - 说法：智能体评“理解”时从他的原话里看出的错误想法（agent_assessments.misconception），按技能挂到这个技能上
   出现最多的那条误区下；这个技能没有别的记录时单独一条。
 
-每条的数（period 是 week 时只数最近 7 天，all 是全部）：
+每条的数（week 是北京时间本周一零点至当前时刻，all 是全部）：
+按原提交、交互的时间归属；后导入或后补标注不改变归属周。
 - students：有过这个误区的学生人数（四处来源的并集）；
 - submissions：标了这个错误的没通过的提交次数；
 - unresolved：出过这个错的题到现在还没通过的学生人数（分母是 students 里从提交来的那些人）；
@@ -20,15 +21,15 @@ from __future__ import annotations
 import datetime as dt
 from collections import Counter, defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from . import db
 from . import models as m
 from .taxonomy import KNOWLEDGE_POINTS, course_of, error_name, kp_of_skill, skill_name
 
-VERSION = "misconception-1"
-PERIODS = {"week": 7, "all": None}
+VERSION = "misconception-2"
+PERIODS = ("week", "all")
 
 
 class _Item:
@@ -57,8 +58,9 @@ def collect(s: Session, server_id: int, students: dict[str, str], course: str, p
     ids = list(students)
     if not ids:
         return []
-    days = PERIODS.get(period)
-    since = now - dt.timedelta(days=days) if days else None
+    local = now.astimezone(db.BEIJING)
+    since = (local - dt.timedelta(days=local.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0).astimezone(db.UTC) if period == "week" else None
     items: dict[tuple[str, str], _Item] = {}
 
     def item(error: str, skill: str) -> _Item:
@@ -76,7 +78,7 @@ def collect(s: Session, server_id: int, students: dict[str, str], course: str, p
                 m.Submission.user_id.in_(ids), m.Submission.judgement != "AC", m.SubmissionLabel.error_code != "OT99",
                 m.SubmissionLabel.error_code != ""))
     if since is not None:
-        q = q.where(m.Submission.submit_time >= since)
+        q = q.where(m.Submission.submit_time >= since, m.Submission.submit_time <= now)
     rows = [r for r in s.execute(q).all() if in_course(r[4] or "")]
     passed = set(s.execute(select(m.Submission.user_id, m.Submission.problem_id).where(
         m.Submission.server_id == server_id, m.Submission.user_id.in_(ids), m.Submission.judgement == "AC")).all())
@@ -91,7 +93,7 @@ def collect(s: Session, server_id: int, students: dict[str, str], course: str, p
     # 卡住
     q = select(m.StuckPoint).where(m.StuckPoint.user_id.in_(ids), m.StuckPoint.skill_code.like(course + "%"))
     if since is not None:
-        q = q.where(m.StuckPoint.created_at >= since)
+        q = q.where(m.StuckPoint.created_at >= since, m.StuckPoint.created_at <= now)
     for sp in s.scalars(q).all():
         it = item(sp.error_code or "", sp.skill_code)
         it.seen(sp.user_id, sp.created_at)
@@ -101,7 +103,7 @@ def collect(s: Session, server_id: int, students: dict[str, str], course: str, p
          .join(m.QuizItem, m.QuizItem.id == m.QuizAttempt.item_id)
          .where(m.QuizAttempt.user_id.in_(ids), m.QuizItem.has_bug.is_(True), m.QuizAttempt.judged_has_bug.is_(False)))
     if since is not None:
-        q = q.where(m.QuizAttempt.created_at >= since)
+        q = q.where(m.QuizAttempt.created_at >= since, m.QuizAttempt.created_at <= now)
     for uid, skill, error, at in s.execute(q).all():
         if not skill or not in_course(skill):
             continue
@@ -109,13 +111,18 @@ def collect(s: Session, server_id: int, students: dict[str, str], course: str, p
         it.seen(uid, at)
         it.quiz.add(uid)
     # 说法：挂到这个技能上人数最多的那条
-    q = select(m.AgentAssessment).where(m.AgentAssessment.user_id.in_(ids), m.AgentAssessment.course == course,
-                                        m.AgentAssessment.misconception != "")
+    # 评估可能晚几天才做，按被评估的提交或会话时间统计，不按后台评估时间统计。
+    a, rnd, sub = m.AgentAssessment, m.ChatRound, m.Submission
+    event_time = func.coalesce(case((a.basis == "code", sub.submit_time), else_=rnd.last_message_at), a.created_at)
+    q = (select(a, event_time.label("event_time"))
+         .outerjoin(rnd, rnd.id == a.round_id)
+         .outerjoin(sub, (sub.server_id == a.server_id) & (sub.submission_id == a.submission_id))
+         .where(a.user_id.in_(ids), a.course == course, a.misconception != ""))
     if since is not None:
-        q = q.where(m.AgentAssessment.created_at >= since)
+        q = q.where(event_time >= since, event_time <= now)
     quotes: dict[str, list[tuple[str, dt.datetime, str]]] = defaultdict(list)
-    for a in s.scalars(q.order_by(m.AgentAssessment.created_at.desc())).all():
-        quotes[a.skill_code].append((a.user_id, a.created_at, a.misconception.strip()))
+    for assessment, at in s.execute(q.order_by(event_time.desc())).all():
+        quotes[assessment.skill_code].append((assessment.user_id, at, assessment.misconception.strip()))
     for skill, said in quotes.items():
         same = [it for (e, sk), it in items.items() if sk == skill]
         it = max(same, key=lambda x: (len(x.students), x.submissions + x.stuck)) if same else item("", skill)

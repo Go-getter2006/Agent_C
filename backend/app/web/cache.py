@@ -37,6 +37,7 @@ _VERSION_COLUMNS = (
     m.StuckPoint.id, m.QuizAttempt.id, m.QuizAttempt.finished_at, m.ChatMessage.id, m.ChatRound.last_message_at,
     m.AgentAssessment.id, m.GraphPosterior.updated_at, m.ModelWeights.updated_at,
     m.PredictionLog.id,
+    m.SubmissionLabel.id,
     m.CrossLink.reviewed_at, m.CrossLink.checked_at, m.Enrollment.id, m.ProblemLabel.id, m.ReviewItem.id,
 )
 
