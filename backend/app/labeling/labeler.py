@@ -24,15 +24,41 @@ log = logging.getLogger("labeling")
 
 
 def current_problem_label(s: Session, server_id: int, problem_id: int, *, allow_cross_course: bool = False) -> m.ProblemLabel | None:
+    key = (server_id, problem_id)
+    memo = s.info.get("readonly_problem_labels", {})
+    if not allow_cross_course and key in memo:
+        return memo[key]
+    q = _current_problem_labels_query(allow_cross_course).where(
+        m.ProblemLabel.server_id == server_id, m.ProblemLabel.problem_id == problem_id)
+    return s.scalar(q)
+
+
+def _current_problem_labels_query(allow_cross_course: bool = False):
     q = select(m.ProblemLabel).where(
-        m.ProblemLabel.server_id == server_id, m.ProblemLabel.problem_id == problem_id,
         m.ProblemLabel.is_current.is_(True))
     if not allow_cross_course:
         q = q.outerjoin(m.Server, m.Server.id == m.ProblemLabel.server_id).where(
             or_(m.Server.id.is_(None),
                 ~(m.ProblemLabel.primary_skill.like("C%") | m.ProblemLabel.primary_skill.like("D%")),
                 m.ProblemLabel.primary_skill.like(m.Server.course + "%")))
-    return s.scalar(q)
+    return q
+
+
+def preload_problem_labels(s: Session, problems: list[tuple[int, int]]) -> None:
+    """只读班级汇总共用题目标注快照；缺标注的题也记下来，不重复查询。"""
+    memo = s.info.setdefault("readonly_problem_labels", {})
+    by_server: dict[int, list[int]] = {}
+    for server_id, problem_id in dict.fromkeys(problems):
+        if (server_id, problem_id) not in memo:
+            by_server.setdefault(server_id, []).append(problem_id)
+    for server_id, ids in by_server.items():
+        for offset in range(0, len(ids), 400):
+            batch = ids[offset:offset + 400]
+            memo.update({(server_id, pid): None for pid in batch})
+            for label in s.scalars(_current_problem_labels_query().where(
+                    m.ProblemLabel.server_id == server_id, m.ProblemLabel.problem_id.in_(batch))):
+                if memo[label.server_id, label.problem_id] is None:
+                    memo[label.server_id, label.problem_id] = label
 
 
 def problem_label_at(s: Session, server_id: int, problem_id: int, at: dt.datetime) -> m.ProblemLabel | None:

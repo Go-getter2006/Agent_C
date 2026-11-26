@@ -282,6 +282,9 @@ def class_contests(s: Session, cls) -> list[m.Contest]:
 
 
 def assigned_topics(s: Session, problems, course: str) -> dict:
+    from ..labeling.labeler import preload_problem_labels
+
+    preload_problem_labels(s, problems)
     by_problem = {}
     for key in problems:
         label = current_problem_label(s, *key)
@@ -353,10 +356,11 @@ def version(user: m.User = Depends(teacher), s: Session = Depends(get_session)) 
 def classes(user: m.User = Depends(teacher), s: Session = Depends(get_session)) -> dict:
     out = []
     for c in my_classes(s, user):
-        # 进教师端先看总览：取班级列表时就在后台把每个班的总览算上
+        # 只预计算默认班，避免开发者登录时同时计算所有班、抢占当前页面的资源。
         k = class_key(c.server_id, c.class_id)
-        cache.prewarm(("overview", user.course, ("key", k)),
-                      _rebuilder(overview.__wrapped__, {"key": k}, user.id))
+        if not out:
+            cache.prewarm(("overview", user.course, ("key", k)),
+                          _rebuilder(overview.__wrapped__, {"key": k}, user.id))
         server = s.get(m.Server, c.server_id)
         out.append({"key": class_key(c.server_id, c.class_id), "name": c.class_name,
                     "server": server.name if server else "", "students": len(class_students(s, c))})
@@ -374,6 +378,7 @@ class _ClassData:
         self.ids = [st.user_id for st in self.students]
         self.problems = class_problems(s, cls)
         self.problem_set = set(self.problems)
+        mastery.preload(s, self.ids)
         self.subs: dict[str, dict[tuple[int, int], list[m.Submission]]] = {uid: defaultdict(list) for uid in self.ids}
         if self.ids:
             rows = s.scalars(select(m.Submission).where(
@@ -625,23 +630,40 @@ def _weekly(s: Session, data: "_ClassData", now: dt.datetime, weeks: int = 8) ->
         m.ChatRound.end_reason != m.REFLECT_END)).all() if data.ids else []
     out = []
     for i in range(weeks - 1, -1, -1):
-        start, end = monday - dt.timedelta(weeks=i), monday - dt.timedelta(weeks=i - 1)
-        n = 0
-        people = set()
-        tries: list[int] = []
-        for uid in data.ids:
-            for subs in data.subs[uid].values():
-                inside = [x for x in subs if x.submit_time and start <= x.submit_time < end]
-                n += len(inside)
-                if inside:
-                    people.add(uid)
-                k = tries_to_pass(subs)
-                if k is not None and subs[k - 1].submit_time and start <= subs[k - 1].submit_time < end:
-                    tries.append(k)
+        start = monday - dt.timedelta(weeks=i)
         out.append({"label": "本周" if i == 0 else f"{start.month}/{start.day}", "start": start.date().isoformat(),
-                    "submissions": n, "active": len(people), "passed": len(tries),
-                    "avgToPass": round(sum(tries) / len(tries), 1) if tries else None,
-                    "rounds": sum(1 for t in rounds if start <= t < end)})
+                    "submissions": 0, "active": 0, "passed": 0, "avgToPass": None, "rounds": 0})
+    first = monday - dt.timedelta(weeks=weeks - 1)
+    step = dt.timedelta(weeks=1)
+    people = [set() for _ in out]
+    tries = [[] for _ in out]
+
+    def bucket(when):
+        if when is None:
+            return None
+        index = (when - first) // step
+        return index if 0 <= index < weeks else None
+
+    # 一条提交只分到一周，不再为了八周趋势把全部历史重复扫八遍。
+    for uid in data.ids:
+        for subs in data.subs[uid].values():
+            for sub in subs:
+                index = bucket(sub.submit_time)
+                if index is not None:
+                    out[index]["submissions"] += 1
+                    people[index].add(uid)
+            k = tries_to_pass(subs)
+            index = bucket(subs[k - 1].submit_time) if k is not None else None
+            if index is not None:
+                tries[index].append(k)
+    for when in rounds:
+        index = bucket(when)
+        if index is not None:
+            out[index]["rounds"] += 1
+    for index, row in enumerate(out):
+        values = tries[index]
+        row.update(active=len(people[index]), passed=len(values),
+                   avgToPass=round(sum(values) / len(values), 1) if values else None)
     return out
 
 

@@ -208,6 +208,9 @@ def add_evidence(s: Session, user_id: str, skill_code: str, event_type: str, suc
 
 
 def _rows(s: Session, user_id: str, at: dt.datetime) -> list[m.SkillEvidence]:
+    memo = s.info.get(MEMO, {})
+    if ("rows", user_id) in memo:
+        return [r for r in memo["rows", user_id] if r.ts <= at]
     rows = s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.user_id == user_id)
                      .order_by(m.SkillEvidence.ts, m.SkillEvidence.id)).all()
     return [r for r in rows if r.ts <= at]
@@ -244,6 +247,41 @@ def memoize(s: Session) -> None:
     """这个会话里，同一个学生“现在”的状态只算一次（教师端只读的页面用：一个页面要反复取每个学生的状态）。
     会话里写了新证据还要重算的地方不要开。结果只读，不要改里面的对象。"""
     s.info[MEMO] = {}
+
+
+def preload(s: Session, user_ids: list[str]) -> None:
+    """只读班级页批量取证据和提交历史，避免每个学生各查三次。仍按各次计算的截止时间筛选。
+
+    保留学生在所有服务器上的历史，数据结构的 C 语言基础也要用；不改变历史回放的标注口径。
+    和 memoize 一样，只用于不会写证据的会话，缓存随数据库会话结束释放。
+    """
+    memo = s.info.get(MEMO)
+    if memo is None:
+        return
+    missing = list(dict.fromkeys(uid for uid in user_ids if ("rows", uid) not in memo))
+    for offset in range(0, len(missing), 400):
+        batch = missing[offset:offset + 400]
+        for uid in batch:
+            memo["rows", uid] = []
+            memo["attempt_rows", uid] = []
+            memo["attempt_labels", uid] = []
+        for row in s.scalars(select(m.SkillEvidence).where(m.SkillEvidence.user_id.in_(batch))
+                             .order_by(m.SkillEvidence.ts, m.SkillEvidence.id)):
+            memo["rows", row.user_id].append(row)
+        for uid, *row in s.execute(select(
+                m.Submission.user_id, m.Submission.server_id, m.Submission.problem_id, m.Submission.submission_id,
+                m.Submission.judgement, m.Submission.submit_time).where(m.Submission.user_id.in_(batch))
+                .order_by(m.Submission.submission_id)):
+            memo["attempt_rows", uid].append(row)
+        for uid, *row in s.execute(select(
+                m.Submission.user_id, m.SubmissionLabel.server_id, m.SubmissionLabel.submission_id,
+                m.SubmissionLabel.skill_code, m.SubmissionLabel.confidence, m.Submission.submit_time)
+                .join(m.Submission, (m.Submission.server_id == m.SubmissionLabel.server_id)
+                      & (m.Submission.submission_id == m.SubmissionLabel.submission_id))
+                .where(m.Submission.user_id.in_(batch), m.SubmissionLabel.is_current.is_(True),
+                       m.SubmissionLabel.role == "primary")
+                .order_by(m.SubmissionLabel.created_at, m.SubmissionLabel.id)):
+            memo["attempt_labels", uid].append(row)
 
 
 def _skill_states_v1(s: Session, user_id: str, at: dt.datetime, decay: bool) -> dict[str, SkillState]:
@@ -341,6 +379,22 @@ def apply_params(st: SkillState, params: Params, decay: bool = True) -> None:
 
 def attempt_history(s: Session, user_id: str, at: dt.datetime, *, historical: bool = False) -> dict[tuple[int, int], list[tuple[int, str, str | None]]]:
     """这个学生到 at 为止每道题的提交：(服务器, 题号) → [(提交编号, 评测结果, 这次标出的主错误的技能)]，按编号排。"""
+    memo = s.info.get(MEMO, {})
+    if not historical and ("attempt_rows", user_id) in memo:
+        skills = {}
+        for server_id, submission_id, skill, confidence, when in memo["attempt_labels", user_id]:
+            if when is not None and when <= at:
+                key = (int(server_id), int(submission_id))
+                if confidence >= 0.5:
+                    skills[key] = skill
+                else:
+                    skills.pop(key, None)
+        out = {}
+        for server_id, problem_id, submission_id, judgement, when in memo["attempt_rows", user_id]:
+            if when is not None and when <= at:
+                out.setdefault((int(server_id), int(problem_id)), []).append(
+                    (int(submission_id), judgement or "", skills.get((int(server_id), int(submission_id)))))
+        return out
     rows = s.execute(select(m.Submission.server_id, m.Submission.problem_id, m.Submission.submission_id,
                             m.Submission.judgement)
                      .where(m.Submission.user_id == user_id, m.Submission.submit_time <= at)
@@ -466,7 +520,13 @@ def _skill_states_v2(s: Session, user_id: str, at: dt.datetime, decay: bool,
         return out
 
     # 图先验：按先修顺序走一遍，先修（有证据或能推出来的）的均值决定起点
-    parents, strength = weighted_parents(s)
+    memo = s.info.get(MEMO)
+    if memo is not None and "parents" in memo:
+        parents, strength = memo["parents"]
+    else:
+        parents, strength = weighted_parents(s)
+        if memo is not None:
+            memo["parents"] = (parents, strength)
     base = cfg["prior_strength"]
     informative: dict[str, float] = {}
     for code in topo_order():

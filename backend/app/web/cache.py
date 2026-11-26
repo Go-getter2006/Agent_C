@@ -8,7 +8,7 @@
 数据变了不让老师等着重算（班级总览全班一算要几秒）：有上次的结果就先给上次的、标上 refreshing，
 同时在后台重算（每个页面同一时间只算一份）；页面看到 refreshing 过两秒再取一次，拿到新的。
 最近半小时看过的页面，“数据变没变”的定时询问一发现变了就在后台先算（refresh_recent），
-老师的页面来取时多半已经算好了；登录后取班级列表时先把总览算上（prewarm）。
+老师的页面来取时多半已经算好了；登录后只预计算默认班的总览（prewarm），后台同时最多计算两页。
 """
 from __future__ import annotations
 
@@ -72,6 +72,7 @@ RECENT = 1800        # 秒：最近这么久看过的页面，数据一变就在
 WAIT = 30            # 秒：没有旧结果、后台正在算同一页时，最多等这么久
 _inflight: dict[tuple, threading.Event] = {}
 _rebuilders: dict[tuple, tuple[float, Callable[[Session], Any]]] = {}   # 页面 → (最近一次看的时间, 怎么重算)
+_workers = threading.BoundedSemaphore(2)  # 后台最多同时算两页，给前台请求和同步保留资源。
 
 
 def _put(key: tuple, at: float, version: tuple, value: Any) -> None:
@@ -87,11 +88,13 @@ def _marked(value: Any) -> Any:
     return {**value, "refreshing": True} if isinstance(value, dict) else value
 
 
-def _refresh(key: tuple, rebuild: Callable[[Session], Any]) -> None:
+def _refresh(key: tuple, rebuild: Callable[[Session], Any]) -> bool:
     """后台重算一页（同一页同一时间只算一份）。用自己的数据库会话，只读。"""
     with _lock:
         if key in _inflight:
-            return
+            return False
+        if not _workers.acquire(blocking=False):
+            return False  # 旧结果仍可用；后续刷新请求再尝试，不积压全班计算。
         done = _inflight[key] = threading.Event()
 
     def run() -> None:
@@ -106,9 +109,11 @@ def _refresh(key: tuple, rebuild: Callable[[Session], Any]) -> None:
         finally:
             with _lock:
                 _inflight.pop(key, None)
+            _workers.release()
             done.set()
 
     threading.Thread(target=run, name=f"page-cache-{key[0]}", daemon=True).start()
+    return True
 
 
 def cached(s: Session, key: tuple, build: Callable[[], Any], ttl: int = TTL,
@@ -124,6 +129,10 @@ def cached(s: Session, key: tuple, build: Callable[[], Any], ttl: int = TTL,
             _store.move_to_end(key)
             return hit[2]
         waiting = _inflight.get(key)
+        cold_done = None
+        if BACKGROUND and rebuild is not None and hit is None and waiting is None:
+            # 第一次取也共用同一份计算；两个页面同时打开时不各算一次全班。
+            cold_done = _inflight[key] = threading.Event()
     if BACKGROUND and rebuild is not None:
         if hit is not None:            # 有上次的：先给上次的，后台算新的
             _refresh(key, rebuild)
@@ -133,9 +142,15 @@ def cached(s: Session, key: tuple, build: Callable[[], Any], ttl: int = TTL,
                 hit = _store.get(key)
             if hit is not None:
                 return hit[2]
-    value = build()
-    _put(key, now, version, value)
-    return value
+    try:
+        value = build()
+        _put(key, now, version, value)
+        return value
+    finally:
+        if cold_done is not None:
+            with _lock:
+                _inflight.pop(key, None)
+            cold_done.set()
 
 
 def prewarm(key: tuple, rebuild: Callable[[Session], Any]) -> None:
@@ -158,11 +173,10 @@ def refresh_recent(s: Session) -> int:
     with _lock:
         for k in [k for k, (seen, _r) in _rebuilders.items() if now - seen > RECENT]:
             _rebuilders.pop(k, None)
-        todo = [(k, r) for k, (_seen, r) in _rebuilders.items()
+        todo = [(seen, k, r) for k, (seen, r) in _rebuilders.items()
                 if k not in _inflight and ((hit := _store.get(k)) is None or hit[1] != version)]
-    for k, r in todo:
-        _refresh(k, r)
-    return len(todo)
+    # 优先最近正在看的班；旧页面不排成一条长队，切班请求无需等它们算完。
+    return sum(_refresh(k, r) for _seen, k, r in sorted(todo, key=lambda row: row[0], reverse=True))
 
 
 def wait_idle(timeout: float = WAIT) -> None:
