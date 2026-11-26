@@ -28,6 +28,8 @@ config.DEV_ACCOUNT = "dev-test"
 config.DEV_PASSWORD = "dev-pass"
 DEV = {"loginName": "dev-test", "password": "dev-pass"}
 config.SYNC_IN_WEB = False
+# 通用测试显式模拟数据结构未接入，接入测试单独开启并使用假 XDOJ。
+config.XDOJ_DS_URL = ""
 
 
 @pytest.fixture(autouse=True)

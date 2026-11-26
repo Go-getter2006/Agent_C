@@ -1225,7 +1225,8 @@ def sources_list(user: m.User = Depends(admin), s: Session = Depends(get_session
     candidates = _candidate_groups(s, course_server_ids(s, user.course)) if user.role == "admin" else []
     from ..servers import KNOWN
 
-    known = [{"code": k.code, "name": k.name, "course": k.course, "baseUrl": k.base_url, "basis": k.basis}
+    known = [{"code": k.code, "name": k.name, "course": k.course,
+              "baseUrl": config.XDOJ_DS_URL if k.code == "ds" else k.base_url, "basis": k.basis}
              for k in KNOWN.values() if k.course == user.course]
     return {"sources": rows, "interval": config.XDOJ_MIN_INTERVAL, "known": known, "daemon": _daemon_status(s),
             "candidates": candidates,

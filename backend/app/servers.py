@@ -18,7 +18,7 @@ class KnownServer:
     code: str
     name: str
     course: str          # C：C 语言程序设计；D：数据结构
-    base_url: str | None  # None：地址还没有给出
+    base_url: str | None  # None：从课程环境配置读取地址
     basis: str           # 地址的出处
 
 
@@ -30,7 +30,7 @@ C_SERVER = KnownServer(
 )
 DS_SERVER = KnownServer(
     code="ds", name="数据结构", course="D", base_url=None,
-    basis="《总说明》3.1：数据结构用的是同一套系统、另一台服务器，地址不同，还没接入",
+    basis="用户于 2026-11-26 提供数据结构地址 http://39.100.78.5/xdoj-ssm/；可用 XDOJ_DS_URL 覆盖",
 )
 KNOWN = {s.code: s for s in (C_SERVER, DS_SERVER)}
 
@@ -50,6 +50,10 @@ def check_course_url(course: str, base_url: str | None, code: str = "") -> None:
         return
     if course != "C" and url == normalize_url(C_SERVER.base_url):
         raise WrongServer(f"{C_SERVER.base_url} 是 C 语言的 XDOJ，不能登记成{'数据结构' if course == 'D' else course}的服务器")
+    from . import config
+
+    if course != "D" and config.XDOJ_DS_URL and url == normalize_url(config.XDOJ_DS_URL):
+        raise WrongServer(f"{config.XDOJ_DS_URL} 是数据结构的 XDOJ，不能登记成其他课程的服务器")
     known = KNOWN.get(code)
     if known is not None and known.base_url and url != normalize_url(known.base_url):
         raise WrongServer(f"服务器 {code} 的地址应当是 {known.base_url}")
@@ -58,10 +62,7 @@ def check_course_url(course: str, base_url: str | None, code: str = "") -> None:
 
 
 def ensure_known(s: Session) -> dict[str, m.Server]:
-    """把已知的服务器写进库。地址还没给的（数据结构）也登记一行，但不能用来登录或同步。
-
-    数据结构的地址给出以后写在 .env 的 XDOJ_DS_URL 里，重启就生效。
-    """
+    """把已知服务器写进库。数据结构使用配置中的地址，升级后补上旧库的空地址。"""
     from . import config
 
     out = {}

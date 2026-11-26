@@ -8,7 +8,7 @@ AUTH_MODE=dev 时，真实名单里的学生也可以用演示口令登录，只
 就进入教师端（teacher.finish_login），说是学生就是名单还没同步到。
 
 C 语言和数据结构分开登录：首页用滑动开关选课程（两个选项一直都在），登录凭证里记着这门课，之后各页面只看这门课的东西。
-数据结构那台 XDOJ 还没配地址（.env 的 XDOJ_DS_URL）时，首页照样能切过去，但表单说明还没接入、不能登录。
+数据结构已有默认地址，可由 .env 的 XDOJ_DS_URL 覆盖。课程无可用地址时，首页能切过去但不能登录。
 """
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def check_course(course: str) -> str:
 def all_courses(s: Session) -> list[dict]:
     """首页一直显示 C 语言和数据结构两个选项（两台 XDOJ，账号不通用）。
 
-    available：这门课能不能登录。有地址的 XDOJ（.env 的 XDOJ_DS_URL 填上以后数据结构就有了），
+    available：这门课能不能登录。有地址的 XDOJ（数据结构默认地址或 .env 的 XDOJ_DS_URL），
     或者库里已经有这门课的班级（演示、测试数据）。还不能登录的，首页照样能切过去，表单说明还没接入。
     """
     ready = {c["code"]: c for c in courses(s)}
