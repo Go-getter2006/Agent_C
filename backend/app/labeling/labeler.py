@@ -9,7 +9,7 @@ import datetime as dt
 import json
 import logging
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from .. import config, llm
@@ -23,10 +23,16 @@ from .rules import LabelDraft, label_by_rules
 log = logging.getLogger("labeling")
 
 
-def current_problem_label(s: Session, server_id: int, problem_id: int) -> m.ProblemLabel | None:
-    return s.scalar(select(m.ProblemLabel).where(
+def current_problem_label(s: Session, server_id: int, problem_id: int, *, allow_cross_course: bool = False) -> m.ProblemLabel | None:
+    q = select(m.ProblemLabel).where(
         m.ProblemLabel.server_id == server_id, m.ProblemLabel.problem_id == problem_id,
-        m.ProblemLabel.is_current.is_(True)))
+        m.ProblemLabel.is_current.is_(True))
+    if not allow_cross_course:
+        q = q.outerjoin(m.Server, m.Server.id == m.ProblemLabel.server_id).where(
+            or_(m.Server.id.is_(None),
+                ~(m.ProblemLabel.primary_skill.like("C%") | m.ProblemLabel.primary_skill.like("D%")),
+                m.ProblemLabel.primary_skill.like(m.Server.course + "%")))
+    return s.scalar(q)
 
 
 def problem_label_at(s: Session, server_id: int, problem_id: int, at: dt.datetime) -> m.ProblemLabel | None:

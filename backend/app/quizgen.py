@@ -88,6 +88,7 @@ def make_plan(s: Session, user_id: str, skill: str, reason: str, origin: tuple[i
     level = mastery.skill_state(s, user_id, skill).level
     history = select(m.QuizItem.has_bug, m.QuizAttempt.confidence, m.QuizAttempt.correct).join(
         m.QuizItem, m.QuizItem.id == m.QuizAttempt.item_id).where(m.QuizAttempt.user_id == user_id)
+    history = history.where(m.QuizItem.skill_code.like(course_of(skill) + "%"))
     if reason == "review":
         history = history.where(m.QuizAttempt.skill_code == skill, m.QuizAttempt.reason == "review")
     recent = s.execute(history.order_by(m.QuizAttempt.id.desc()).limit(config.QUIZ["ratio_window"])).all()

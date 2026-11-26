@@ -179,8 +179,9 @@ def _day_start(at: dt.datetime) -> dt.datetime:
 def can_start(s: Session, user_id: str, skill_code: str, at: dt.datetime | None = None) -> bool:
     """每人每天上限 3 道（待定），同一技能同一天最多 2 道。"""
     start = _day_start(at or db.now())
-    today = s.scalars(select(m.QuizAttempt).where(
-        m.QuizAttempt.user_id == user_id, m.QuizAttempt.created_at >= start)).all()
+    today = s.scalars(select(m.QuizAttempt).join(m.QuizItem, m.QuizItem.id == m.QuizAttempt.item_id).where(
+        m.QuizAttempt.user_id == user_id, m.QuizAttempt.created_at >= start,
+        m.QuizItem.skill_code.like(course_of(skill_code) + "%"))).all()
     if len(today) >= config.QUIZ["daily_limit"]:
         return False
     return sum(1 for a in today if a.skill_code == skill_code) < config.QUIZ["per_skill_daily_limit"]
@@ -197,7 +198,8 @@ def choose_item(s: Session, user_id: str, skill_code: str, rng: random.Random | 
         return None
     recent = s.execute(
         select(m.QuizAttempt.item_id, m.QuizItem.has_bug).join(m.QuizItem, m.QuizItem.id == m.QuizAttempt.item_id)
-        .where(m.QuizAttempt.user_id == user_id).order_by(m.QuizAttempt.id.desc())
+        .where(m.QuizAttempt.user_id == user_id, m.QuizItem.skill_code.like(course_of(skill_code) + "%"))
+        .order_by(m.QuizAttempt.id.desc())
         .limit(config.QUIZ["ratio_window"])).all()
     done_ids = {r[0] for r in recent}
     if has_bug is not None:

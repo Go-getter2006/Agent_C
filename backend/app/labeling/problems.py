@@ -15,7 +15,7 @@ from .. import config, llm, pdftext
 from .. import models as m
 from ..sandbox import run_program
 from ..sandbox.precheck import check_reference_solution
-from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, is_skill_code, kp_of_skill, skills_for_course
+from ..taxonomy import KNOWLEDGE_POINTS, course_prompt, kp_of_skill, skills_for_course
 from ..xdoj.assemble import source_text
 from ..xdoj.util import decode_bytes, json_hash, sha256
 
@@ -201,7 +201,9 @@ def tag_label(s: Session, server_id: int, problem_id: int) -> m.ProblemLabel | N
         m.ContestProblem, (m.ContestProblem.server_id == m.Contest.server_id)
         & (m.ContestProblem.contest_id == m.Contest.contest_id)).where(
         m.ContestProblem.server_id == server_id, m.ContestProblem.problem_id == problem_id)).all())
-    skills = tag_skills(tags + [problem.category or ""] + [problem.title or ""] + contests)
+    server = s.get(m.Server, server_id)
+    allowed = skills_for_course(server.course if server else "C")
+    skills = [c for c in tag_skills(tags + [problem.category or ""] + [problem.title or ""] + contests) if c in allowed]
     if not skills:
         return None
     label = save_problem_label(s, server_id, problem_id, problem.title or "", skills[0], skills[1:], [], "tags")
@@ -238,15 +240,18 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
     from .labeler import current_problem_label
 
     pdftext.prepare(s, server_id, problem_id)   # PDF 题面先交给大模型整理（每个文件一次），标注用整理好的
-    current = current_problem_label(s, server_id, problem_id)
-    if current is not None and not force and current.content_hash == problem_content_hash(s, server_id, problem_id):
+    current = current_problem_label(s, server_id, problem_id, allow_cross_course=True)
+    server = s.get(m.Server, server_id)
+    course_skills = skills_for_course(server.course if server else "C")
+    valid_current = current is not None and current.primary_skill in course_skills
+    if valid_current and not force and current.content_hash == problem_content_hash(s, server_id, problem_id):
         return current
     if not llm.available():
-        return current
+        return current if valid_current else None
     problem = s.get(m.Problem, (server_id, problem_id))
     text = s.get(m.ProblemText, (server_id, problem_id))
     if problem is None or not pdftext.usable_text(text):  # 乱码、还没识别出来的题面不拿去标注
-        return current
+        return current if valid_current else None
     cases = s.scalars(select(m.Testcase).where(
         m.Testcase.server_id == server_id, m.Testcase.problem_id == problem_id
     ).order_by(m.Testcase.seq, m.Testcase.testcase_id)).all()
@@ -257,11 +262,11 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
 
     def validate(d: dict):
         primary = str(d.get("primary", ""))
-        if not is_skill_code(primary):
+        if primary not in course_skills:
             raise ValueError(f"主技能 {primary} 不在技能表里")
         secondary = [str(c) for c in (d.get("secondary") or [])][:4]
         for code in secondary:
-            if not is_skill_code(code):
+            if code not in course_skills:
                 raise ValueError(f"次技能 {code} 不在技能表里")
         brief = str(d.get("brief", "")).strip()
         if not brief or len(brief) > 60:
@@ -271,7 +276,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
             tid = t.get("id")
             if tid not in case_ids:
                 continue
-            if not is_skill_code(str(t.get("skill", ""))):
+            if str(t.get("skill", "")) not in course_skills:
                 raise ValueError(f"测试点 {tid} 的技能不在技能表里")
             out.append({"id": tid, "skill": t["skill"], "situation": str(t.get("situation", ""))[:16],
                         "ordinary": bool(t.get("ordinary"))})
@@ -279,8 +284,6 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
             raise ValueError("每个测试点都要标")
         return brief, primary, secondary, out
 
-    server = s.get(m.Server, server_id)
-    course_skills = skills_for_course(server.course if server else "C")
     skill_table = "\n".join(f"{code} {item[0]}（{KNOWLEDGE_POINTS[kp_of_skill(code)]}）" for code, item in course_skills.items())
     # 测试点完整给出；没取到的是 null，和“空输出”分开（和写回复、标注提交时的证据一样）
     case_text = json.dumps([
@@ -295,7 +298,7 @@ def annotate_problem(s: Session, server_id: int, problem_id: int, force: bool = 
                                                        retries=1, max_tokens=1200)
     except llm.LLMUnavailable:
         llm.flush_records(s)
-        return current
+        return current if valid_current else None
     llm.flush_records(s)
     new = save_problem_label(s, server_id, problem_id, brief, primary, secondary, tcs, "llm")
     if current is not None:
@@ -315,13 +318,18 @@ def relabel_changed(s: Session, limit: int = 5) -> int:
 
     if not llm.available():
         return 0
-    rows = s.scalars(select(m.ProblemLabel).where(
-        m.ProblemLabel.is_current.is_(True), m.ProblemLabel.taxonomy_version != config.TAXONOMY_VERSION)).all()
+    rows = s.scalars(select(m.ProblemLabel).outerjoin(m.Server, m.Server.id == m.ProblemLabel.server_id).where(
+        m.ProblemLabel.is_current.is_(True),
+        (m.ProblemLabel.taxonomy_version != config.TAXONOMY_VERSION)
+        | ((m.ProblemLabel.primary_skill.like("C%") | m.ProblemLabel.primary_skill.like("D%"))
+           & ~m.ProblemLabel.primary_skill.like(m.Server.course + "%")))).all()
     done = 0
     for lab in rows:
         if done >= limit:
             break
-        if not ({lab.primary_skill, *(lab.secondary_skills or [])} & config.RELABEL_SKILLS):
+        server = s.get(m.Server, lab.server_id)
+        wrong_course = server is not None and lab.primary_skill not in skills_for_course(server.course)
+        if not wrong_course and not ({lab.primary_skill, *(lab.secondary_skills or [])} & config.RELABEL_SKILLS):
             lab.taxonomy_version = config.TAXONOMY_VERSION   # 这道题的标注在新表里意思没变
             continue
         key = (lab.server_id, lab.problem_id)

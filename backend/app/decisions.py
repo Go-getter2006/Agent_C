@@ -23,7 +23,7 @@ from . import config, db
 from . import models as m
 
 VERSION = "decision-1"
-RULES = {"review_pick": "thompson-1", "quiz_plan": "quiz-plan-1", "notice": "notice-1", "challenge": "challenge-random-1"}
+RULES = {"review_pick": "thompson-1", "quiz_plan": "quiz-plan-2", "notice": "notice-1", "challenge": "challenge-random-1"}
 # 学生自己在复习安排里点了“去复习”：不是系统选的，rule 记成 student-pick
 
 
