@@ -4,6 +4,7 @@
 import ExamReplay from "./ExamReplay";
 import ModelComparison, { type ComparisonReport } from "./ModelComparison";
 import ModelGuide from "./ModelGuide";
+import ModelNavigation, { type ModelSection } from "./ModelNavigation";
 import { useState } from "react";
 import { FlaskConical } from "lucide-react";
 import { get } from "../../api";
@@ -155,6 +156,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
   const data = useLoad(() => get<GraphData>(`/api/teacher/classes/${cls.key}/graph`), [cls.key, tick], 0, false, `t:models:${cls.key}`, String(tick));
   const [comparison, setComparison] = useState<ComparisonReport | null>(null);
   const [examTimes, setExamTimes] = useState<Record<string, string>>({});
+  const [section, setSection] = useState<ModelSection>("models-overview");
   const examClasses = cls.members ? classes.filter(c => cls.members?.includes(c.key)) : [cls];
   const d = data.data;
   if (data.error) return <Problem message={data.error} onRetry={data.reload} />;
@@ -178,8 +180,33 @@ export default function Models({ cls }: { cls: ClassInfo }) {
         </p>
       </div>
 
-      <ModelGuide d={d} />
+      <ModelNavigation value={section} onChange={setSection} />
+
+      <section className="stack model-panel" role="tabpanel" id="panel-models-overview"
+        aria-labelledby="tab-models-overview" hidden={section !== "models-overview"}>
+        <Card title="模型分别负责什么" sub="当前计分、研究对照与试验模型集中列在这里。" bodyClass="">
+          <div className="table-scroll"><table className="table model-registry">
+            <thead><tr><th scope="col">模型</th><th scope="col">使用状态</th><th scope="col">依据</th><th scope="col">主要用途</th></tr></thead>
+            <tbody>
+              <tr><td className="cell-title">证据加权模型（v2）</td><td><span className="pill">{d.scoringRules.model === "v2" ? "当前计分" : "研究对照"}</span></td><td>做题、改错、帮助记录、理解评估和时间衰减</td><td>掌握分按自身证据计算；研究时另检验带先修起点的预测概率</td></tr>
+              <tr><td className="cell-title">简单累计模型（v1）</td><td><span className="pill">{d.scoringRules.model === "v1" ? "当前计分" : "研究对照"}</span></td><td>固定事件权重与固定遗忘系数</td><td>与证据加权模型比较的历史基线</td></tr>
+              <tr><td className="cell-title">先修关系模型</td><td><span className="pill">研究对照</span></td><td>作答证据、技能之间的先修关系</td><td>研究预测效果，查找需要复核的先修技能</td></tr>
+              <tr><td className="cell-title">多维融合模型</td><td><span className="pill">研究对照</span></td><td>做题、理解、独立、改错、保持、自知和前置知识</td><td>检验组合不同证据能否改善后续表现的预测</td></tr>
+            </tbody>
+          </table></div>
+        </Card>
+        <ModelGuide d={d} />
+      </section>
+
+      {/* 保持组件挂载，切换栏目不重复请求，也保留日期、版本和考试时间。 */}
+      <section className="stack model-panel" role="tabpanel" id="panel-models-validation"
+        aria-labelledby="tab-models-validation" hidden={section !== "models-validation"}>
       <ModelComparison key={cls.key} classKey={cls.key} tick={tick} currentVersion={d.version} onReport={setComparison} />
+      </section>
+
+      <section className="stack model-panel" role="tabpanel" id="panel-models-parameters"
+        aria-labelledby="tab-models-parameters" hidden={section !== "models-parameters"}>
+      <p className="model-scope">{comparison ? `预测检验范围：${comparison.from} 至 ${comparison.to}。` : "预测检验范围正在读取。"} 日期与版本在“预测检验”中选择；下方参数为当前生效版本。</p>
 
       <h2 className="sec-head">掌握分的参数<span>每周学一版，下一周都用它；和经验值比之后的预测</span></h2>
       <MasteryParams d={filtered} />
@@ -192,6 +219,10 @@ export default function Models({ cls }: { cls: ClassInfo }) {
       <div className="sec-narrow">
         <FusionWeights d={d} />
       </div>
+      </section>
+
+      <section className="stack model-panel" role="tabpanel" id="panel-models-prerequisites"
+        aria-labelledby="tab-models-prerequisites" hidden={section !== "models-prerequisites"}>
 
       <h2 className="sec-head">先修关系模型的诊断线索<span>可复查的先修技能、模型分歧、前置关系统计</span></h2>
       <div className="grid-2">
@@ -258,6 +289,7 @@ export default function Models({ cls }: { cls: ClassInfo }) {
           </table>
         </div>
       </Card>
+      </section>
     </div>
   );
 }

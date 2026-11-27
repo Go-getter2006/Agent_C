@@ -2847,6 +2847,8 @@
 .model-filters label:first-child { flex: 1; min-width: min(300px, 100%); }
 .model-filters .field { width: 100%; min-width: 0; }
 .model-scope { color: var(--ink-2); font-size: var(--fs-13); }
+.model-panel[hidden] { display: none; }
+.model-registry { min-width: 760px; }
 .model-explanation { padding: var(--sp-12) 0; border-block-end: 1px solid var(--line); }
 .model-explanation > summary { cursor: pointer; min-height: 32px; font-weight: 600; }
 .model-explanation p { margin-block-start: var(--sp-10); line-height: 1.75; }
