@@ -238,18 +238,22 @@ def page_cache(name: str):
             _class(s, user, kwargs["key"])
             extra = tuple(sorted((k, v) for k, v in kwargs.items() if k not in ("s", "user")))
             return cache.cached(s, (name, user.course, *extra), lambda: fn(**kwargs),
-                                rebuild=_rebuilder(fn, kwargs, user.id))
+                                rebuild=_rebuilder(fn, kwargs, user.id, user.course))
         return wrapper
     return deco
 
 
-def _rebuilder(fn, kwargs: dict, user_id: int):
+def _rebuilder(fn, kwargs: dict, user_id: int, course: str):
     """后台重算这一页：换成后台自己的数据库会话，老师按编号重新取（请求里的对象不能跨会话用）。"""
+    params = {k: v for k, v in kwargs.items() if k not in ("s", "user")}
+
     def rebuild(s: Session):
         who = s.get(m.User, user_id)
         if who is None:
             raise HTTPException(status_code=404)
-        return fn(**{**kwargs, "s": s, "user": who})
+        # course 来自本次登录凭证，不是 users 的数据库列，换会话必须显式还原。
+        who.course = course
+        return fn(**{**params, "s": s, "user": who})
     return rebuild
 
 
@@ -360,7 +364,7 @@ def classes(user: m.User = Depends(teacher), s: Session = Depends(get_session)) 
         k = class_key(c.server_id, c.class_id)
         if not out:
             cache.prewarm(("overview", user.course, ("key", k)),
-                          _rebuilder(overview.__wrapped__, {"key": k}, user.id))
+                          _rebuilder(overview.__wrapped__, {"key": k}, user.id, user.course))
         server = s.get(m.Server, c.server_id)
         out.append({"key": class_key(c.server_id, c.class_id), "name": c.class_name,
                     "server": server.name if server else "", "students": len(class_students(s, c))})

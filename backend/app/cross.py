@@ -60,11 +60,16 @@ def ensure_seed(s: Session) -> int:
 
 
 def accepted(s: Session) -> list[m.CrossLink]:
+    memo = s.info.get(mastery.MEMO)
+    if memo is not None and "cross_links" in memo:
+        return memo["cross_links"]
     rows = list(s.scalars(select(m.CrossLink).where(m.CrossLink.status == "accepted")).all())
     if not rows and s.scalar(select(m.CrossLink.id).limit(1)) is None:
         # 表还是空的（还没写入初稿）：用初稿
         rows = [m.CrossLink(c_skill=c, d_skill=d, relation="prerequisite", source="seed", status="accepted",
                             verdict="unknown") for c, d in CROSS_EDGES]
+    if memo is not None:
+        memo["cross_links"] = rows  # 教师只读汇总中，全班共用一次读取；写入流程不启用 memoize。
     return rows
 
 
