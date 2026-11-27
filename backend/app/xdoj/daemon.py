@@ -252,11 +252,12 @@ class Daemon:
         with db.session_scope() as s:
             s.execute(m.Trigger.__table__.update().where(m.Trigger.id.in_([r[0] for r in ready])).values(handled_at=db.now()))
             store.set_time(s, 0, "last_trigger_at", db.now())
-        polled: set[int] = set()
+        polled: set[tuple[int, int | None]] = set()
 
         def poll_once(ctx: SyncContext) -> None:
-            if ctx.server_id not in polled:
-                polled.add(ctx.server_id)
+            source = (ctx.server_id, ctx.source_id)
+            if source not in polled:
+                polled.add(source)
                 self._poll(ctx)
 
         # 先取学生明确点开的这一条，再处理“活跃”触发的批量轮询和其他历史提交。

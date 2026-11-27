@@ -1,9 +1,14 @@
 """同一服务器的教师查询时钟互不覆盖，历史提交分页公平轮转。"""
+import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app import config, db
 from app import models as m
 from app.web import teacher
+from app.web.app import create_app
+from app.xdoj.fake import FakeXdoj
+from app.sources import build_contexts
 from app.xdoj import store, sync_meta, sync_submissions
 from app.xdoj.client import XdojError
 from app.xdoj.daemon import Daemon
@@ -148,3 +153,78 @@ def test_analysis_runs_before_historical_detail_backlog(database, clock):
     assert first.client.request_count == requests
     with db.session_scope() as s:
         assert s.get(m.Submission, (1, 537104)).detail_status != "done"
+
+
+@pytest.mark.parametrize("course", ["C", "D"])
+@pytest.mark.parametrize("kind", ["student_active", "submission_priority"])
+def test_active_trigger_polls_each_teacher_once_on_the_same_server(database, clock, course, kind, monkeypatch):
+    from app.xdoj import api
+
+    # 复用原有多教师场景，在创建上下文时注入本轮课程，原有 C 语言测试数据保持原样。
+    original_context = make_context
+
+    def course_context(fake, clock):
+        ctx = original_context(fake, clock)
+        ctx.course = course
+        with db.session_scope() as s:
+            s.get(m.Server, ctx.server_id).course = course
+        return ctx
+
+    monkeypatch.setattr(f"{__name__}.make_context", course_context)
+    first, second = _teachers(clock, distinct_students=True)
+    with db.session_scope() as s:
+        if kind == "student_active":
+            # 一批活跃触发不能只查询第一个老师，也不能按触发条数重复查同一位老师。
+            api.notify_student_active(s, "2500000001")
+            api.notify_student_active(s, "2600000001")
+        else:
+            api.request_priority(s, second.server_id, 537101)
+            api.request_priority(s, second.server_id, 537102)
+    calls = [first.client.request_count, second.client.request_count]
+    daemon = Daemon([first, second])
+    assert daemon.step() == "trigger"
+    with db.session_scope() as s:
+        assert set(s.scalars(select(m.Submission.submission_id))) == {537101, 537102, 537103, 537104}
+        assert store.get_state(s, 1, f"max_submission_id:{first.source_id}") == "537104"
+        assert store.get_state(s, 1, f"max_submission_id:{second.source_id}") == "537103"
+        assert all(t.handled_at is not None for t in s.scalars(select(m.Trigger)))
+    # 每位老师都收到查询；活跃触发仅查询列表，两条触发仍然各只查一次。
+    if kind == "student_active":
+        assert [first.client.request_count - calls[0], second.client.request_count - calls[1]] == [1, 1]
+    else:
+        assert first.client.request_count > calls[0] and second.client.request_count > calls[1]
+
+
+@pytest.mark.parametrize("course", ["C", "D"])
+def test_each_new_teacher_login_registers_an_independent_sync_context(database, monkeypatch, course):
+    # 不依赖 .env 中预先登记某一位老师。真实网络全部由假 XDOJ 替代。
+    monkeypatch.setattr(config, "XDOJ_USER", "")
+    monkeypatch.setattr(config, "XDOJ_PASS", "")
+    monkeypatch.setattr(config, "XDOJ_DS_URL", config.DEFAULT_XDOJ_DS_URL)
+    with TestClient(create_app()) as client:
+        for number in (1, 2):
+            fake = FakeXdoj(teacher_id=f"new-teacher-{number}", password="test-teacher-password")
+            monkeypatch.setattr(teacher, "_test_transport", fake.transport())
+            response = client.post("/api/auth/login", json={
+                "loginName": fake.teacher_id, "password": fake.password, "course": course})
+            assert response.status_code == 200 and response.json()["role"] == "teacher"
+            client.post("/api/auth/logout")
+    with db.session_scope() as s:
+        rows = s.scalars(select(m.DataSource).where(m.DataSource.enabled.is_(True))).all()
+        ids = {row.id for row in rows}
+        assert {row.teacher_user_id for row in rows} == {"new-teacher-1", "new-teacher-2"}
+        assert all(row.password_enc and not row.from_env for row in rows)
+        triggers = s.scalars(select(m.Trigger).where(m.Trigger.kind == "sync_meta",
+                                                     m.Trigger.handled_at.is_(None))).all()
+        assert {row.target_id for row in triggers} == {str(i) for i in ids}
+    contexts = build_contexts()  # 只建客户端，不请求真实 XDOJ。
+    try:
+        assert len(contexts) == 2 and {ctx.source_id for ctx in contexts} == ids
+        assert {ctx.course for ctx in contexts} == {course}
+        daemon = Daemon([], reload=lambda: contexts)
+        daemon._reload_contexts()
+        daemon._reload_contexts()
+        assert len(daemon.contexts) == 2  # 新老师都加载，已有老师不重复注册。
+    finally:
+        for ctx in contexts:
+            ctx.client.close()
