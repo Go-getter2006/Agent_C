@@ -251,13 +251,13 @@ def test_review_flow_over_api(client, demo, monkeypatch):
 def test_progress_page(client):
     login(client)
     p = client.get("/api/progress").json()
-    assert set(p) == {"summary", "knowledge", "errors", "activity", "next", "foundation"} and p["foundation"] == []
+    assert set(p) == {"summary", "knowledge", "errors", "activity", "next", "foundation", "portrait"} and p["foundation"] == []
     names = [i["name"] for g in p["knowledge"] for i in g["items"]]
     assert "求最值" in names and len(names) == len(set(names)) and len(names) == 89
     assert all(not n.startswith("D") for n in names) and "单链表" not in names   # 跨课程的内容学生看不到
     for g in p["knowledge"]:
         for i in g["items"]:
-            assert set(i) == {"name", "level", "segments", "basis", "practice", "covered"}
+            assert set(i) == {"name", "level", "segments", "basis", "practice", "covered", "id", "group", "domain", "degree"}
             assert i["level"] in ("已掌握", "基本掌握", "待加强", "还没练到")
     covered = [i for g in p["knowledge"] for i in g["items"] if i["covered"]]
     assert 15 < len(covered) < 65

@@ -31,7 +31,8 @@ def maintain_mastery() -> int:
         return pipeline.repair_mastery_evidence(s)
 
 _last: dict[str, float] = {}
-EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0, "portrait": 30.0}
+EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0}
+EVERY["portrait"] = 30.0
 
 
 def _due(name: str) -> bool:

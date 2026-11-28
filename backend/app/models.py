@@ -279,7 +279,8 @@ class CodeAnalysis(Base):
     retry_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
     created_at: Mapped[Dt] = _ts()
     updated_at: Mapped[Dt] = _ts()
-    __table_args__ = (UniqueConstraint("user_id", "course", "fingerprint", name="uq_code_analysis_input"),)
+    __table_args__ = (UniqueConstraint("user_id", "course", "fingerprint", name="uq_code_analysis_input"),
+                     Index("ix_code_analysis_pending", "state", "retry_at"))
 
 
 class SourceSnapshot(Base):

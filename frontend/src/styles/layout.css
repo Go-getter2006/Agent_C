@@ -1832,6 +1832,9 @@ button.flow-card:focus-visible {
   position: relative;
 }
 
+/* 百分比宽度取整后，末项滑块可能多出一像素；限制在底栏内部。 */
+.tabbar { overflow: clip; }
+
 .slider {
   position: absolute;
   top: 0;

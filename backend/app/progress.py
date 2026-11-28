@@ -5,13 +5,14 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from . import catalog, db, kpdesc, mastery, review
 from . import models as m
-from .labeling.labeler import current_problem_label
+from .labeling.labeler import current_problem_label, preload_problem_labels
 from .taxonomy import (KNOWLEDGE_POINTS, LEVEL_BASIC, LEVEL_MASTERED, LEVEL_NONE, LEVEL_SEGMENTS, LEVEL_WEAK, TOPICS,
                        course_of, error_name, kp_of_skill)
 
@@ -31,6 +32,16 @@ class Snapshot:
         self.info: dict[tuple[int, int], catalog.ProblemInfo] = {}
         self.skills: dict[tuple[int, int], list[str]] = {}
         self.subs: dict[tuple[int, int], list[m.Submission]] = {}
+        keys = list(self.visible)
+        preload_problem_labels(s, keys)
+        loaded_problems = list(s.scalars(select(m.Problem).where(tuple_(m.Problem.server_id,
+            m.Problem.problem_id).in_(keys)))) if keys else []
+        submissions = defaultdict(list)
+        if keys:
+            for sub in s.scalars(select(m.Submission).where(m.Submission.user_id == user_id,
+                    tuple_(m.Submission.server_id, m.Submission.problem_id).in_(keys))
+                    .order_by(m.Submission.server_id, m.Submission.submission_id)):
+                submissions[sub.server_id, sub.problem_id].append(sub)
         for key in self.visible:
             info = catalog.problem_info(s, *key)
             if info is None:
@@ -38,7 +49,7 @@ class Snapshot:
             self.info[key] = info
             label = current_problem_label(s, *key)
             self.skills[key] = ([label.primary_skill] + list(label.secondary_skills or [])) if label else []
-            self.subs[key] = catalog.user_submissions(s, user_id, *key)
+            self.subs[key] = submissions[key]
         self.kp = {k: v for k, v in mastery.kp_states(s, user_id).items() if course_of(k) == course}
         # 每个知识点一句话（一次做对几道、改对几道、还没过几道、对话里讲不讲得清）：和教师端用同一批事实
         self.desc = kpdesc.records(s, [user_id], course, set(self.visible)).get(user_id, {})
@@ -127,6 +138,12 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
 def error_block(snap: Snapshot, days: int = 30, top: int = 5) -> list[dict]:
     """我的常见错误：最近 30 天最多的几种，名称、次数、最近一次在哪道题、状态。"""
     since = snap.now - dt.timedelta(days=days)
+    labels_by_sub = defaultdict(list)
+    for lab in snap.s.scalars(select(m.SubmissionLabel).join(m.Submission,
+            (m.Submission.server_id == m.SubmissionLabel.server_id) &
+            (m.Submission.submission_id == m.SubmissionLabel.submission_id)).where(
+                m.Submission.user_id == snap.user_id, m.SubmissionLabel.is_current.is_(True))):
+        labels_by_sub[lab.server_id, lab.submission_id].append(lab)
     occurrences: dict[str, list[tuple[dt.datetime, tuple[int, int], bool]]] = {}
     for key, subs in snap.subs.items():
         coded: list[tuple[m.Submission, set[str] | None]] = []
@@ -134,9 +151,7 @@ def error_block(snap: Snapshot, days: int = 30, top: int = 5) -> list[dict]:
             if sub.judgement == "AC":
                 coded.append((sub, set()))
                 continue
-            labels = snap.s.scalars(select(m.SubmissionLabel).where(
-                m.SubmissionLabel.server_id == sub.server_id, m.SubmissionLabel.submission_id == sub.submission_id,
-                m.SubmissionLabel.is_current.is_(True))).all()
+            labels = labels_by_sub[sub.server_id, sub.submission_id]
             # 置信度低于 0.5 的标注照样保存，但不用于学生端显示
             codes = {lab.error_code for lab in labels if lab.confidence >= 0.5 and lab.error_code != "OT99"}
             coded.append((sub, codes or None))  # None：还没标，看不出改没改

@@ -94,8 +94,9 @@ def enqueue(s: Session, sub: m.Submission, course: str, info=None) -> m.CodeAnal
             row = s.scalar(select(m.CodeAnalysis).where(m.CodeAnalysis.user_id == sub.user_id,
                            m.CodeAnalysis.course == course, m.CodeAnalysis.fingerprint == fingerprint))
     if row is not None:
-        if row.state == "superseded":
+        if row.state in ("superseded", "disabled", "unavailable"):
             row.state = "pending" if row.attempts < 3 else "failed"
+            row.retry_at = None
             row.updated_at = db.now()
         cache[scope][fingerprint] = row
         for old in cache[scope].values():
@@ -247,6 +248,8 @@ def run_pending() -> int:
             rows.append(row)
         if not inputs:
             return 0
+        # Publish the claim and release row locks before remote work on PostgreSQL too.
+        s.commit()
         payload = json.dumps({"items": [{"id": ident, **value} for ident, value in inputs.items()]}, ensure_ascii=False)
         try:
             results, errors = llm.call_json("portrait_code", SYSTEM, payload, lambda data: validate_partial(data, inputs),

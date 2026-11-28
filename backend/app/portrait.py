@@ -9,6 +9,7 @@ import datetime as dt
 from collections import defaultdict
 
 from sqlalchemy import select, tuple_
+from sqlalchemy.orm import defer
 
 from . import codequality, db, diagnosis, models as m
 from .taxonomy import KNOWLEDGE_POINTS, course_of, error_name, kp_of_skill
@@ -92,7 +93,7 @@ def build(snap, knowledge: list[dict]) -> dict:
     subkeys = [(sub.server_id, sub.submission_id) for reps in weeks.values() for sub in reps.values()]
     loaded_sources = list(s.scalars(select(m.SourceSnapshot).where(tuple_(m.SourceSnapshot.server_id,
         m.SourceSnapshot.submission_id).in_(subkeys)))) if subkeys else []
-    loaded_texts = list(s.scalars(select(m.ProblemText).where(tuple_(m.ProblemText.server_id,
+    loaded_texts = list(s.scalars(select(m.ProblemText).options(defer(m.ProblemText.file_bytes)).where(tuple_(m.ProblemText.server_id,
         m.ProblemText.problem_id).in_(list(snap.info))))) if snap.info else []
     analyses, latest, pending, weekly = {}, {}, set(), []
     for week in sorted(weeks):

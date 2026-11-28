@@ -82,7 +82,7 @@ def test_sections_and_full_text(client, demo):
     for mark in ("PASTED_MARK", "FIRST_DRAFT_MARK", "RUN1_MARK", "ANSWER_MARK", "RECAP_MARK"):
         assert mark not in flat, mark          # 不勾“包含原文”就不带
     assert "text" not in rows[0] and "code" not in rows[0]
-    assert plain["request"]["versions"]["export"] == "logs-5"
+    assert plain["request"]["versions"]["export"] == "logs-6"
 
     full = _download(client, {**BODY, "includeText": True})
     rows = full["rows"]

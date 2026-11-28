@@ -54,7 +54,7 @@ def test_page_never_calls_model_and_persists_deduplicated_queue(demo, monkeypatc
         assert s.scalar(select(func.count()).select_from(m.CodeAnalysis)) == queued
         assert data["portrait"]["style"]["pending"] == again["portrait"]["style"]["pending"]
         assert all(d["value"] is None for d in data["portrait"]["style"]["dimensions"])
-        assert all("p" not in k and k["degree"] is None or 0 <= k["degree"] <= 100
+        assert all("p" not in k and (k["degree"] is None or 0 <= k["degree"] <= 100)
                    for g in data["knowledge"] for k in g["items"])
 
 
@@ -127,3 +127,61 @@ def test_migration_adds_queue_without_removing_existing_records(database):
     db.migrate()
     assert "code_analyses" in inspect(db.engine()).get_table_names()
     db.migrate()
+
+
+def test_partial_batch_keeps_valid_result_without_repeating_it():
+    inputs={1:{"code":"int main(){return 0;}"},2:{"code":"int main(){return 1;}"}}
+    data=output(inputs)
+    data["items"][1]["metrics"]["layout"]["lines"]=[500]
+    valid,errors=codequality.validate_partial(data,inputs)
+    assert set(valid)=={1} and set(errors)=={2}
+
+
+def test_new_submissions_refresh_queue_and_can_restore_an_earlier_source(demo):
+    with db.session_scope() as s:
+        at=codequality.monday(db.now())+dt.timedelta(hours=1)
+        a=sub(s,demo["server_id"],930001,at,"int main(){return 0;}")
+        original=codequality.enqueue(s,a,"C")
+        b=sub(s,demo["server_id"],930002,at+dt.timedelta(minutes=1),"int main(){return 1;}")
+        codequality.on_submission(s,b)
+        assert original.state=="superseded"
+        c=sub(s,demo["server_id"],930003,at+dt.timedelta(minutes=2),"int main(){return 0;}")
+        codequality.on_submission(s,c)
+        assert original.state=="pending"
+        assert s.scalar(select(func.count()).select_from(m.CodeAnalysis))==2
+
+
+def test_analysis_export_obeys_text_and_source_controls(demo):
+    from app import logs
+    now=db.now()
+    with db.session_scope() as s:
+        source=sub(s,demo["server_id"],940001,now,"int main(){return 0;}")
+        row=codequality.enqueue(s,source,"C")
+        result=codequality.validate(output({row.id:{"code":"int main(){return 0;}"}}),{row.id:{"code":"int main(){return 0;}"}})[row.id]
+        result["metrics"]["layout"]["reason"]="private assessment explanation"
+        row.result,row.state=result,"ready"
+        s.flush()
+        plain=logs.collect(s,[UID],now-dt.timedelta(days=1),now+dt.timedelta(days=1),["portrait"],False,"C")
+        assert len(plain)==1 and plain[0].code==""
+        assert "private assessment explanation" not in json.dumps(plain[0].data)
+        full=logs.collect(s,[UID],now-dt.timedelta(days=1),now+dt.timedelta(days=1),["portrait"],True,"C",True)
+        assert full[0].code=="int main(){return 0;}"
+        assert full[0].data["result"]["metrics"]["layout"]["reason"]=="private assessment explanation"
+
+
+def test_progress_batches_submission_reads_instead_of_one_query_per_problem(demo):
+    from sqlalchemy import event
+    statements=[]
+    def record(conn,cursor,statement,parameters,context,executemany):
+        statements.append(statement)
+    engine=db.engine()
+    event.listen(engine,"before_cursor_execute",record)
+    try:
+        with db.session_scope() as s:
+            snap=progress.Snapshot(s,UID)
+            assert len(snap.info)>10
+    finally:
+        event.remove(engine,"before_cursor_execute",record)
+    reads=[q for q in statements if "FROM xdoj_submissions" in q and "ORDER BY xdoj_submissions" in q]
+    # One page snapshot and two existing knowledge-description batches, regardless of problem count.
+    assert len(reads)<=3
