@@ -485,7 +485,7 @@ class Daemon:
                 log.info("重新入队上次失败、还没取齐的 %d 个任务（提交详情、题面和测试点）", n)
 
     def run_forever(self) -> None:
-        from ..automation import schedule_reviews
+        from ..automation import schedule_reviews, schedule_portraits
 
         self.startup()
         log.info("主循环启动，数据源 %d 个", len(self.contexts))
@@ -505,6 +505,7 @@ class Daemon:
                 except Exception:  # 心跳写不进去不影响同步
                     log.exception("写心跳失败")
             schedule_reviews()
+            schedule_portraits()
             if self._reload is not None and time.monotonic() - last_reload >= 60:
                 last_reload = time.monotonic()
                 self._reload_contexts()

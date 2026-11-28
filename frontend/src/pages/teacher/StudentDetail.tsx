@@ -14,8 +14,11 @@ import { useLoad } from "../../lib/hooks";
 import { fullTime, futureDay, shortTime } from "../../lib/time";
 import { StaffLink, Code, endReason, HELP, OUTCOME, REASON, RESOLUTION, ScoreBadge, TeacherPage, isDeveloper, useClasses, type SkillRef } from "./common";
 import { DiagnosisCard, type DiagnosisRow } from "./Diagnosis";
+import LearningPortrait from "../../components/LearningPortrait";
+import type { ProgressData } from "../../types";
 
 interface Detail {
+  learning?: ProgressData;
   assignmentMastery: { score: number | null; quality: number | null; coveredTopics: number; scoredTopics: number; totalTopics: number; coveredProblems: number; totalProblems: number };
   student: { userId: string; name: string; class: { key: string; name: string } };
   facts: { score: number | null; passed: number; total: number; avgToPass: number | null; weak: number; stuck: number; lastActive: string | null };
@@ -119,7 +122,8 @@ function OverviewTab({ d }: { d: Detail }) {
         { label: "待加强", value: `${f.weak} 个知识点` },
         { label: "最近提交", value: f.lastActive ? shortTime(f.lastActive) : "还没交过" },
       ]} />
-      <Card title="知识点" sub="掌握分 0~100：一次做对、交几次改对、还没过，和对话里评的理解都算在里面" bodyClass="">
+      {d.learning?.portrait && <LearningPortrait data={d.learning.portrait} knowledge={d.learning.knowledge}/>}
+      <Card title="知识点" bodyClass="">
         {d.knowledge.length === 0 ? <Empty title="还没有练过的知识点" /> : (
           <div className="table-scroll">
             <table className="table">

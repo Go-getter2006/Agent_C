@@ -23,9 +23,11 @@ def level_view(level: str) -> dict:
 class Snapshot:
     """把算学情页要用的东西一次取齐。"""
 
-    def __init__(self, s: Session, user_id: str, now: dt.datetime | None = None, course: str = "C"):
+    def __init__(self, s: Session, user_id: str, now: dt.datetime | None = None, course: str = "C", visible: set | None = None):
         self.s, self.user_id, self.now, self.course = s, user_id, now or db.now(), course
         self.visible = catalog.visible_problems(s, user_id, course)
+        if visible is not None:
+            self.visible = [key for key in self.visible if key in visible]
         self.info: dict[tuple[int, int], catalog.ProblemInfo] = {}
         self.skills: dict[tuple[int, int], list[str]] = {}
         self.subs: dict[tuple[int, int], list[m.Submission]] = {}
@@ -76,6 +78,7 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
 
     作业还没涉及的知识点也列出来（covered=False），让学生看到这门课的全貌；不显示知识点之间的连线和概率。
     """
+    from .portrait import knowledge_meta
     kps: dict[str, list] = {}
     for key in snap.info:
         for kp in snap.kps_of(key):
@@ -116,7 +119,7 @@ def knowledge_block(snap: Snapshot) -> list[dict]:
             basis = "上次小题你漏看了一个错误。再读一段代码，先判断它是否符合题意。"
         practice = snap.practice_for(kp) if keys else None
         groups.setdefault(TOPICS.get(kp[:3], ""), []).append({
-            "name": KNOWLEDGE_POINTS.get(kp, ""), **level_view(level), "basis": basis, "covered": bool(keys),
+            "name": KNOWLEDGE_POINTS.get(kp, ""), **knowledge_meta(kp, state, course), **level_view(level), "basis": basis, "covered": bool(keys),
             "practice": snap.problem_view(practice) if practice else None})
     return [{"topic": topic, "items": items} for topic, items in groups.items()]
 
@@ -254,8 +257,9 @@ def foundation_block(snap: Snapshot) -> list[dict]:
     return out[:6]
 
 
-def build(s: Session, user_id: str, course: str = "C") -> dict:
-    snap = Snapshot(s, user_id, course=course)
+def build(s: Session, user_id: str, course: str = "C", visible: set | None = None) -> dict:
+    from . import portrait
+    snap = Snapshot(s, user_id, course=course, visible=visible)
     errors = error_block(snap)
     nxt = next_block(snap, errors)
     for row in errors:
@@ -265,6 +269,7 @@ def build(s: Session, user_id: str, course: str = "C") -> dict:
     weeks = activity["weeks"]
     rv = review.summary(s, user_id, snap.now, course)
     levels = [state.level for state in snap.kp.values()]
+    knowledge = knowledge_block(snap)
     return {
         "summary": {
             "passed": sum(1 for k in snap.info if snap.passed(k)), "total": len(snap.info),
@@ -273,7 +278,7 @@ def build(s: Session, user_id: str, course: str = "C") -> dict:
             "reviewDue": len(rv["due"]), "reviewActive": rv["active"],
             "levels": {lv: levels.count(lv) for lv in (LEVEL_MASTERED, LEVEL_BASIC, LEVEL_WEAK)},
         },
-        "knowledge": knowledge_block(snap), "errors": errors, "activity": activity, "next": nxt,
+        "knowledge": knowledge, "portrait": portrait.build(snap, knowledge), "errors": errors, "activity": activity, "next": nxt,
         "foundation": foundation_block(snap)}
 
 

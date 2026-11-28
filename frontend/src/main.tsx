@@ -16,6 +16,7 @@ import "./styles/desktop.css";
 import "./styles/login.css";
 import "./styles/homework-nav.css";
 import "./styles/type.css";
+import "./styles/portrait.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

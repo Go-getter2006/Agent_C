@@ -9,7 +9,7 @@
 
   /* 底色和表面（C 语言：暖色的纸） */
   --bg: #f3efe7;            /* 页面底色 */
-  --surface: #fffdf8;       /* 卡片、对话区 */
+  --surface: #ffffff;       /* 全站卡片、对话区统一白底 */
   --surface-2: #f9f6ef;     /* 卡片里的次级区域、表头、代码块标题条 */
   --surface-3: #f0eadf;     /* 悬停、学生的消息气泡 */
   --row-hover: #fcf9f3;
@@ -153,7 +153,7 @@
 /* 数据结构：冷色的纸。只换底色、文字、线、侧边栏和强调色；语义色、掌握档位、图表颜色两门课一样 */
 :root[data-course="D"] {
   --bg: #edf1f6;
-  --surface: #fcfdff;
+  --surface: #ffffff;
   --surface-2: #f5f8fc;
   --surface-3: #e8eef6;
   --row-hover: #f8fafd;
@@ -207,3 +207,6 @@
     --gutter: 16px;
   }
 }
+
+/* 学生与教师共用的四图画像令牌 */
+:root{--portrait-mastered:#32816b;--portrait-basic:#6a8dbf;--portrait-weak:#c47c6c;--portrait-none:#aeb7c2;--portrait-domain-1:#7a88b0;--portrait-domain-2:#5f9296;--portrait-domain-3:#a47d99;--portrait-domain-4:#a5896b;--portrait-ability:#39877c;--portrait-week:#b85d42;--portrait-history-high:#a6bacb;--portrait-history-low:#cbd5de;--portrait-history-band:#edf2f6;--portrait-grid:#e6ebef;--portrait-heat-1:#f0edf8;--portrait-heat-2:#dbd6ee;--portrait-heat-3:#ada5d1;--portrait-heat-4:#796eae;--portrait-heat-5:#53477f}

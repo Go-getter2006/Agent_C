@@ -260,6 +260,28 @@ class Submission(Base):
     __table_args__ = (Index("ix_sub_user_problem", "server_id", "user_id", "problem_id"),)
 
 
+class CodeAnalysis(Base):
+    """按源码与题面指纹复用的代码画像分析。页面只排队，后台一次返回量规与复杂度。"""
+    __tablename__ = "code_analyses"
+    id: Mapped[int] = mapped_column(AutoPK, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(32), index=True)
+    course: Mapped[str] = mapped_column(String(8))
+    server_id: Mapped[int] = mapped_column(Integer)
+    problem_id: Mapped[int] = mapped_column(BigInteger)
+    submission_id: Mapped[int] = mapped_column(BigInteger)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    version: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(100))
+    state: Mapped[str] = mapped_column(String(16), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default="")
+    retry_at: Mapped[Dt | None] = mapped_column(UTCDateTime, nullable=True)
+    created_at: Mapped[Dt] = _ts()
+    updated_at: Mapped[Dt] = _ts()
+    __table_args__ = (UniqueConstraint("user_id", "course", "fingerprint", name="uq_code_analysis_input"),)
+
+
 class SourceSnapshot(Base):
     __tablename__ = "xdoj_source_snapshots"
     server_id: Mapped[int] = mapped_column(Integer, primary_key=True)

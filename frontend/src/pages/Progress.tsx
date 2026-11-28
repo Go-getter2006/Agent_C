@@ -8,6 +8,7 @@ import { BookOpen, CircleAlert, CircleCheck, History, RotateCcw } from "lucide-r
 import { api } from "../api";
 import { ColumnChart, StackedBar } from "../components/charts";
 import { StudentShell } from "../components/Shell";
+import LearningPortrait from "../components/LearningPortrait";
 import { Card, Empty, Facts, LEVELS, LevelLegend, Loading, Meter, Problem, levelClass } from "../components/ui";
 import { useLoad } from "../lib/hooks";
 import { shortTime } from "../lib/time";
@@ -85,6 +86,8 @@ export default function Progress() {
                 },
               ]} />
 
+              {p.portrait && <LearningPortrait data={p.portrait} knowledge={p.knowledge} onPractice={practice}/>}
+
               <div className="grid-main progress-grid">
                 <div className="stack">
                   <Card title="接下来做什么" sub="按要紧程度排，最多三件">
@@ -128,6 +131,7 @@ export default function Progress() {
                     </Card>
                   )}
 
+                  <details className="portrait-legacy-details"><summary>全部知识点明细</summary>
                   <Card className="progress-scroll-card" title="知识点掌握" sub={`作业里涉及到的知识点。${all ? "" : uncovered ? `还有 ${uncovered} 个作业里没练到，先收起来了。` : ""}`}
                     action={uncovered > 0 ? (
                       <button type="button" className="btn btn-sm" aria-pressed={all} onClick={() => setAll(!all)}>
@@ -157,6 +161,7 @@ export default function Progress() {
                     })}
                     <LevelLegend />
                   </Card>
+                  </details>
                 </div>
 
                 <div className="stack">

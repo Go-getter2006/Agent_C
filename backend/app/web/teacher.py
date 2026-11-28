@@ -903,6 +903,8 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
     student, cls = _student_in_my_classes(s, user, user_id, classKey)
     course = _course_of_class(s, cls)
     problem_set = set(class_problems(s, cls))
+    from .. import progress
+    learning = progress.build(s, user_id, course, visible=problem_set)
     simple = {c: v for c, v in mastery.skill_states(s, user_id, model="v1").items() if in_course(c, course)}
     v2 = mastery.skill_states(s, user_id, model="v2", with_predicted=True)
     post_all = graphmodel.current_posteriors(s, user_id)
@@ -1012,7 +1014,7 @@ def student_detail(user_id: str, user: m.User = Depends(teacher), s: Session = D
              "lastActive": last.isoformat() if last else None}
     return {"assignmentMastery": coverage, "student": {"userId": student.user_id, "name": student.name,
                         "class": {"key": class_key(cls.server_id, cls.class_id), "name": cls.class_name}},
-            "facts": facts,
+            "facts": facts, "learning": learning,
             "course": course, "foundation": cross.c_foundation(s, user_id) if course == "D" else [],
             "joint": cross.joint_state(s, user_id) if course == "D" else [],
             "profile": profile.teacher_view(s, user_id, course),

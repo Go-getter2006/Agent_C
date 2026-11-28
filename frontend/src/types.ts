@@ -198,6 +198,10 @@ export interface ProblemRef {
 }
 
 export interface KnowledgeItem {
+  id?: string;
+  group?: string;
+  domain?: string;
+  degree?: number | null;
   name: string;
   level: string;
   segments: number;
@@ -211,6 +215,7 @@ export type NextItem =
   | { kind: "review"; reviewId: number; title: string; reason: string };
 
 export interface ProgressData {
+  portrait?: LearningPortraitData;
   summary: {
     passed: number;
     total: number;
@@ -235,6 +240,24 @@ export interface ProgressData {
     weeks: { label: string; start: string; submissions: number; passed: number }[];
   };
   next: NextItem[];
+}
+
+export interface PortraitComplexity { value: string | null; variable?: string; reason: string; lines: number[] }
+export interface PortraitRecord {
+  title?: string; source: string; time: string | null; text: string; problem?: ProblemRef | null;
+  lines?: string[]; mark?: number[]; timeComplexity?: PortraitComplexity; spaceComplexity?: PortraitComplexity;
+}
+export interface PortraitDimension {
+  id: string; name: string; value: number | null; count: number; state?: string;
+  low?: number | null; high?: number | null; facts?: { label: string; n: number; d: number }[]; records: PortraitRecord[];
+}
+export interface LearningPortraitData {
+  version: string; updatedAt: string;
+  abilities: PortraitDimension[];
+  style: { dimensions: PortraitDimension[]; weeks: { start: string; count: number; analysed: number; values: Record<string, number | null> }[];
+    currentWeek: string; shownWeek: string | null; isCurrent: boolean; count: number; pending: number };
+  misconceptions: { domains: string[]; patterns: { id: string; name: string }[]; observed: string[]; weekStart: string;
+    records: (PortraitRecord & { id: string; domain: string; pattern: string })[] };
 }
 
 export interface ReviewItemView {

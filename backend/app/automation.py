@@ -31,7 +31,7 @@ def maintain_mastery() -> int:
         return pipeline.repair_mastery_evidence(s)
 
 _last: dict[str, float] = {}
-EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0}
+EVERY = {"rounds": 60.0, "assess": 10.0, "pdftext": 60.0, "labels": 60.0, "quizprep": 15.0, "graph_refresh": 30.0, "portrait": 30.0}
 
 
 def _due(name: str) -> bool:
@@ -43,6 +43,22 @@ def _due(name: str) -> bool:
 
 
 _review_worker: threading.Thread | None = None
+_portrait_worker: threading.Thread | None = None
+
+
+def schedule_portraits() -> None:
+    """独立后台线程，不阻塞同步或页面。一次合并一名学生同一周的新源码。"""
+    global _portrait_worker
+    if (_portrait_worker is not None and _portrait_worker.is_alive()) or not _due("portrait"):
+        return
+    def run():
+        from . import codequality
+        try:
+            codequality.run_pending()
+        except Exception:
+            log.exception("代码画像后台分析失败")
+    _portrait_worker = threading.Thread(target=run, name="code-portrait", daemon=True)
+    _portrait_worker.start()
 
 
 def schedule_reviews() -> None:

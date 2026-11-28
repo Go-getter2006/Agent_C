@@ -36,6 +36,8 @@ def process_submission(s: Session, server_id: int, submission_id: int, now=None)
     if sub is None or sub.detail_status != "done" or sub.judgement == "PENDING" \
             or accounts.submission_removed(s, sub.server_id, sub.user_id, sub.class_id, sub.contest_id):
         return
+    from . import codequality
+    codequality.on_submission(s, sub)
     if sub.judgement != "AC":
         labels = labeler.label_submission(s, server_id, submission_id)
         primary = next((lab for lab in labels if lab.role == "primary" and lab.confidence >= 0.5), None)

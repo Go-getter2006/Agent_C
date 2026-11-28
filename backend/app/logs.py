@@ -56,10 +56,11 @@ KINDS: dict[str, str] = {
     "help": "帮助之后（每次帮助后的下一次提交）",
     "decision": "系统的决定（复习先出哪个、出正确还是有错的代码、发不发主动消息）",
     "assess": "理解评估",
+    "portrait": "代码画像评估",
 }
 MAX_IDS = 5000   # 开发者全选所有班时也够
 # 导出文件的格式版本：列或 data 里的字段改了就改这个（logs-2：加“栏目”“代码”两列、复习小题全过程、可选提交源码）
-EXPORT_VERSION = "logs-5"
+EXPORT_VERSION = "logs-6"
 MAX_DAYS = 366
 TTL_DAYS = 7
 
@@ -161,6 +162,21 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
 
     def add(**kw) -> None:
         rows.append(Row(name=names.get(kw["user_id"], ""), **kw))
+
+    if "portrait" in kinds:
+        query = select(m.CodeAnalysis).where(m.CodeAnalysis.user_id.in_(user_ids),
+            m.CodeAnalysis.created_at >= date_from, m.CodeAnalysis.created_at <= date_to)
+        if course is not None:
+            query = query.where(m.CodeAnalysis.course == course)
+        for a in s.scalars(query.order_by(m.CodeAnalysis.id)):
+            result = a.result if include_text else {key: {name: {k: v for k, v in metric.items() if k not in ("reason", "lines")}
+                      for name, metric in value.items()} if key == "metrics" else {k: v for k, v in value.items() if k not in ("reason", "lines")}
+                      for key, value in (a.result or {}).items()}
+            add(user_id=a.user_id, time=a.created_at, kind="portrait", action="代码画像评估", course=a.course,
+                problem_id=a.problem_id, submission_id=a.submission_id, detail=a.state,
+                code=(source_text(s, a.server_id, a.submission_id) or "") if include_code else "",
+                data={"version": a.version, "model": a.model, "fingerprint": a.fingerprint,
+                      "state": a.state, "attempts": a.attempts, "result": result, "updatedAt": a.updated_at.isoformat()})
 
     if "submission" in kinds:
         subs = s.scalars(select(m.Submission).where(
@@ -535,10 +551,10 @@ COLUMNS = [("user_id", "学号"), ("name", "姓名"), ("time", "时间"), ("kind
 
 def versions() -> dict:
     """导出里各指标的版本（定义改了版本号就变，docs/研究数据与指标.md）。"""
-    from . import config, decisions, diagnosis, helpeffect, stuckstats
+    from . import config, decisions, diagnosis, helpeffect, stuckstats, portrait, codequality
 
     return {"export": EXPORT_VERSION, "stuck": stuckstats.VERSION, "helpNext": helpeffect.VERSION, "decisions": decisions.VERSION,
-            "prompt": config.PROMPT_VERSION,
+            "prompt": config.PROMPT_VERSION, "portrait": portrait.VERSION, "codePortrait": codequality.VERSION,
             "diagnosis": diagnosis.VERSION, "quizProtocol": 2,
             "graph": config.GRAPH_VERSION,
             "reviewSchedule": "evidence-priority-1", "mastery": config.MASTERY_VERSION}
