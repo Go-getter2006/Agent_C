@@ -185,3 +185,15 @@ def test_progress_batches_submission_reads_instead_of_one_query_per_problem(demo
     reads=[q for q in statements if "FROM xdoj_submissions" in q and "ORDER BY xdoj_submissions" in q]
     # One page snapshot and two existing knowledge-description batches, regardless of problem count.
     assert len(reads)<=3
+
+
+def test_failed_drafts_wait_for_changes_to_settle_before_paid_analysis(demo):
+    now=db.now()
+    with db.session_scope() as s:
+        draft=sub(s,demo["server_id"],950001,now,"int main(){return 1;}",result="WA")
+        pending=codequality.enqueue(s,draft,"C")
+        assert pending.retry_at == now+codequality.SETTLE
+        passed=sub(s,demo["server_id"],950002,now+dt.timedelta(seconds=1),"int main(){return 0;}")
+        ready=codequality.enqueue(s,passed,"C")
+        assert ready.retry_at is None
+        assert pending.state=="superseded"

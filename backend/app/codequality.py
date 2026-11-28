@@ -19,12 +19,13 @@ from . import catalog, config, db, llm, models as m, pdftext
 from .xdoj.assemble import source_text
 
 VERSION = "code-portrait-1"
+SETTLE = dt.timedelta(minutes=10)  # 未通过稿先等连续修改稳定；通过稿无需等待。
 STYLE = {"layout": "排版规范", "naming": "命名清晰", "constants": "常量表达", "control": "控制结构",
          "functions": "函数组织", "redundancy": "重复冗余"}
 DIMENSIONS = {**STYLE, "design": "方案设计", "efficiency": "效率分析"}
 log = logging.getLogger(__name__)
 
-SYSTEM = """你是 C/C++ 编程教学中的代码作品评估员，按题目要求和这份实际提交评估作品，不推断学生人格、独立性或真实心理能力。
+SYSTEM = """你是程序设计教学中的代码作品评估员，语言以实际提交的language字段为准。按题目要求和这份实际提交评估作品，不推断学生人格、独立性或真实心理能力。
 一次输入可能有多份代码，分别分析，输出 JSON {"items":[{"id":原id,"metrics":{各指标键:量规对象},"time":复杂度对象,"space":复杂度对象}]}。
 指标必须包含 layout,naming,constants,control,functions,redundancy,design,efficiency 八项。
 量规对象 {"level":0到3的整数或null,"confidence":0到1,"reason":"依据说明","lines":[源码原始行号]}。
@@ -87,7 +88,8 @@ def enqueue(s: Session, sub: m.Submission, course: str, info=None) -> m.CodeAnal
             with s.begin_nested():
                 row = m.CodeAnalysis(user_id=sub.user_id, course=course, server_id=sub.server_id,
                                      problem_id=sub.problem_id, submission_id=sub.submission_id, fingerprint=fingerprint,
-                                     version=VERSION, model=config.DEEPSEEK_MODEL)
+                                     version=VERSION, model=config.DEEPSEEK_MODEL,
+                                     retry_at=(sub.submit_time + SETTLE) if sub.judgement != "AC" and sub.submit_time else None)
                 s.add(row)
                 s.flush()
         except IntegrityError:
