@@ -33,6 +33,16 @@ def test_removing_identity_comments_preserves_source_line_numbers():
     assert cleaned.splitlines()[3]=='int main(){return 0;}'
 
 
+def test_flat_result_reader_preserves_values_without_filling_missing_fields():
+    text='{"a_level":2,"a_reason":"keep literal {text}"},"a_lines":[1,3]}}'
+    value,note=llm.decode_json_object(text,allow_extra_closers=True,flat_fields={'a_level','a_reason','a_lines','a_next'})
+    assert value=={'a_level':2,'a_reason':'keep literal {text}','a_lines':[1,3]}
+    assert 'a_next' not in value and '完整字段' in note
+    for bad in ('{"a_level":2}{"a_level":3}', '{"a_level":2,"a_level":3}}', '{"a_level":2', '{"unknown":2}}'):
+        with pytest.raises(ValueError):
+            llm.decode_json_object(bad,allow_extra_closers=True,flat_fields={'a_level','a_reason'})
+
+
 def test_sampling_can_change_for_portrait_without_changing_other_call_defaults(database,monkeypatch):
     payloads=[]
     monkeypatch.setattr(config,'DEEPSEEK_API_KEY','test-no-network')

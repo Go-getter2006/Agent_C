@@ -151,7 +151,48 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
 _JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```\Z", re.IGNORECASE)
 
 
-def decode_json_object(text: str, *, allow_extra_closers: bool = False) -> tuple[dict, str]:
+def _decode_flat_fields(body: str, fields: set[str]) -> dict:
+    """Read literal complete key/value pairs; tolerate only misplaced top-level closing delimiters."""
+    if not body.startswith("{") or not body.rstrip().endswith("}"):
+        raise ValueError("结构化结果没有完整边界")
+    decoder, result, pos = json.JSONDecoder(), {}, 1
+    while pos < len(body):
+        while pos < len(body) and body[pos] in " \t\r\n,}]":
+            pos += 1
+        if pos == len(body):
+            break
+        if body[pos] != '"':
+            raise ValueError("结构化结果中有额外对象或非字段内容")
+        key, end = decoder.raw_decode(body, pos)
+        if key in result:
+            raise ValueError("结构化字段重复")
+        pos = end
+        while pos < len(body) and body[pos].isspace():
+            pos += 1
+        if pos == len(body) or body[pos] != ":":
+            raise ValueError("结构化字段缺少分隔符")
+        pos += 1
+        while pos < len(body) and body[pos].isspace():
+            pos += 1
+        try:
+            value, end = decoder.raw_decode(body, pos)
+        except json.JSONDecodeError:
+            break  # Never invent an incomplete value; validated prior fields can be retained.
+        if key in fields and isinstance(value, dict):
+            raise ValueError("扁平结果不能包含嵌套对象")
+        pos = end
+        while pos < len(body) and body[pos].isspace():
+            pos += 1
+        if pos < len(body) and body[pos] not in ",}]":
+            break  # Includes unescaped quotes inside text; do not adopt that field.
+        if key in fields:
+            result[key] = value
+    if not result:
+        raise ValueError("没有完整的结构化字段")
+    return result
+
+
+def decode_json_object(text: str, *, allow_extra_closers: bool = False, flat_fields: set[str] | None = None) -> tuple[dict, str]:
     """Only tolerate closing delimiters after an already complete object, never repair its contents."""
     text = text.strip()
     match = _JSON_FENCE.fullmatch(text)
@@ -162,11 +203,15 @@ def decode_json_object(text: str, *, allow_extra_closers: bool = False) -> tuple
     except json.JSONDecodeError:
         if not allow_extra_closers:
             raise
-        data, end = json.JSONDecoder().raw_decode(body)
-        suffix = body[end:].strip()
-        if not suffix or any(char not in "}] \t\r\n" for char in suffix):
-            raise ValueError("完整JSON对象后还有其他内容")
-        note = "结构化结果尾部有多余结束符，已按完整对象边界读取"
+        if flat_fields is not None:
+            data = _decode_flat_fields(body, flat_fields)
+            note = "结构化结果顶层封闭符不匹配，仅保留完整字段值"
+        else:
+            data, end = json.JSONDecoder().raw_decode(body)
+            suffix = body[end:].strip()
+            if not suffix or any(char not in "}] \t\r\n" for char in suffix):
+                raise ValueError("完整JSON对象后还有其他内容")
+            note = "结构化结果尾部有多余结束符，已按完整对象边界读取"
     if not isinstance(data, dict):
         raise ValueError("输出不是 JSON 对象")
     return data, note
@@ -191,7 +236,10 @@ def _json_request(prompt_id, system, user, validate, retries, max_tokens, model,
             tin, tout = tin + a, tout + b
             text = text.strip()
             try:
-                data, framing_note = decode_json_object(text, allow_extra_closers=schema is not None and finish_reason != "length")
+                properties = schema.get("properties", {}) if schema else {}
+                flat_fields = set(properties) if len(properties) > 1 and all(v.get("type") != "object" for v in properties.values()) else None
+                data, framing_note = decode_json_object(text, allow_extra_closers=schema is not None and finish_reason != "length",
+                                                      flat_fields=flat_fields)
             except json.JSONDecodeError as exc:
                 if finish_reason == "length":
                     raise ValueError("达到模型输出或上下文上限，JSON 未完整返回") from exc

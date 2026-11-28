@@ -270,3 +270,11 @@ def test_request_has_explicit_current_source_line_numbers_and_valid_json_example
     assert request["currentSubmission"]["lines"][-1]=={"line":3,"text":"}"}
     example=json.loads(codequality.request_system({1:item}).split("结束后立即停止：\n")[1])
     assert set(example)=={"layout_level","layout_confidence","layout_reason","layout_next","layout_lines"}
+
+
+def test_extra_unrequested_metrics_do_not_discard_or_overwrite_requested_fields():
+    item={'code':'int main(){return 0;}','requestedMetrics':['layout'],'requestedComplexity':[]}
+    generated=output({1:item})['items'][0]['metrics']
+    flat={name+'_'+key:value for name,metric in generated.items() for key,value in metric.items()}
+    valid,errors=codequality.validate_response(flat,{1:item})
+    assert errors=={} and set(valid[1]['metrics'])=={'layout'}

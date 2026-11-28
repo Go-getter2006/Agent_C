@@ -195,7 +195,10 @@ def validate(data: dict, inputs: dict[int, dict]) -> dict[int, dict]:
         for key, metric in [*metrics.items(), *[(key, item.get(key)) for key in complexities]]:
             if not isinstance(metric, dict):
                 raise ValueError("分析项必须是对象")
-            lines = metric.get("lines") or []
+            required_fields = {"level", "confidence", "reason", "lines"} if key in DIMENSIONS else {"value", "variable", "reason", "lines"}
+            if not required_fields <= set(metric):
+                raise ValueError("分析字段不完整")
+            lines = metric.get("lines")
             if not isinstance(lines, list) or any(type(n) is not int or not 1 <= n <= size for n in lines):
                 raise ValueError("源码行号越界")
             metric["lines"] = list(dict.fromkeys(lines))
