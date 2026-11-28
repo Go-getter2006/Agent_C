@@ -60,7 +60,7 @@ KINDS: dict[str, str] = {
 }
 MAX_IDS = 5000   # 开发者全选所有班时也够
 # 导出文件的格式版本：列或 data 里的字段改了就改这个（logs-2：加“栏目”“代码”两列、复习小题全过程、可选提交源码）
-EXPORT_VERSION = "logs-6"
+EXPORT_VERSION = "logs-7"
 MAX_DAYS = 366
 TTL_DAYS = 7
 
@@ -169,7 +169,7 @@ def collect(s: Session, user_ids: list[str], date_from: dt.datetime, date_to: dt
         if course is not None:
             query = query.where(m.CodeAnalysis.course == course)
         for a in s.scalars(query.order_by(m.CodeAnalysis.id)):
-            result = a.result if include_text else {key: {name: {k: v for k, v in metric.items() if k not in ("reason", "lines")}
+            result = a.result if include_text else {key: {name: {k: v for k, v in metric.items() if k not in ("reason", "lines", "next")}
                       for name, metric in value.items()} if key == "metrics" else {k: v for k, v in value.items() if k not in ("reason", "lines")}
                       for key, value in (a.result or {}).items()}
             add(user_id=a.user_id, time=a.created_at, kind="portrait", action="代码画像评估", course=a.course,

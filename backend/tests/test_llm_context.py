@@ -25,6 +25,48 @@ UID = "2500000001"
 NAME = "林晓"
 
 
+def test_removing_identity_comments_preserves_source_line_numbers():
+    source='/* 姓名：'+NAME+'\n学号：'+UID+'\n*/\nint main(){return 0;}'
+    cleaned=llm.strip_identity(source,UID,NAME)
+    assert NAME not in cleaned and UID not in cleaned
+    assert len(cleaned.splitlines())==len(source.splitlines())
+    assert cleaned.splitlines()[3]=='int main(){return 0;}'
+
+
+def test_sampling_can_change_for_portrait_without_changing_other_call_defaults(database,monkeypatch):
+    payloads=[]
+    monkeypatch.setattr(config,'DEEPSEEK_API_KEY','test-no-network')
+    def post(*args,**kwargs):
+        payloads.append(kwargs['json'])
+        return httpx.Response(200,json={'choices':[{'message':{'content':'{"ok":true}'},'finish_reason':'stop'}]})
+    monkeypatch.setattr(llm.httpx,'post',post)
+    assert llm.call_json('portrait_code','Return JSON','test',lambda value:value['ok'],temperature=.3,max_tokens=None)
+    assert llm.call_json('other','Return JSON','test',lambda value:value['ok'])
+    assert payloads[0]['temperature']==.3 and payloads[1]['temperature']==0
+    assert 'max_tokens' not in payloads[0]
+
+
+def test_strict_result_reads_complete_object_and_logs_extra_delimiters(database,monkeypatch):
+    monkeypatch.setattr(config,'DEEPSEEK_API_KEY','test-no-network')
+    monkeypatch.setattr(config,'OFFICIAL_DEEPSEEK',True)
+    schema={'type':'object','properties':{'ok':{'type':'boolean'}},'required':['ok'],'additionalProperties':False}
+    def post(url,**kwargs):
+        assert url=='https://api.deepseek.com/beta/chat/completions'
+        assert kwargs['json']['tools'][0]['function']['strict'] is True
+        assert kwargs['json']['model']==config.DEEPSEEK_MODEL
+        assert 'response_format' not in kwargs['json']
+        return httpx.Response(200,json={'choices':[{'message':{'tool_calls':[{'function':{'name':'record_json','arguments':'{"ok":true}}'}}]},'finish_reason':'tool_calls'}]})
+    monkeypatch.setattr(llm.httpx,'post',post)
+    assert llm.call_json('portrait_code','Return JSON','test',lambda value:value['ok'],schema=schema,retries=0)
+    with db.session_scope() as s:
+        llm.flush_records(s);s.flush()
+        row=s.scalar(select(m.LlmCall).where(m.LlmCall.prompt_id=='portrait_code').order_by(m.LlmCall.id.desc()))
+        assert row.ok and '多余结束符' in row.error
+    for text in ('{"ok":true}{"fake":1}', '{"ok":true', '{"ok":true,}'):
+        with pytest.raises((ValueError,json.JSONDecodeError)):
+            llm.decode_json_object(text,allow_extra_closers=True)
+
+
 def test_gateway_preserves_the_reason_when_retry_returns_valid_json(database, monkeypatch):
     responses = iter([
         httpx.Response(200, json={"choices": [{"finish_reason": "length", "message": {"content": ""}}],

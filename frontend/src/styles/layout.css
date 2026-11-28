@@ -1115,6 +1115,7 @@
   padding: var(--sp-10) var(--sp-16);
   border-radius: 18px 18px 6px 18px;
   background: var(--surface-3);
+  border: 1px solid var(--line);
   color: var(--ink);
   overflow-wrap: anywhere;
 }

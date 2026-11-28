@@ -58,7 +58,7 @@ def test_page_never_calls_model_and_persists_deduplicated_queue(demo, monkeypatc
                    for g in data["knowledge"] for k in g["items"])
 
 
-def test_equal_source_reuses_cloud_result_and_worker_batches_once(demo, monkeypatch):
+def test_equal_source_reuses_cloud_result_and_worker_limits_each_response_to_one_code(demo, monkeypatch):
     calls=[]
     def generate(purpose, system, user, validate, **kw):
         inputs={item["id"]:item for item in json.loads(user)["items"]}
@@ -76,14 +76,16 @@ def test_equal_source_reuses_cloud_result_and_worker_batches_once(demo, monkeypa
         other=next(pid for server,pid in catalog.visible_problems(s,UID,"C") if server==sid and pid!=406)
         sub(s,sid,910003,at+dt.timedelta(minutes=2),"int main(){return 3;}",pid=other)
         codequality.enqueue(s,s.get(m.Submission,(sid,910003)),"C")
-    assert codequality.run_pending() == 2
-    assert len(calls)==1 and calls[0][0]=="portrait_code" and calls[0][1]==2
+    assert codequality.run_pending() == 1
+    assert codequality.run_pending() == 1
+    assert len(calls)==2 and all(call[0]=="portrait_code" and call[1]==1 for call in calls)
     assert calls[0][2]["max_tokens"] is None
     assert codequality.run_pending() == 0
     with db.session_scope() as s:
         data=progress.build(s,UID,visible={(sid,406)})
         assert all(d["value"] is not None for d in data["portrait"]["style"]["dimensions"])
         assert all(d["low"]<=d["value"]<=d["high"] for d in data["portrait"]["style"]["dimensions"])
+        assert all(d["value"] is not None for d in data["portrait"]["abilities"])
 
 
 def test_invalid_evidence_has_no_fabricated_score_and_retries_are_delayed(demo, monkeypatch):
@@ -134,10 +136,11 @@ def test_partial_batch_keeps_valid_result_without_repeating_it():
     data=output(inputs)
     data["items"][1]["metrics"]["layout"]["lines"]=[500]
     valid,errors=codequality.validate_partial(data,inputs)
-    assert set(valid)=={1} and set(errors)=={2}
+    assert set(valid)=={1,2} and set(errors)=={2}
+    assert "layout" not in valid[2]["metrics"] and "naming" in valid[2]["metrics"]
 
 
-def test_new_submissions_refresh_queue_and_can_restore_an_earlier_source(demo):
+def test_new_submissions_refresh_queue_and_retain_changed_revision_history(demo):
     with db.session_scope() as s:
         at=codequality.monday(db.now())+dt.timedelta(hours=1)
         a=sub(s,demo["server_id"],930001,at,"int main(){return 0;}")
@@ -147,8 +150,10 @@ def test_new_submissions_refresh_queue_and_can_restore_an_earlier_source(demo):
         assert original.state=="superseded"
         c=sub(s,demo["server_id"],930003,at+dt.timedelta(minutes=2),"int main(){return 0;}")
         codequality.on_submission(s,c)
-        assert original.state=="pending"
-        assert s.scalar(select(func.count()).select_from(m.CodeAnalysis))==2
+        assert original.state=="superseded"
+        current=s.scalar(select(m.CodeAnalysis).where(m.CodeAnalysis.submission_id==c.submission_id))
+        assert current.state=="pending"
+        assert s.scalar(select(func.count()).select_from(m.CodeAnalysis))==3
 
 
 def test_analysis_export_obeys_text_and_source_controls(demo):
@@ -159,11 +164,13 @@ def test_analysis_export_obeys_text_and_source_controls(demo):
         row=codequality.enqueue(s,source,"C")
         result=codequality.validate(output({row.id:{"code":"int main(){return 0;}"}}),{row.id:{"code":"int main(){return 0;}"}})[row.id]
         result["metrics"]["layout"]["reason"]="private assessment explanation"
+        result["metrics"]["layout"]["next"]="private improvement advice"
         row.result,row.state=result,"ready"
         s.flush()
         plain=logs.collect(s,[UID],now-dt.timedelta(days=1),now+dt.timedelta(days=1),["portrait"],False,"C")
         assert len(plain)==1 and plain[0].code==""
         assert "private assessment explanation" not in json.dumps(plain[0].data)
+        assert "private improvement advice" not in json.dumps(plain[0].data)
         full=logs.collect(s,[UID],now-dt.timedelta(days=1),now+dt.timedelta(days=1),["portrait"],True,"C",True)
         assert full[0].code=="int main(){return 0;}"
         assert full[0].data["result"]["metrics"]["layout"]["reason"]=="private assessment explanation"
@@ -197,3 +204,69 @@ def test_failed_drafts_wait_for_changes_to_settle_before_paid_analysis(demo):
         ready=codequality.enqueue(s,passed,"C")
         assert ready.retry_at is None
         assert pending.state=="superseded"
+
+
+def test_ready_legacy_metrics_are_reused_and_only_missing_abilities_are_requested(demo,monkeypatch):
+    with db.session_scope() as s:
+        row=sub(s,demo['server_id'],960001,db.now(),'int main(){return 0;}')
+        context=codequality.context(s,row)
+        prior=output({1:context})['items'][0]
+        for key in ('understand','test'): prior['metrics'].pop(key)
+        old=m.CodeAnalysis(user_id=UID,course='C',server_id=row.server_id,problem_id=row.problem_id,
+            submission_id=row.submission_id,fingerprint=codequality.legacy_fingerprint(row,context),version='code-portrait-1',
+            model=codequality.config.DEEPSEEK_MODEL,state='ready',result={k:v for k,v in prior.items() if k!='id'})
+        s.add(old);s.flush()
+        new=codequality.enqueue(s,row,'C')
+        assert new.result['metrics']==old.result['metrics'] and old.state=='ready'
+        ident=new.id
+    monkeypatch.setattr(llm,'available',lambda:True)
+    def generate(purpose,system,user,validate,**kwargs):
+        item=json.loads(user)['items'][0]
+        assert set(item['requestedMetrics'])=={'understand','test'}
+        result=output({item['id']:item})
+        result['items'][0]['metrics']={key:value for key,value in result['items'][0]['metrics'].items() if key in item['requestedMetrics']}
+        return validate(result)
+    monkeypatch.setattr(llm,'call_json',generate)
+    assert codequality.run_pending()==1
+    with db.session_scope() as s:
+        assert set(s.get(m.CodeAnalysis,ident).result['metrics'])==set(codequality.DIMENSIONS)
+
+
+def test_history_preserves_revision_order_without_duplicate_identical_submissions(demo):
+    with db.session_scope() as s:
+        at=db.now()-dt.timedelta(minutes=5)
+        sub(s,demo['server_id'],970001,at,'int main(){return 1;}','WA')
+        sub(s,demo['server_id'],970002,at+dt.timedelta(minutes=1),'int main(){return 1;}','WA')
+        passed=sub(s,demo['server_id'],970003,at+dt.timedelta(minutes=2),'int main(){return 0;}')
+        history=codequality.context(s,passed)['history']
+        assert history[-2:]==[{'code':'int main(){return 1;}','result':'WA'},{'code':'int main(){return 0;}','result':'AC'}]
+        assert all(UID not in json.dumps(item) for item in history)
+
+
+def test_interrupted_legacy_week_request_is_automatically_resumed_as_one_code(demo,monkeypatch):
+    with db.session_scope() as s:
+        source=sub(s,demo['server_id'],980001,db.now(),'int main(){return 0;}')
+        row=m.CodeAnalysis(user_id=UID,course='C',server_id=source.server_id,problem_id=source.problem_id,
+            submission_id=source.submission_id,fingerprint=codequality.legacy_fingerprint(source,codequality.context(s,source)),
+            version='code-portrait-1',model=codequality.config.DEEPSEEK_MODEL,state='failed',attempts=3,
+            error='校验不通过：达到模型输出或上下文上限，JSON 未完整返回')
+        s.add(row);s.flush();old_id=row.id
+    monkeypatch.setattr(llm,'available',lambda:True)
+    def generate(purpose,system,user,validate,**kwargs):
+        inputs={item['id']:item for item in json.loads(user)['items']}
+        assert len(inputs)==1
+        return validate(output(inputs))
+    monkeypatch.setattr(llm,'call_json',generate)
+    assert codequality.run_pending()==1
+    with db.session_scope() as s:
+        assert s.get(m.CodeAnalysis,old_id).state=='superseded'
+        assert s.scalar(select(m.CodeAnalysis).where(m.CodeAnalysis.version==codequality.VERSION)).state=='ready'
+
+
+def test_request_has_explicit_current_source_line_numbers_and_valid_json_example():
+    item={"code":"int main(){\nreturn 0;\n}","history":[],"requestedMetrics":["layout"],"requestedComplexity":[]}
+    request=json.loads(codequality.request_payload({1:item}))["items"][0]
+    assert request["currentSubmission"]["lineCount"]==3
+    assert request["currentSubmission"]["lines"][-1]=={"line":3,"text":"}"}
+    example=json.loads(codequality.request_system({1:item}).split("结束后立即停止：\n")[1])
+    assert set(example)=={"layout_level","layout_confidence","layout_reason","layout_next","layout_lines"}

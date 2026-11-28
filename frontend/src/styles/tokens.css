@@ -8,11 +8,11 @@
   color-scheme: light;
 
   /* 底色和表面（C 语言：暖色的纸） */
-  --bg: #f3efe7;            /* 页面底色 */
+  --bg: #ffffff;            /* 页面和内容区域统一白底 */
   --surface: #ffffff;       /* 全站卡片、对话区统一白底 */
-  --surface-2: #f9f6ef;     /* 卡片里的次级区域、表头、代码块标题条 */
-  --surface-3: #f0eadf;     /* 悬停、学生的消息气泡 */
-  --row-hover: #fcf9f3;
+  --surface-2: #ffffff;     /* 次级区域、表头、代码块标题条 */
+  --surface-3: #ffffff;     /* 聊天气泡不再使用米黄色 */
+  --row-hover: #f6f7f8;
   --dot: rgba(60, 48, 30, 0.07);   /* 页面底色上的点阵，像方格本 */
   --sidebar: #ebe4d6;       /* 侧边栏：比页面深一档的纸 */
   --sidebar-2: #e2d9c9;     /* 悬停 */
@@ -54,7 +54,7 @@
   --mark-edge: #f2b705;
   /* 黄色只标“当前操作”：选中的题、选中的问答、学生自己选的代码行、复习的当前一步、待做的数字（界面改造方案 #FFD54A） */
   --select: #ffd54a;
-  --select-bg: #fff6d6;
+  --select-bg: #ffffff;
   --focus: #b9431a;
 
   /* 语义色：通过、未通过、提醒；一定和文字或形状一起出现（界面改造方案：绿 #287455、砖红 #9F4835，配文字表示已公布的评测结果） */
@@ -63,7 +63,7 @@
   --fail: #9f4835;
   --fail-bg: #f9eae5;
   --warn: #a15c00;
-  --warn-bg: #fff4dc;
+  --warn-bg: #ffffff;
   --info: #1d5fbf;
   --info-bg: #e8f1fd;
   --removed: #fbe3e0;
@@ -152,10 +152,10 @@
 
 /* 数据结构：冷色的纸。只换底色、文字、线、侧边栏和强调色；语义色、掌握档位、图表颜色两门课一样 */
 :root[data-course="D"] {
-  --bg: #edf1f6;
+  --bg: #ffffff;
   --surface: #ffffff;
-  --surface-2: #f5f8fc;
-  --surface-3: #e8eef6;
+  --surface-2: #ffffff;
+  --surface-3: #ffffff;
   --row-hover: #f8fafd;
   --dot: rgba(30, 60, 110, 0.075);
   --sidebar: #e1e8f1;       /* 侧边栏：比页面深一档的冷色纸 */

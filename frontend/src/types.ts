@@ -246,14 +246,16 @@ export interface PortraitComplexity { value: string | null; variable?: string; r
 export interface PortraitRecord {
   title?: string; source: string; time: string | null; text: string; problem?: ProblemRef | null;
   lines?: string[]; mark?: number[]; timeComplexity?: PortraitComplexity; spaceComplexity?: PortraitComplexity;
+  level?: number | null; next?: string;
 }
 export interface PortraitDimension {
-  id: string; name: string; value: number | null; count: number; state?: string;
+  id: string; name: string; value: number | null; count: number; state?: string | null;
   low?: number | null; high?: number | null; facts?: { label: string; n: number; d: number }[]; records: PortraitRecord[];
 }
 export interface LearningPortraitData {
   version: string; updatedAt: string;
   abilities: PortraitDimension[];
+  analysis?: { total: number; ready: number; pending: number; failed: number };
   style: { dimensions: PortraitDimension[]; weeks: { start: string; count: number; analysed: number; values: Record<string, number | null> }[];
     currentWeek: string; shownWeek: string | null; isCurrent: boolean; count: number; pending: number };
   misconceptions: { domains: string[]; patterns: { id: string; name: string }[]; observed: string[]; weekStart: string;

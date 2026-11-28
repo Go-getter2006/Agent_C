@@ -55,7 +55,8 @@ def schedule_portraits() -> None:
     def run():
         from . import codequality
         try:
-            codequality.run_pending()
+            if codequality.run_pending():
+                _last["portrait"] = -1e9  # 一稿完成后接下一稿，不再为拆分后的队列逐稿空等30秒。
         except Exception:
             log.exception("代码画像后台分析失败")
     _portrait_worker = threading.Thread(target=run, name="code-portrait", daemon=True)

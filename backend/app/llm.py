@@ -58,17 +58,24 @@ def available() -> bool:
 
 
 def _http_backend(messages, json_mode: bool, max_tokens: int | None, temperature: float, *, model: str | None = None,
-                  non_thinking: bool = False):
+                  non_thinking: bool = False, schema: dict | None = None):
     payload = {"model": model or config.DEEPSEEK_MODEL, "messages": messages, "temperature": temperature,
                "stream": False}
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
-    if json_mode:
+    base_url = config.DEEPSEEK_BASE_URL
+    if schema is not None:
+        payload["tools"] = [{"type": "function", "function": {"name": "record_json", "description": "提交分析的结构化结果",
+                            "parameters": schema, "strict": True}}]
+        payload["tool_choice"] = {"type": "function", "function": {"name": "record_json"}}
+        if config.OFFICIAL_DEEPSEEK:
+            base_url = "https://api.deepseek.com/beta"
+    elif json_mode:
         payload["response_format"] = {"type": "json_object"}
     if non_thinking and config.OFFICIAL_DEEPSEEK and payload["model"] == config.DEEPSEEK_FLASH:
         payload["thinking"] = {"type": "disabled"}
     resp = httpx.post(
-        f"{config.DEEPSEEK_BASE_URL}/chat/completions", json=payload, timeout=60,
+        f"{base_url}/chat/completions", json=payload, timeout=60,
         headers={"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"})
     if resp.status_code != 200:
         err = LLMUnavailable(f"大模型接口返回 {resp.status_code}")
@@ -77,7 +84,12 @@ def _http_backend(messages, json_mode: bool, max_tokens: int | None, temperature
     data = resp.json()
     usage = data.get("usage") or {}
     choice = data["choices"][0]
-    return (choice["message"]["content"] or "", int(usage.get("prompt_tokens", 0)),
+    message = choice["message"]
+    content = message.get("content") or ""
+    if schema is not None:
+        calls = message.get("tool_calls") or []
+        content = calls[0].get("function", {}).get("arguments", "") if len(calls) == 1 and calls[0].get("function", {}).get("name") == "record_json" else ""
+    return (content, int(usage.get("prompt_tokens", 0)),
             int(usage.get("completion_tokens", 0)), choice.get("finish_reason"))
 
 
@@ -108,7 +120,7 @@ def flush_records(s) -> int:
 def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict], T],
               retries: int = 1, max_tokens: int | None = 800, *, pages: list[tuple[int, bytes]] | None = None,
               text_fallback: bool = True, images: list[tuple[str, bytes]] | None = None,
-              document: str = "", non_thinking: bool = True) -> T:
+              document: str = "", non_thinking: bool = True, temperature: float = 0.0, schema: dict | None = None) -> T:
     """要求输出 JSON 并校验。max_tokens 为 None 时使用服务端默认值。"""
     if not available():
         raise LLMUnavailable("没有配置大模型")
@@ -125,7 +137,7 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
             parts.append({"type": "text", "text": user})
         try:
             return _json_request(prompt_id, system, parts, validate, retries, max_tokens, config.DEEPSEEK_VISION_MODEL,
-                                 non_thinking)
+                                 non_thinking, temperature, schema)
         except LLMUnavailable as exc:
             if not text_fallback or exc.status in (401, 402, 403, 429):
                 raise
@@ -133,39 +145,61 @@ def call_json(prompt_id: str, system: str, user: str, validate: Callable[[dict],
         system += "\n本次没有附上可用的题面图片。只根据文字和已有评测证据回答，不能推测图案。"
     if document:
         user = document + "\n\n" + user
-    return _json_request(prompt_id, system, user, validate, retries, max_tokens, config.DEEPSEEK_MODEL, non_thinking)
+    return _json_request(prompt_id, system, user, validate, retries, max_tokens, config.DEEPSEEK_MODEL, non_thinking, temperature, schema)
 
 
 _JSON_FENCE = re.compile(r"\A```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```\Z", re.IGNORECASE)
 
 
-def _json_request(prompt_id, system, user, validate, retries, max_tokens, model, non_thinking=False):
+def decode_json_object(text: str, *, allow_extra_closers: bool = False) -> tuple[dict, str]:
+    """Only tolerate closing delimiters after an already complete object, never repair its contents."""
+    text = text.strip()
+    match = _JSON_FENCE.fullmatch(text)
+    body = match[1] if match else text
+    note = ""
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        if not allow_extra_closers:
+            raise
+        data, end = json.JSONDecoder().raw_decode(body)
+        suffix = body[end:].strip()
+        if not suffix or any(char not in "}] \t\r\n" for char in suffix):
+            raise ValueError("完整JSON对象后还有其他内容")
+        note = "结构化结果尾部有多余结束符，已按完整对象边界读取"
+    if not isinstance(data, dict):
+        raise ValueError("输出不是 JSON 对象")
+    return data, note
+
+
+def _json_request(prompt_id, system, user, validate, retries, max_tokens, model, non_thinking=False, temperature=0.0, schema=None):
     hook = before_call.get()
     if hook is not None:
         hook()
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    if schema is not None:
+        messages[0]["content"] += "\n通过record_json提交上述JSON对象，不另发文字消息。"
     started, tin, tout, last, invalid = time.monotonic(), 0, 0, "", False
     for attempt in range(1, retries + 2):
         try:
             finish_reason = None
             if _backend:
-                text, a, b = _backend(messages, True, max_tokens, 0.0)
+                text, a, b = _backend(messages, True, max_tokens, temperature)
             else:
-                text, a, b, finish_reason = _http_backend(messages, True, max_tokens, 0.0, model=model,
-                                                          non_thinking=non_thinking)
+                text, a, b, finish_reason = _http_backend(messages, True, max_tokens, temperature, model=model,
+                                                          non_thinking=non_thinking, schema=schema)
             tin, tout = tin + a, tout + b
             text = text.strip()
-            match = _JSON_FENCE.fullmatch(text)
             try:
-                data = json.loads(match[1] if match else text)
+                data, framing_note = decode_json_object(text, allow_extra_closers=schema is not None and finish_reason != "length")
             except json.JSONDecodeError as exc:
                 if finish_reason == "length":
                     raise ValueError("达到模型输出或上下文上限，JSON 未完整返回") from exc
                 if not text:
                     raise ValueError("模型没有返回正文") from exc
                 raise ValueError("模型正文不是有效 JSON") from exc
-            if not isinstance(data, dict):
-                raise ValueError("输出不是 JSON 对象")
+            if framing_note:
+                last = (last + "；" if last else "") + framing_note
             result = validate(data)
             _record(prompt_id, True, attempt, started, tin, tout, last, model=model)
             last_model.set(model)
@@ -237,7 +271,7 @@ def strip_identity(text: str, user_id: str = "", name: str = "") -> str:
     def clean_comment(match: re.Match) -> str:
         body = match.group(0)
         if _IDENTITY_HINT.search(body) or (name and name in body) or (user_id and user_id in body):
-            return "/* */" if body.startswith("/*") else "//"
+            return ("/*" + "\n" * body.count("\n") + "*/" if "\n" in body else "/* */") if body.startswith("/*") else "//"
         return body
 
     out = _COMMENT_RE.sub(clean_comment, text)

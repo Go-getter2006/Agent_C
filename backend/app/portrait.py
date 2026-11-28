@@ -15,7 +15,7 @@ from . import codequality, db, diagnosis, models as m
 from .taxonomy import KNOWLEDGE_POINTS, course_of, error_name, kp_of_skill
 from .xdoj.assemble import source_text
 
-VERSION = "portrait-1"
+VERSION = "portrait-2"
 DOMAINS_C = [("语言基础", ("C02", "C03")), ("输入输出", ("C01",)), ("分支判断", ("C04",)),
              ("循环迭代", ("C05",)), ("数组字符串", ("C06", "C07", "C08")), ("函数递归", ("C09",)),
              ("指针结构", ("C10", "C11")), ("算法应用", ("C12",))]
@@ -79,7 +79,7 @@ def representative_submissions(snap):
 
 
 def _metric(row, name):
-    if row is None or row.state != "ready":
+    if row is None or not row.result:
         return None
     item = (row.result or {}).get("metrics", {}).get(name, {})
     value = item.get("level")
@@ -90,12 +90,13 @@ def build(snap, knowledge: list[dict]) -> dict:
     s, course, uid = snap.s, snap.course, snap.user_id
     weeks = representative_submissions(snap)
     # Keep ORM identities alive: source and statement reads below hit this request's identity map, not one query per code.
-    subkeys = [(sub.server_id, sub.submission_id) for reps in weeks.values() for sub in reps.values()]
+    subkeys = [(sub.server_id, sub.submission_id) for subs in snap.subs.values() for sub in subs]
+    s.info["portrait_submissions"] = snap.subs
     loaded_sources = list(s.scalars(select(m.SourceSnapshot).where(tuple_(m.SourceSnapshot.server_id,
         m.SourceSnapshot.submission_id).in_(subkeys)))) if subkeys else []
     loaded_texts = list(s.scalars(select(m.ProblemText).options(defer(m.ProblemText.file_bytes)).where(tuple_(m.ProblemText.server_id,
         m.ProblemText.problem_id).in_(list(snap.info))))) if snap.info else []
-    analyses, latest, pending, weekly = {}, {}, set(), []
+    analyses, latest, pending, weekly, rows_by_id = {}, {}, set(), [], {}
     for week in sorted(weeks):
         selected = []
         for key, sub in weeks[week].items():
@@ -103,6 +104,7 @@ def build(snap, knowledge: list[dict]) -> dict:
             selected.append((key, sub, row))
             if row is not None:
                 analyses[(sub.server_id, sub.submission_id)] = row
+                rows_by_id[row.id] = row
                 if row.state in ("pending", "retry", "running"):
                     pending.add(row.id)
             latest[key] = (sub, row)
@@ -111,12 +113,16 @@ def build(snap, knowledge: list[dict]) -> dict:
                        "values": {name: mean(_metric(row, name) for _, _, row in selected) for name in codequality.STYLE}})
 
     def evidence(key, sub, row, metric=None):
+        submissions = [item for item in snap.subs[key] if item.submit_time and item.submit_time <= sub.submit_time
+                       and item.judgement not in ("PENDING", "UNKNOWN")]
         entry = {"title": snap.info[key].title, "source": "OJ 提交", "time": sub.submit_time.isoformat() if sub.submit_time else None,
-                 "problem": snap.problem_view(key), "text": "通过" if sub.judgement == "AC" else "尚未通过"}
-        if row and row.state == "ready" and metric:
+                 "problem": snap.problem_view(key), "text": f"已提交 {len(submissions)} 次，"
+                    + ("这次通过了评测。" if sub.judgement == "AC" else "这次还未通过评测。")}
+        if row and metric and metric in (row.result or {}).get("metrics", {}):
             result = row.result["metrics"].get(metric, {})
             entry.update(text=result.get("reason", ""), lines=(source_text(s, sub.server_id, sub.submission_id) or "").splitlines(),
-                         mark=result.get("lines", []), timeComplexity=row.result.get("time"), spaceComplexity=row.result.get("space"))
+                         mark=result.get("lines", []), level=result.get("level"), next=result.get("next", ""),
+                         timeComplexity=row.result.get("time"), spaceComplexity=row.result.get("space"))
         return entry
 
     current_start = codequality.monday(snap.now).date().isoformat()
@@ -129,9 +135,14 @@ def build(snap, knowledge: list[dict]) -> dict:
         supporting = [(key, sub, row) for week, reps in weeks.items() for key, sub in reps.items()
                       if shown and week.date().isoformat() == shown["start"]
                       and (row := analyses.get((sub.server_id, sub.submission_id))) and _metric(row, name) is not None]
+        explanations = supporting or [(key, sub, row) for week, reps in weeks.items() for key, sub in reps.items()
+                      if shown and week.date().isoformat() == shown["start"]
+                      and (row := analyses.get((sub.server_id, sub.submission_id)))
+                      and name in (row.result or {}).get("metrics", {})]
         style.append({"id": name, "name": label, "value": shown["values"][name] if shown else None,
                       "low": min(values) if values else None, "high": max(values) if values else None,
-                      "count": len(supporting), "records": [evidence(key, sub, row, name) for key, sub, row in supporting]})
+                      "count": len(supporting), "state": "查看说明" if explanations and not supporting else None,
+                      "records": [evidence(key, sub, row, name) for key, sub, row in explanations]})
 
     pairs = diagnosis._attempts(s, [uid], course)
     pairs = [(a, item) for a, item in pairs if a.state == "done" and a.finished_at and a.finished_at <= snap.now]
@@ -150,13 +161,20 @@ def build(snap, knowledge: list[dict]) -> dict:
     def ratio(n, d):
         return n / d if d else None
 
+    product_understanding = mean(_metric(row, "understand") for sub, row in latest.values())
+    review_records = [{"title": "复习中的首次判断", "source": "复习提升", "time": a.created_at.isoformat(),
+                       "text": "首次判断为“" + ("有错误" if a.judged_has_bug else "满足要求") + "”，"
+                               + ("判断正确。" if a.judge_correct else "这次判断有误。")}
+                      for a, item in pairs if a.judged_has_bug is not None and a.judge_correct is not None]
     abilities = [
-        {"id": "understand", "name": "程序理解", "value": mean(a.level / 3 for a in understanding) if understanding else mean(judges),
-         "count": len(understanding) if understanding else len(judges),
-         "facts": [] if understanding else
-                  [{"label": "复习首次判断正确", "n": sum(judges), "d": len(judges)}],
+        {"id": "understand", "name": "程序理解", "value": mean(a.level / 3 for a in understanding) if understanding else
+                   product_understanding if product_understanding is not None else mean(judges),
+         "count": len(understanding) if understanding else sum(_metric(row, "understand") is not None for sub, row in latest.values()) or len(judges),
+         "facts": [{"label": "复习首次判断正确", "n": sum(judges), "d": len(judges)}] if judges else [],
          "records": [{"title": "代码理解" if a.basis == "code" else "对话理解", "source": "OJ 改错评估" if a.basis == "code" else "对话",
-                      "text": "；".join(a.evidence or []), "time": a.created_at.isoformat()} for a in understanding]},
+                      "text": "；".join(a.evidence or []), "time": a.created_at.isoformat()} for a in understanding] if understanding else
+                    ([evidence(key, sub, row, "understand") for key, (sub, row) in latest.items() if _metric(row, "understand") is not None]
+                     or review_records)},
         {"id": "design", "name": "方案设计", "value": mean(_metric(row, "design") for sub, row in latest.values()),
          "count": sum(_metric(row, "design") is not None for sub, row in latest.values()), "facts": [],
          "records": [evidence(key, sub, row, "design") for key, (sub, row) in latest.items() if _metric(row, "design") is not None]},
@@ -164,8 +182,11 @@ def build(snap, knowledge: list[dict]) -> dict:
          "count": len(tried), "facts": [{"label": "做过的题中已通过", "n": sum(snap.passed(key) for key, _ in tried), "d": len(tried)},
                                         {"label": "首次提交通过", "n": sum(snap.first_try(key) for key, _ in tried), "d": len(tried)}],
          "records": [evidence(key, sub, row) for key, (sub, row) in latest.items()]},
-        {"id": "test", "name": "测试验证", "value": mean(judges), "count": len(judges),
-         "facts": [{"label": "复习首次判断正确", "n": sum(judges), "d": len(judges)}], "records": []},
+        {"id": "test", "name": "测试验证", "value": mean(_metric(row, "test") for sub, row in latest.values())
+                   if any(_metric(row, "test") is not None for sub, row in latest.values()) else mean(judges),
+         "count": sum(_metric(row, "test") is not None for sub, row in latest.values()) or len(judges),
+         "facts": [{"label": "复习首次判断正确", "n": sum(judges), "d": len(judges)}] if judges else [],
+         "records": [evidence(key, sub, row, "test") for key, (sub, row) in latest.items() if _metric(row, "test") is not None]+review_records},
         {"id": "debug", "name": "调试修复", "value": ratio(sum(snap.passed(key) for key, _ in failed), len(failed)),
          "count": len(failed), "facts": [{"label": "出错后后来改对", "n": sum(snap.passed(key) for key, _ in failed), "d": len(failed)},
             {"label": "复习独立首稿通过", "n": sum(r.n for r in edits), "d": sum(r.d for r in edits)}],
@@ -177,7 +198,10 @@ def build(snap, knowledge: list[dict]) -> dict:
     for ability in abilities:
         value = ability["value"]
         ability["state"] = "暂无记录" if value is None else "表现较稳" if value >= .75 else "继续巩固" if value >= .5 else "优先练习"
+    analysis = {"total": len(rows_by_id), "ready": sum(row.state == "ready" for row in rows_by_id.values()),
+                "pending": len(pending), "failed": sum(row.state == "failed" for row in rows_by_id.values())}
     return {"version": VERSION, "abilities": abilities,
+            "analysis": analysis,
             "style": {"dimensions": style, "weeks": weekly, "currentWeek": current_start,
                       "shownWeek": shown["start"] if shown else None, "isCurrent": current is not None,
                       "count": shown["count"] if shown else 0, "pending": len(pending)},
